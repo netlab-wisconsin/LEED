@@ -43,7 +43,7 @@ usage()
 {
     fprintf(stderr,
             "fawnds_bench [-hfsmw] [-r num_scan] [-n num_records] [-p num_db] [-t threads] [-b \"dir1 dir2 dir3\"] [-a num_procs] <dbfile>\n"
-            );
+    );
 }
 
 void
@@ -62,7 +62,7 @@ help()
             "   -a #    Turn on thread affinity, specify number of processors\n"
             "   -w      random write test\n"
             "   -S #    set value size (bytes)\n"
-            );
+    );
 }
 
 void *compactThread(void* p) {
@@ -155,44 +155,44 @@ void bench(int argc, char** argv) {
     pthread_t compactThreadId_;
     while ((ch = getopt(argc, argv, "hfn:r:p:swc:t:b:a:S:")) != -1)
         switch (ch) {
-        case 'n':
-            max_record = atoi(optarg);
-            break;
-        case 'r':
-            num_to_scan = atoi(optarg);
-            break;
-        case 'f':
-            createdb = true;
-            break;
-        case 's':
-            mode = SCAN_SEQUENTIAL;
-            break;
-        case 'w':
-            writeTest = 1;
-            break;
-        case 'c':
-            compactAt = atoi(optarg);
-            break;
-        case 't':
-            useThreads = true;
-            numThreads = atoi(optarg);
-            break;
-        case 'b':
-            tokenize(optarg, fileBases, " ");
-            break;
-        case 'S':
-            valuesize = atoi(optarg);
-            break;
-        case 'a':
-            setAffinity = true;
-            numProcs = atoi(optarg);
-            break;
-        case 'h':
-            help();
-            exit(0);
-        default:
-            usage();
-            exit(-1);
+            case 'n':
+                max_record = atoi(optarg);
+                break;
+            case 'r':
+                num_to_scan = atoi(optarg);
+                break;
+            case 'f':
+                createdb = true;
+                break;
+            case 's':
+                mode = SCAN_SEQUENTIAL;
+                break;
+            case 'w':
+                writeTest = 1;
+                break;
+            case 'c':
+                compactAt = atoi(optarg);
+                break;
+            case 't':
+                useThreads = true;
+                numThreads = atoi(optarg);
+                break;
+            case 'b':
+                tokenize(optarg, fileBases, " ");
+                break;
+            case 'S':
+                valuesize = atoi(optarg);
+                break;
+            case 'a':
+                setAffinity = true;
+                numProcs = atoi(optarg);
+                break;
+            case 'h':
+                help();
+                exit(0);
+            default:
+                usage();
+                exit(-1);
         }
     argc -= optind;
     argv += optind;
@@ -238,7 +238,11 @@ void bench(int argc, char** argv) {
         }
         if (createdb) {
             dbs[i] = FawnDS<FawnDS_Flash>::Create_FawnDS(dbname_i.str().c_str(), num_recs_per_db * 2, .9,
-                                           .8);
+                                                         .8);
+            if(!dbs[i]) {
+                perror("Create DB failed\n");
+                exit(-1);
+            }
         } else {
             printf("reading file %s\n", dbname_i.str().c_str());
             dbs[i] = FawnDS<FawnDS_Flash>::Open_FawnDS(dbname_i.str().c_str());
@@ -269,6 +273,7 @@ void bench(int argc, char** argv) {
     }
     gettimeofday(&tv_end, NULL);
 
+
     if (createdb) {
         double dbcreate_time = timeval_diff(&tv_start, &tv_end);
         printf("Time to create DB: %f seconds\n", dbcreate_time);
@@ -286,6 +291,8 @@ void bench(int argc, char** argv) {
             l.push_back(rand()%max_record);
         }
         int n = l.size();
+        timeval write_tv_start, write_tv_end;
+        gettimeofday(&write_tv_start, NULL);
         for (int i = 0; i < n; i++) {
             u_int val = l[i];
             string ps_key((const char *)&val, sizeof(val));
@@ -304,6 +311,8 @@ void bench(int argc, char** argv) {
                 perror("Insert failed\n");
             }
         }
+        gettimeofday(&write_tv_end, NULL);
+        cout << "Insert Rate: " << num_to_scan / timeval_diff(&write_tv_start,&write_tv_end) << " inserts per second" << endl;
 
     } else {
         pthread_mutex_init(&count_lock, NULL);
@@ -344,14 +353,15 @@ void bench(int argc, char** argv) {
     pthread_mutex_destroy(&count_lock);
     free(workerThreadIds_);
     free(bd);
+    if (!writeTest){
+        double totalTime = 0;
+        for (int i = 0; i < numThreads; i++) {
+            totalTime = max(totalTime, search_times[i]);
+        }
+        double totalQueries = num_to_scan * numThreads;
 
-    double totalTime = 0;
-    for (int i = 0; i < numThreads; i++) {
-        totalTime = max(totalTime, search_times[i]);
+        cout << "Aggregate Query Rate: " << totalQueries / totalTime << " queries per second" << endl;
     }
-    double totalQueries = num_to_scan * numThreads;
-
-    cout << "Aggregate Query Rate: " << totalQueries/totalTime << " queries per second" << endl;
 }
 
 
