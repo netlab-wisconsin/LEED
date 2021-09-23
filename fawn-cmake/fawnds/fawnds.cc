@@ -268,7 +268,7 @@ namespace fawn {
         uint64_t length = sizeof(struct DbHeader);
         uint64_t offset = 0;
         if ((uint64_t)pread64(fd_, header_, length, offset) != length) {
-            fprintf(stderr, "Could not read header for data at position %"PRIu64": %s\n",
+            fprintf(stderr, "Could not read header for data at position %" PRIu64": %s\n",
                     offset, strerror(errno));
             return false;
         }
@@ -621,7 +621,7 @@ namespace fawn {
                 DataHeader data_header;
                 string key;
                 if (!datastore->ReadIntoHeader(current_offset, data_header, key)) {
-                    fprintf(stderr, "ReadIntoHeader failed at offset %"PRIu64".\n",
+                    fprintf(stderr, "ReadIntoHeader failed at offset %" PRIu64".\n",
                             current_offset);
                     delete new_db;
                     if (unlink(temp_filename.c_str()) == -1) {
@@ -757,7 +757,7 @@ namespace fawn {
         DataHeader data_header;
         string key;
         if (!datastore->ReadIntoHeader(currSplit, data_header, key)) {
-            fprintf(stderr, "ReadIntoHeader failed at offset %"PRIu64".\n",
+            fprintf(stderr, "ReadIntoHeader failed at offset %" PRIu64".\n",
                     currSplit);
             return false;
         }
@@ -843,7 +843,7 @@ namespace fawn {
                 DataHeader data_header;
                 string key;
                 if (!datastore->ReadIntoHeader(current_offset, data_header, key)) {
-                    fprintf(stderr, "ReadIntoHeader failed at offset %"PRIu64".\n",
+                    fprintf(stderr, "ReadIntoHeader failed at offset %" PRIu64".\n",
                             current_offset);
                     return false;
                 }

@@ -16,10 +16,6 @@
 #define pwrite64 pwrite
 #endif // #ifdef __APPLE__
 
-#ifndef _LARGEFILE64_SOURCE
-#define _LARGEFILE64_source
-#endif  // #ifndef _LARGEFILE64_SOURCE
-#define _FILE_OFFSET_BITS 64
 
 using namespace std;
 

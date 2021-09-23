@@ -39,7 +39,7 @@ namespace fawn {
     */
     struct HashEntry {
         uint16_t present_key;
-        uint32_t offset;
+        off_t offset;
     } __attribute__((__packed__));
 
     struct DataHeader {
