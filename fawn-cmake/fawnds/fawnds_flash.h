@@ -12,10 +12,6 @@
 #define pwrite64 pwrite
 #endif // #ifdef __APPLE__
 
-#ifndef _LARGEFILE64_SOURCE
-#define _LARGEFILE64_source
-#endif  // #ifndef _LARGEFILE64_SOURCE
-#define _FILE_OFFSET_BITS 64
 
 using namespace std;
 
@@ -27,8 +23,10 @@ namespace fawn {
         ~FawnDS_Flash() {}
         bool Write(const char* key, uint32_t key_len, const char* data, uint32_t length, off_t offset);
         bool Delete(const char* key, uint32_t key_len, off_t offset);
-        bool ReadIntoHeader(off_t offset, DataHeader &data_header, string &key);// const;
-        bool Read(const char* key, uint32_t key_len, off_t offset, string &data);// const;
+        bool ReadIntoHeader(off_t offset, DataHeader &data_header, string &key) const;
+        bool Read(const char* key, uint32_t key_len, off_t offset, string &data) const;
+        bool ReadData(off_t offset, uint32_t key_len, uint32_t data_len,string &data) const;
+
     private:
         int fd_;
     };

@@ -21,6 +21,20 @@ using namespace std;
 
 namespace fawn {
 
+    struct DbHeader {
+        uint64_t magic_number;
+        uint64_t hashtable_size;
+        uint64_t number_elements;
+        uint64_t deleted_elements;
+        double max_deleted_ratio;
+        double max_load_factor;
+        keyType keyFormat;
+        off_t data_insertion_point;  // offset to where the next record should go
+        off_t data_start_point;  // offset showing where first record is
+        char startID[DBID_LENGTH];
+        char endID[DBID_LENGTH];
+    } __attribute__((__packed__));
+
     template <typename T>
     class FawnDS {
     public:

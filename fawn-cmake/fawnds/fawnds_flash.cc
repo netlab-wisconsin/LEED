@@ -20,16 +20,9 @@
 #endif
 #include <inttypes.h>
 
-#include "hash_functions.h"
 #include "fawnds_flash.h"
-#include "debug.h"
-#include "hashutil.h"
-#include "print.h"
-#include "timing.h"
 
 using fawn::DataHeader;
-using fawn::Hashes;
-using fawn::HashUtil;
 
 #ifndef O_NOATIME
 #define O_NOATIME 0  /* O_NOATIME is linux-only */
@@ -94,7 +87,7 @@ namespace fawn {
         return true;
     }
 
-    bool FawnDS_Flash::ReadIntoHeader(off_t offset, DataHeader &data_header, string &key)
+    bool FawnDS_Flash::ReadIntoHeader(off_t offset, DataHeader &data_header, string &key) const
     {
         ssize_t n_read = pread64(fd_, &data_header, sizeof(struct DataHeader), offset);
         if (n_read < (ssize_t)sizeof(struct DataHeader)) {
@@ -113,27 +106,8 @@ namespace fawn {
         free(mdata);
         return true;
     }
-
-    bool FawnDS_Flash::Read(const char* key,
-                            uint32_t key_len,
-                            off_t offset,
-                            string &data)
-    {
-        DataHeader data_header;
-        string inputkey;
-
-        if (!ReadIntoHeader(offset, data_header, inputkey)) {
-            return false;
-        }
-
-        // Hashing based on key fragment can result in potential key collision
-        // So we read the dataheader here to compare the full key to ensure this.
-        if (memcmp(inputkey.data(), key, key_len) != 0) {
-            return false;
-        }
-
-        size_t length = data_header.data_length;
-        if (length == 0) {
+    bool FawnDS_Flash::ReadData(off_t offset, const uint32_t key_len, const uint32_t data_len,string &data) const{
+        if (data_len == 0) {
             return true;
         }
 
@@ -146,16 +120,16 @@ namespace fawn {
         } else
 #endif
         {
-            char *mdata = (char *)malloc(length);
+            char *mdata = (char *)malloc(data_len);
             //printf("GDOEX pread64: %x  (%d)\n", datapos + sizeof(DataHeader), length);
-            if ((uint64_t)pread64(fd_, mdata, length, offset + key_len + sizeof(struct DataHeader)) !=
-                length) {
+            if ((uint64_t)pread64(fd_, mdata, data_len, offset + key_len + sizeof(struct DataHeader)) !=
+                    data_len) {
                 fprintf(stderr, "Could not read data at position %" PRIu64": %s\n",
                         offset + sizeof(DataHeader), strerror(errno));
                 free(mdata);
                 return false;
             }
-            data.assign(mdata, length);
+            data.assign(mdata, data_len);
             free(mdata);
             /* SPEED note:  May be worth some day eliminating the redundant
              * data copy in this by figuring out how to read directly into the
@@ -168,6 +142,28 @@ namespace fawn {
              * regardless of how we get the data.  */
         }
         return true;
+
+    }
+
+    bool FawnDS_Flash::Read(const char* key,
+                            uint32_t key_len,
+                            off_t offset,
+                            string &data) const
+    {
+        DataHeader data_header{};
+        string inputkey;
+
+        if (!ReadIntoHeader(offset, data_header, inputkey)) {
+            return false;
+        }
+
+        // Hashing based on key fragment can result in potential key collision
+        // So we read the dataheader here to compare the full key to ensure this.
+        if (memcmp(inputkey.data(), key, key_len) != 0) {
+            return false;
+        }
+
+        return ReadData(offset,data_header.key_length,data_header.data_length,data);
     }
 
 

@@ -15,7 +15,7 @@
 #pragma once
 
 #include "common.h"
-
+#include "fawnds_flash.h"
 
 MEHCACHED_BEGIN
 
@@ -70,15 +70,17 @@ struct mehcached_bucket
 
     #define MEHCACHED_TAG_MASK (((uint64_t)1 << 16) - 1)
     #define MEHCACHED_TAG(item_vec) ((item_vec) >> 48)
+    #define MEHCACHED_OFFSET(item_vec) ((item_vec)&0XFFFFFFFFFFFF)
 
 };
+
 
 
 #define MEHCACHED_MAX_POOLS (16)
 
 struct mehcached_table
 {
-
+    fawn::FawnDS_Flash *ds=NULL;
     struct mehcached_bucket *buckets;
     struct mehcached_bucket *extra_buckets; // = (buckets + num_buckets); extra_buckets[0] is not used because index 0 indicates "no more extra bucket"
 

@@ -162,56 +162,6 @@ mehcached_get_memuse()
     return (size_t)usage.ru_maxrss * 1024 + mehcached_shm_get_memuse();
 }
 
-#include <rte_launch.h>
-#include <rte_eal.h>
-#include <rte_lcore.h>
-#include <rte_byteorder.h>
-#include <rte_log.h>
-#include <rte_malloc.h>
-#include <rte_debug.h>
-
-// use this for EAL-related memory allocation only (use mehcached_shm_malloc* instead for other cases)
-struct mehcached_eal_malloc_arg
-{
-    size_t size;
-    void *ret;
-};
-
-static
-int
-mehcached_eal_malloc_lcore_internal(void *arg)
-{
-    struct mehcached_eal_malloc_arg *malloc_arg = (struct mehcached_eal_malloc_arg *)arg;
-    malloc_arg->ret = rte_malloc(NULL, malloc_arg->size, 0);
-    return 0;
-}
-
-static
-void *
-mehcached_eal_malloc_lcore(size_t size, size_t lcore)
-{
-    struct mehcached_eal_malloc_arg malloc_arg;
-    malloc_arg.size = size;
-    if (lcore == rte_lcore_id())
-        mehcached_eal_malloc_lcore_internal(&malloc_arg);
-    else
-    {
-        assert(rte_lcore_id() == rte_get_master_lcore());
-        rte_eal_remote_launch(mehcached_eal_malloc_lcore_internal, &malloc_arg, (unsigned int)lcore);
-        rte_eal_mp_wait_lcore();
-    }
-    return malloc_arg.ret;
-}
-
-static
-void
-rte_eal_launch(lcore_function_t *f, void *arg, unsigned int core_id)
-{
-    if (core_id == rte_lcore_id())
-        f(arg);
-    else
-        rte_eal_remote_launch(f, arg, core_id);
-}
 
 MEHCACHED_END
 
