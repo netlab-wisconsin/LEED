@@ -955,8 +955,8 @@ namespace fawn {
         for (u_int hash_fn_index = 0; hash_fn_index < HASH_COUNT; hash_fn_index++) {
             uint32_t indexkey = (*(Hashes::hashes[hash_fn_index]))(key, key_len);
             uint32_t hash_index_start = indexkey & (header_->hashtable_size-1);
-            if (hash_fn_index == 2)
-                print_payload((const u_char*) &indexkey, sizeof(indexkey));
+//            if (hash_fn_index == 2)
+//                print_payload((const u_char*) &indexkey, sizeof(indexkey));
 
             hash_index_start &= (~(PROBES_BEFORE_REHASH-1));
 
