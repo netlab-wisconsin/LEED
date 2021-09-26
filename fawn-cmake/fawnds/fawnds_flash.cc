@@ -51,13 +51,14 @@ namespace fawn {
         if (lseek(fd_, offset, SEEK_SET) != offset) {
             fprintf(stderr, "Could not seek to offset %" PRIu64": %s\n",
                     offset, strerror(errno));
+            return false;
         }
 
         if (writev(fd_, iov, 3) != (ssize_t) (sizeof(struct DataHeader) + key_len + length)) {
             fprintf(stderr, "Could not write iovec structure: %s\n", strerror(errno));
             return false;
         }
-
+        tail+=sizeof(struct DataHeader) + key_len + length;
         return true;
     }
 

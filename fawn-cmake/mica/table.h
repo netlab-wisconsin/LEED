@@ -46,16 +46,6 @@ MEHCACHED_BEGIN
 #define MEHCACHED_STAT_DEC(table, name) do { (void)table; } while (0)
 #endif
 
-typedef enum _MEHCACHED_RESULT
-{
-    MEHCACHED_OK = 0,
-    MEHCACHED_ERROR,
-    MEHCACHED_FULL,
-    MEHCACHED_EXIST,
-    MEHCACHED_NOT_FOUND,
-    MEHCACHED_PARTIAL_VALUE,
-    MEHCACHED_NOT_PROCESSED,
-} MEHCACHED_RESULT;
 
 struct mehcached_bucket
 {
@@ -64,13 +54,14 @@ struct mehcached_bucket
     uint64_t item_vec[MEHCACHED_ITEMS_PER_BUCKET];
 
     // 16: tag (1-base)
-    //  8: alloc id
-    // 40: item offset
+    // 48: item offset
     // item == 0: empty item
 
     #define MEHCACHED_TAG_MASK (((uint64_t)1 << 16) - 1)
     #define MEHCACHED_TAG(item_vec) ((item_vec) >> 48)
-    #define MEHCACHED_OFFSET(item_vec) ((item_vec)&0XFFFFFFFFFFFF)
+    #define MEHCACHED_ITEM_OFFSET_MASK (((uint64_t)1 << 48) - 1)
+    #define MEHCACHED_ITEM_OFFSET(item_vec) ((item_vec) & MEHCACHED_ITEM_OFFSET_MASK)
+    #define MEHCACHED_ITEM_VEC(tag, item_offset) (((uint64_t)(tag) << 48) | (uint64_t)(item_offset))
 
 };
 
@@ -120,42 +111,6 @@ struct mehcached_table
 #endif
 } MEHCACHED_ALIGNED(64);
 
-struct mehcached_prefetch_state
-{
-    struct mehcached_table *table;
-    struct mehcached_bucket *bucket;
-    uint64_t key_hash;
-};
-
-typedef enum _MEHCACHED_OPERATION
-{
-    MEHCACHED_NOOP_READ = 0,
-    MEHCACHED_NOOP_WRITE,
-    MEHCACHED_ADD,
-    MEHCACHED_SET,
-    MEHCACHED_GET,
-    MEHCACHED_TEST,
-    MEHCACHED_DELETE,
-    MEHCACHED_INCREMENT,
-} MEHCACHED_OPERATION;
-
-struct mehcached_request
-{
-    // 0
-    uint8_t operation;  // of enum MEHCACHED_OPERATION type
-    uint8_t result;     // of enum MEHCACHED_RESULT type
-    // 2
-    uint16_t reserved0;
-    // 4
-    uint32_t kv_length_vec;
-    // 8
-    uint64_t key_hash;
-    // 16
-    uint32_t expire_time;
-    // 20
-    uint32_t reserved1;
-    // 24
-};
 
 static
 void
@@ -186,21 +141,10 @@ static
 bool
 mehcached_compare_keys(const uint8_t *key1, size_t key1_len, const uint8_t *key2, size_t key2_len);
 
-static
-void
-mehcached_cleanup_all(uint8_t current_alloc_id, struct mehcached_table *table);
-
-static
-void
-mehcached_prefetch_table(struct mehcached_table *table, uint64_t key_hash, struct mehcached_prefetch_state *out_prefetch_state);
-
-static
-void
-mehcached_prefetch_alloc(struct mehcached_prefetch_state *in_out_prefetch_state);
 
 static
 bool
-mehcached_get(uint8_t current_alloc_id, struct mehcached_table *table, uint64_t key_hash, const uint8_t *key, size_t key_length, uint8_t *out_value, size_t *in_out_value_length, uint32_t *out_expire_time, bool readonly);
+mehcached_get(struct mehcached_table *table, uint64_t key_hash, const uint8_t *key, size_t key_length, string &value);
 
 static
 bool
@@ -208,19 +152,12 @@ mehcached_test(uint8_t current_alloc_id, struct mehcached_table *table, uint64_t
 
 static
 bool
-mehcached_set(uint8_t current_alloc_id, struct mehcached_table *table, uint64_t key_hash, const uint8_t *key, size_t key_length, const uint8_t *value, size_t value_length, uint32_t expire_time, bool overwrite);
+mehcached_set(struct mehcached_table *table, uint64_t key_hash, const uint8_t *key, size_t key_length, const uint8_t *value, size_t value_length);
 
 static
 bool
 mehcached_delete(uint8_t current_alloc_id, struct mehcached_table *table, uint64_t key_hash, const uint8_t *key, size_t key_length);
 
-static
-bool
-mehcached_increment(uint8_t current_alloc_id, struct mehcached_table *table, uint64_t key_hash, const uint8_t *key, size_t key_length, uint64_t increment, uint64_t *out_new_value, uint32_t expire_time);
-
-static
-void
-mehcached_process_batch(uint8_t current_alloc_id, struct mehcached_table *table, struct mehcached_request *requests, size_t num_requests, const uint8_t *in_data, uint8_t *out_data, size_t *out_data_length, bool readonly);
 
 static
 void
