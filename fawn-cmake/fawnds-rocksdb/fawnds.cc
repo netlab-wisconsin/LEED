@@ -30,6 +30,7 @@ using fawn::DataHeader;
 using fawn::Hashes;
 using fawn::HashUtil;
 using fawn::DBID;
+std::string kDBPath = "/tmp/rocksdb_simple_example";
 
 #ifndef O_NOATIME
 #define O_NOATIME 0  /* O_NOATIME is linux-only */
@@ -60,6 +61,8 @@ namespace fawn {
             perror("Could not open file\n");
             return NULL;
         }
+
+
 
         return FawnDS<T>::Create_FawnDS_From_Fd(fd, filename,
                                                 hash_table_size * FawnDS<T>::EXCESS_BUCKET_FACTOR,
@@ -148,15 +151,12 @@ namespace fawn {
         // zero out the buffer
         memset(ds->header_, 0, sizeof(struct DbHeader));
 
-        ds->hash_table_ = (struct HashEntry*)malloc(sizeof(struct HashEntry) * max_entries);
-        if (ds->hash_table_ == NULL) {
-            perror("could not malloc hash table file\n");
-            delete ds;
-            return NULL;
-        }
-
-        // zero out the buffer
-        memset(ds->hash_table_, 0, sizeof(struct HashEntry) * max_entries);
+        // add by HuaZhang
+        Options options;
+        options.create_if_missing = true;
+        Status s = DB::Open(options, kDBPath, &ds->rocksdb_);
+        assert(s.ok());
+        cout << "rocksdb is ok";
 
         // REMEMBER TO WRITE OUT HEADER/HASHTABLE AFTER SPLIT/MERGE/REWRITE!
 
@@ -417,14 +417,7 @@ namespace fawn {
             return false;
         }
 
-        bool newObj = false; // Used to keep track of whether this has added an object (used for tracking number of elements)
-        int32_t hash_index = FindHashIndexInsert(key, key_len, &newObj);
-        // If hash index is not found, we *could* rebuild the table with a larger hashtable size.
-        // For now, we just return false.
-        if (hash_index == -1) {
-            fprintf(stdout, "Can't find index for given key in hash table.\n");
-            return false;
-        }
+        rocksdb_->Put(rocksdb::WriteOptions(), key, (char*) datastore->GetTail());
 
         // Do the underlying write to the datstore
         if (!datastore->Write(key, key_len, data, length, header_->data_insertion_point)) {
@@ -432,16 +425,6 @@ namespace fawn {
             return false;
         }
 
-        // update the hashtable (since the data was successfully written).
-        uint16_t key_in_hashtable = keyfragment_from_key(key, key_len);
-        key_in_hashtable |= VALIDBITMASK; // set valid bit to 1
-        hash_table_[hash_index].present_key = key_in_hashtable;
-        hash_table_[hash_index].offset = header_->data_insertion_point;
-        header_->data_insertion_point += sizeof(struct DataHeader) + key_len + length;
-
-        // Update number of elements if Insert added a new object
-        if (newObj)
-            header_->number_elements++;
 
         return true;
     }
@@ -459,42 +442,11 @@ namespace fawn {
         if (key == NULL)
             return false;
 
-        DataHeader data_header;
-        int32_t hash_index = FindHashIndex(key, key_len, &data_header);
-
-        // Key is not in table
-        if (hash_index == -1) {
-            //fprintf(stderr, "Can't find index for given key in hash table.\n");
+        rocksdb_->Delete(rocksdb::WriteOptions(), key);
+        if (!datastore->Delete(key, key_len, header_->data_insertion_point)) {
+            fprintf(stderr, "Could not delete from underlying datastore\n");
             return false;
         }
-
-        // if writeLog == false, we may be ensuring that the entry was invalidated, so it's okay to check again
-        if (writeLog && !valid(hash_index)) {
-            fprintf(stderr, "Warning: tried to delete non-existent item\n");
-            return false;
-        }
-
-        if (writeLog) {
-            if (!datastore->Delete(key, key_len, header_->data_insertion_point)) {
-                fprintf(stderr, "Could not delete from underlying datastore\n");
-                return false;
-            }
-            // Update head pointer
-            header_->data_insertion_point += sizeof(struct DataHeader) + key_len;
-
-        }
-
-
-        /*********   UPDATE TABLE   **********/
-        hash_table_[hash_index].present_key |= DELETEDBITMASK;
-        header_->deleted_elements++;
-
-        // Eliminate stale entries on delete (exhaustive search)
-        while ((hash_index = FindHashIndex(key, key_len, &data_header)) != -1) {
-            hash_table_[hash_index].present_key |= DELETEDBITMASK;
-        }
-
-        return true;
     }
 
     template <typename T>
@@ -502,39 +454,10 @@ namespace fawn {
     {
         if (key == NULL)
             return false;
-
-        // use DataHeaderExtended for app readahead
-        int32_t hash_index = 0;
-
-        for (u_int hash_fn_index = 0; hash_fn_index < HASH_COUNT; hash_fn_index++) {
-            uint32_t indexkey = (*(Hashes::hashes[hash_fn_index]))(key, key_len);
-            // calculate the starting index to probe. We linearly probe
-            // PROBES_BEFORE_REHASH locations before rehashing the key to get a new
-            // starting index.
-
-            // Mask lower order bits to find hash index
-            uint32_t hash_index_start = indexkey & (header_->hashtable_size-1);
-
-            hash_index_start &= (~(PROBES_BEFORE_REHASH-1));
-
-            for (hash_index = hash_index_start;
-                 (uint32_t)hash_index < hash_index_start + PROBES_BEFORE_REHASH;
-                 ++hash_index) {
-                uint16_t vkey = verifykey(hash_index);
-                if (!valid(hash_index)) {
-                    return false;
-                }
-                else if (deleted(hash_index)) {
-                    continue;
-                }
-                else if (vkey == keyfragment_from_key(key, key_len)) {
-                    off_t datapos = hash_table_[hash_index].offset;
-                    if (datastore->Read(key, key_len, datapos, data))
-                        return true;
-                }
-            }
-
-        }
+        std:string* datapos;
+        rocksdb_->Get(rocksdb::ReadOptions(), key, datapos);
+        if (datastore->Read(key, key_len, (off_t) datapos, data))
+            return true;
         return false;
     }
 

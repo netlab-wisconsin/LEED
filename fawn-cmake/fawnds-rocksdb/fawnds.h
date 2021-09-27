@@ -15,9 +15,12 @@
 #define pread64 pread
 #define pwrite64 pwrite
 #endif // #ifdef __APPLE__
-
+#include "rocksdb/db.h"
+#include "rocksdb/slice.h"
+#include "rocksdb/options.h"
 
 using namespace std;
+using namespace rocksdb;
 
 namespace fawn {
 
@@ -166,6 +169,11 @@ namespace fawn {
         int fd_;
         struct DbHeader* header_;
         struct HashEntry* hash_table_;
+
+        // add by HuaZhang
+        DB * rocksdb_;
+
+
         T* datastore;
         string filename_;
         off_t currSplit;
