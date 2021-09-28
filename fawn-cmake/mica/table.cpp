@@ -12,15 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#pragma once
 
 #include "table.h"
 #include "util.h"
-#include "shm.h"
 
 #include <stdio.h>
 
-MEHCACHED_BEGIN
 
 // a test feature to deduplicate PUT requests within the same batch
 //#define MEHCACHED_DEDUP_WITHIN_BATCH
@@ -464,7 +461,6 @@ mehcached_find_same_tag(const struct mehcached_table *table, struct mehcached_bu
 }
 
 
-static
 bool
 mehcached_get(struct mehcached_table *table, uint64_t key_hash, const uint8_t *key, size_t key_length, string &value)
 {
@@ -548,7 +544,7 @@ mehcached_test(uint8_t current_alloc_id MEHCACHED_UNUSED, struct mehcached_table
     return false;
 }
 
-static
+
 bool
 mehcached_set(struct mehcached_table *table, uint64_t key_hash, const uint8_t *key, size_t key_length, const uint8_t *value, size_t value_length)
 {
@@ -596,9 +592,9 @@ mehcached_set(struct mehcached_table *table, uint64_t key_hash, const uint8_t *k
     return true;
 }
 
-static
+
 bool
-mehcached_delete(uint8_t alloc_id MEHCACHED_UNUSED, struct mehcached_table *table, uint64_t key_hash, const uint8_t *key, size_t key_length)
+mehcached_delete(struct mehcached_table *table, uint64_t key_hash, const uint8_t *key, size_t key_length)
 {
     assert(key_length <= MEHCACHED_MAX_KEY_LENGTH);
 
@@ -634,7 +630,7 @@ mehcached_delete(uint8_t alloc_id MEHCACHED_UNUSED, struct mehcached_table *tabl
 
 
 
-static
+
 void
 mehcached_table_reset(struct mehcached_table *table)
 {
@@ -684,22 +680,13 @@ mehcached_table_reset(struct mehcached_table *table)
     mehcached_reset_table_stats(table);
 }
 
-static
+
 void
-mehcached_table_init(struct mehcached_table *table, size_t num_buckets, size_t num_pools MEHCACHED_UNUSED, size_t pool_size MEHCACHED_UNUSED, bool concurrent_table_read, bool concurrent_table_write, bool concurrent_alloc_write, size_t table_numa_node, size_t alloc_numa_nodes[], double mth_threshold)
+mehcached_table_init(struct mehcached_table *table, size_t num_buckets, bool concurrent_table_read, bool concurrent_table_write,const char * filename)
 {
     assert((MEHCACHED_ITEMS_PER_BUCKET == 7 && sizeof(struct mehcached_bucket) == 64) || (MEHCACHED_ITEMS_PER_BUCKET == 15 && sizeof(struct mehcached_bucket) == 128) || (MEHCACHED_ITEMS_PER_BUCKET == 31 && sizeof(struct mehcached_bucket) == 256));
 
     assert(num_buckets > 0);
-    assert(num_pools > 0);
-    assert(num_pools <= MEHCACHED_MAX_POOLS);
-#ifdef MEHCACHED_SINGLE_ALLOC
-    if (num_pools != 1)
-    {
-        fprintf(stderr, "the program is compiled with no support for multiple pools\n");
-        assert(false);
-    }
-#endif
 
     size_t log_num_buckets = 0;
     while (((size_t)1 << log_num_buckets) < num_buckets)
@@ -711,35 +698,8 @@ mehcached_table_init(struct mehcached_table *table, size_t num_buckets, size_t n
     table->num_buckets_mask = (uint32_t)num_buckets - 1;
     table->num_extra_buckets = table->num_buckets / 10;    // 10% of normal buckets
 
-// #ifdef MEHCACHED_ALLOC_POOL
-    {
-        size_t shm_size = mehcached_shm_adjust_size(sizeof(struct mehcached_bucket) * (table->num_buckets + table->num_extra_buckets));
-        // TODO: extend num_buckets to meet shm_size
-        size_t shm_id = mehcached_shm_alloc(shm_size, table_numa_node);
-        if (shm_id == (size_t)-1)
-        {
-            printf("failed to allocate memory\n");
-            assert(false);
-        }
-        while (true)
-        {
-            table->buckets = static_cast<mehcached_bucket *>(mehcached_shm_find_free_address(shm_size));
-            if (table->buckets == NULL)
-                assert(false);
-            if (mehcached_shm_map(shm_id, table->buckets, 0, shm_size))
-                break;
-        }
-        if (!mehcached_shm_schedule_remove(shm_id))
-            assert(false);
-    }
-// #endif
-// #ifdef MEHCACHED_ALLOC_MALLOC
-//     {
-//         int ret = posix_memalign((void **)&table->buckets, 4096, sizeof(struct mehcached_bucket) * (table->num_buckets + table->num_extra_buckets));
-//         if (ret != 0)
-//             assert(false);
-//     }
-// #endif
+    table->buckets=new mehcached_bucket[table->num_buckets + table->num_extra_buckets];
+
     table->extra_buckets = table->buckets + table->num_buckets - 1; // subtract by one to compensate 1-base indices
     // the rest extra_bucket information is initialized in mehcached_table_reset()
 
@@ -753,15 +713,8 @@ mehcached_table_init(struct mehcached_table *table, size_t num_buckets, size_t n
     else
         table->concurrent_access_mode = 2;
 
-
-#ifdef MEHCACHED_ALLOC_MALLOC
-    mehcached_malloc_init(&table->alloc);
-#endif
-#ifdef MEHCACHED_ALLOC_DYNAMIC
-    // TODO: support multiple dynamic allocs?
-    mehcached_dynamic_init(&table->alloc, pool_size, concurrent_table_read, concurrent_alloc_write, alloc_numa_nodes[0]);
-#endif
-
+    //init fawn flash
+    table->ds=new fawn::FawnDS_Flash(filename);
     mehcached_table_reset(table);
 
 #ifdef NDEBUG
@@ -782,8 +735,6 @@ mehcached_table_init(struct mehcached_table *table, size_t num_buckets, size_t n
     printf("MEHCACHED_CONCURRENT (low performance)\n");
 #endif
 
-    printf("MEHCACHED_MTH_THRESHOLD=%lf (%s)\n", mth_threshold, mth_threshold == 0. ? "LRU" : (mth_threshold == 1. ? "FIFO" : "approx-LRU"));
-
 #ifdef MEHCACHED_USE_PH
     printf("MEHCACHED_USE_PH\n");
 #endif
@@ -792,23 +743,13 @@ mehcached_table_init(struct mehcached_table *table, size_t num_buckets, size_t n
     printf("MEHCACHED_NO_EVICTION\n");
 #endif
 
-#ifdef MEHCACHED_ALLOC_POOL
-    printf("MEHCACHED_ALLOC_POOL\n");
-#endif
-#ifdef MEHCACHED_ALLOC_MALLOC
-    printf("MEHCACHED_ALLOC_MALLOC\n");
-#endif
-#ifdef MEHCACHED_ALLOC_DYNAMIC
-    printf("MEHCACHED_ALLOC_DYNAMIC\n");
-#endif
     printf("num_buckets = %u\n", table->num_buckets);
     printf("num_extra_buckets = %u\n", table->num_extra_buckets);
-    printf("pool_size = %zu\n", pool_size);
 
     printf("\n");
 }
 
-static
+
 void
 mehcached_table_free(struct mehcached_table *table)
 {
@@ -816,16 +757,7 @@ mehcached_table_free(struct mehcached_table *table)
 
     mehcached_table_reset(table);
 
-// #ifdef MEHCACHED_ALLOC_POOL
-    if (!mehcached_shm_unmap(table->buckets))
-        assert(false);
-// #endif
-// #ifdef MEHCACHED_ALLOC_MALLOC
-//     free(table->buckets);
-// #endif
-
-
+    delete table->buckets;
+    delete table->ds;
 }
-
-MEHCACHED_END
 

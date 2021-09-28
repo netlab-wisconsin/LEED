@@ -1,5 +1,5 @@
 
-add_library (mica shm.c table.cpp util.c)
-target_link_libraries (mica LINK_PUBLIC fawnds_flash)
+add_executable(mica util.c table.cpp bench.cpp)
+target_link_libraries (mica PUBLIC fawnds_flash)
 
-target_include_directories (mica PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+# target_include_directories (mica PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

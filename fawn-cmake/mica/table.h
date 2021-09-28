@@ -142,7 +142,6 @@ bool
 mehcached_compare_keys(const uint8_t *key1, size_t key1_len, const uint8_t *key2, size_t key2_len);
 
 
-static
 bool
 mehcached_get(struct mehcached_table *table, uint64_t key_hash, const uint8_t *key, size_t key_length, string &value);
 
@@ -150,24 +149,19 @@ static
 bool
 mehcached_test(uint8_t current_alloc_id, struct mehcached_table *table, uint64_t key_hash, const uint8_t *key, size_t key_length);
 
-static
 bool
 mehcached_set(struct mehcached_table *table, uint64_t key_hash, const uint8_t *key, size_t key_length, const uint8_t *value, size_t value_length);
 
-static
 bool
-mehcached_delete(uint8_t current_alloc_id, struct mehcached_table *table, uint64_t key_hash, const uint8_t *key, size_t key_length);
+mehcached_delete(struct mehcached_table *table, uint64_t key_hash, const uint8_t *key, size_t key_length);
 
 
-static
 void
 mehcached_table_reset(struct mehcached_table *table);
 
-static
 void
-mehcached_table_init(struct mehcached_table *table, size_t num_buckets, size_t num_pools, size_t pool_size, bool concurrent_table_read, bool concurrent_table_write, bool concurrent_alloc_write, size_t table_numa_node, size_t alloc_numa_nodes[], double mth_threshold);
+mehcached_table_init(struct mehcached_table *table, size_t num_buckets, bool concurrent_table_read, bool concurrent_table_write,const char * filename);
 
-static
 void
 mehcached_table_free(struct mehcached_table *table);
 

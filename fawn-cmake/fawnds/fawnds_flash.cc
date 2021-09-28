@@ -167,7 +167,17 @@ namespace fawn {
         return ReadData(offset,data_header.key_length,data_header.data_length,data);
     }
 
+    FawnDS_Flash::FawnDS_Flash(const char *filename, off_t _tail): tail(_tail) ,open_file(true){
+        assert(filename != NULL);
+        if ((fd_ = open(filename, O_RDWR|O_CREAT|O_NOATIME, 0666)) == -1) {
+            perror("Could not open file\n");
+            assert(false);
+        }
+    }
 
+    FawnDS_Flash::~FawnDS_Flash() {
+        if(open_file) close(fd_);
+    }
 
 
 }  // namespace fawn

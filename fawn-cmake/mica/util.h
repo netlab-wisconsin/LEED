@@ -15,8 +15,6 @@
 #pragma once
 
 #include "common.h"
-#include "shm.h"
-
 #include <assert.h>
 
 #include <stdlib.h>
@@ -151,16 +149,6 @@ mehcached_rand_d(uint64_t *state)
     return (double)*state / (double)((1UL << 48) - 1);
 }
 
-static
-size_t
-mehcached_get_memuse()
-{
-    struct rusage usage;
-    int ret = getrusage(RUSAGE_SELF, &usage);
-    assert(ret == 0);
-    (void)ret;
-    return (size_t)usage.ru_maxrss * 1024 + mehcached_shm_get_memuse();
-}
 
 
 MEHCACHED_END
