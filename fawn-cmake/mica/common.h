@@ -30,5 +30,4 @@
 
 #define MEHCACHED_ALIGNED(alignment) __attribute__ ((aligned (alignment)))
 
-#include "config.h"
 

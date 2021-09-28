@@ -223,14 +223,11 @@ mehcached_unlock_extra_bucket_free_list(struct mehcached_table *table)
 }
 
 static
+inline
 bool
-mehcached_has_extra_bucket(struct mehcached_bucket *bucket MEHCACHED_UNUSED)
+mehcached_has_extra_bucket(struct mehcached_bucket *bucket)
 {
-#ifndef MEHCACHED_NO_EVICTION
-    return false;
-#else
     return bucket->next_extra_bucket_index != 0;
-#endif
 }
 
 static
@@ -710,14 +707,6 @@ mehcached_table_init(struct mehcached_table *table, size_t num_buckets, bool con
 
 #ifdef MEHCACHED_CONCURRENT
     printf("MEHCACHED_CONCURRENT (low performance)\n");
-#endif
-
-#ifdef MEHCACHED_USE_PH
-    printf("MEHCACHED_USE_PH\n");
-#endif
-
-#ifdef MEHCACHED_NO_EVICTION
-    printf("MEHCACHED_NO_EVICTION\n");
 #endif
 
     printf("num_buckets = %u\n", table->num_buckets);

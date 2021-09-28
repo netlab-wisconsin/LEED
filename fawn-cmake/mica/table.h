@@ -22,14 +22,8 @@ MEHCACHED_BEGIN
 #define MEHCACHED_MAX_KEY_LENGTH (255)
 #define MEHCACHED_MAX_VALUE_LENGTH (1048575)
 
-
-#ifndef MEHCACHED_NO_EVICTION
-// #define MEHCACHED_ITEMS_PER_BUCKET (7)
+// 7 15 31
 #define MEHCACHED_ITEMS_PER_BUCKET (15)
-#else
-#define MEHCACHED_ITEMS_PER_BUCKET (7)
-// #define MEHCACHED_ITEMS_PER_BUCKET (15)
-#endif
 
 // do move-to-head if when (item's distance from tail) >= (pool size) * mth_threshold
 // 0.0: full LRU; 1.0: full FIFO
