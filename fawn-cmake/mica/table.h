@@ -116,7 +116,6 @@ static
 void
 mehcached_print_bucket(const struct mehcached_bucket *bucket);
 
-static
 void
 mehcached_print_buckets(const struct mehcached_table *table);
 
@@ -160,7 +159,7 @@ void
 mehcached_table_reset(struct mehcached_table *table);
 
 void
-mehcached_table_init(struct mehcached_table *table, size_t num_buckets, bool concurrent_table_read, bool concurrent_table_write,const char * filename);
+mehcached_table_init(struct mehcached_table *table, size_t num_buckets, bool concurrent_table_read, bool concurrent_table_write,const char * filename,uint8_t extra_buckets_percentage);
 
 void
 mehcached_table_free(struct mehcached_table *table);

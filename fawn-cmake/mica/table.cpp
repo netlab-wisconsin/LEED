@@ -32,7 +32,6 @@ mehcached_print_bucket(const struct mehcached_bucket *bucket)
         printf("  item_vec[%zu]: tag=%lu, item_offset=%lu\n", item_index, MEHCACHED_TAG(bucket->item_vec[item_index]),MEHCACHED_ITEM_OFFSET(bucket->item_vec[item_index]));
 }
 
-static
 void
 mehcached_print_buckets(const struct mehcached_table *table)
 {
@@ -566,6 +565,7 @@ mehcached_set(struct mehcached_table *table, uint64_t key_hash, const uint8_t *k
         {
             // no more space
             // TODO: add a statistics entry
+            perror("no more space");
             mehcached_unlock_bucket(table, bucket);
             return false;
         }
@@ -634,29 +634,6 @@ mehcached_delete(struct mehcached_table *table, uint64_t key_hash, const uint8_t
 void
 mehcached_table_reset(struct mehcached_table *table)
 {
-    size_t bucket_index;
-#ifdef MEHCACHED_ALLOC_DYNAMIC
-    mehcached_dynamic_lock(&table->alloc);
-#endif
-    for (bucket_index = 0; bucket_index < table->num_buckets; bucket_index++)
-    {
-        struct mehcached_bucket *bucket = table->buckets + bucket_index;
-        size_t item_index;
-        for (item_index = 0; item_index < MEHCACHED_ITEMS_PER_BUCKET; item_index++)
-            if (bucket->item_vec[item_index] != 0)
-            {
-#ifdef MEHCACHED_ALLOC_MALLOC
-                mehcached_malloc_deallocate(&table->alloc, MEHCACHED_ITEM_OFFSET(bucket->item_vec[item_index]));
-#endif
-#ifdef MEHCACHED_ALLOC_DYNAMIC
-                mehcached_dynamic_deallocate(&table->alloc, MEHCACHED_ITEM_OFFSET(bucket->item_vec[item_index]));
-#endif
-            }
-    }
-#ifdef MEHCACHED_ALLOC_DYNAMIC
-    mehcached_dynamic_unlock(&table->alloc);
-#endif
-
     memset(table->buckets, 0, sizeof(struct mehcached_bucket) * (table->num_buckets + table->num_extra_buckets));
 
     // initialize a free list of extra buckets
@@ -682,7 +659,7 @@ mehcached_table_reset(struct mehcached_table *table)
 
 
 void
-mehcached_table_init(struct mehcached_table *table, size_t num_buckets, bool concurrent_table_read, bool concurrent_table_write,const char * filename)
+mehcached_table_init(struct mehcached_table *table, size_t num_buckets, bool concurrent_table_read, bool concurrent_table_write,const char * filename,uint8_t extra_buckets_percentage)
 {
     assert((MEHCACHED_ITEMS_PER_BUCKET == 7 && sizeof(struct mehcached_bucket) == 64) || (MEHCACHED_ITEMS_PER_BUCKET == 15 && sizeof(struct mehcached_bucket) == 128) || (MEHCACHED_ITEMS_PER_BUCKET == 31 && sizeof(struct mehcached_bucket) == 256));
 
@@ -696,7 +673,7 @@ mehcached_table_init(struct mehcached_table *table, size_t num_buckets, bool con
 
     table->num_buckets = (uint32_t)num_buckets;
     table->num_buckets_mask = (uint32_t)num_buckets - 1;
-    table->num_extra_buckets = table->num_buckets / 10;    // 10% of normal buckets
+    table->num_extra_buckets = table->num_buckets * extra_buckets_percentage/ 100;    // 10% of normal buckets
 
     table->buckets=new mehcached_bucket[table->num_buckets + table->num_extra_buckets];
 
