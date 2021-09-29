@@ -172,8 +172,6 @@ namespace fawn {
 
         // add by HuaZhang
         DB * rocksdb_;
-
-
         T* datastore;
         string filename_;
         off_t currSplit;

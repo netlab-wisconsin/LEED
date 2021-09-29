@@ -137,7 +137,7 @@ namespace fawn {
 
         FawnDS<T>* ds = new FawnDS<T>(filename, kt);
         ds->fd_ = fd;
-        ds->datastore = new T(fd);
+        ds->datastore = new T(fd, db_size);
         ds->disable_readahead();
 
 
@@ -157,6 +157,10 @@ namespace fawn {
         Status s = DB::Open(options, kDBPath, &ds->rocksdb_);
         assert(s.ok());
         cout << "rocksdb is ok";
+        std::string value;
+
+        //ds->rocksdb_->Get(ReadOptions(),"key1",&value);
+        ds->rocksdb_->Put(rocksdb::WriteOptions(), "key1","value");
 
         // REMEMBER TO WRITE OUT HEADER/HASHTABLE AFTER SPLIT/MERGE/REWRITE!
 
@@ -416,16 +420,15 @@ namespace fawn {
             fprintf(stderr, "Error: hash table full!\n");
             return false;
         }
-
-        rocksdb_->Put(rocksdb::WriteOptions(), key, (char*) datastore->GetTail());
+        off_t tail=datastore->GetTail();
+        printf("insert is key %u tail is %ld\n", *(uint32_t *)key, tail);
+        rocksdb_->Put(rocksdb::WriteOptions(), Slice(key, key_len), Slice((char *)&tail, 8));
 
         // Do the underlying write to the datstore
-        if (!datastore->Write(key, key_len, data, length, header_->data_insertion_point)) {
+        if (!datastore->Write(key, key_len, data, length,tail)) {
             fprintf(stderr, "Can't write to underlying datastore\n");
             return false;
         }
-
-
         return true;
     }
 
@@ -442,7 +445,7 @@ namespace fawn {
         if (key == NULL)
             return false;
 
-        rocksdb_->Delete(rocksdb::WriteOptions(), key);
+        rocksdb_->Delete(rocksdb::WriteOptions(), Slice(key, key_len));
         if (!datastore->Delete(key, key_len, header_->data_insertion_point)) {
             fprintf(stderr, "Could not delete from underlying datastore\n");
             return false;
@@ -454,9 +457,11 @@ namespace fawn {
     {
         if (key == NULL)
             return false;
-        std:string* datapos;
-        rocksdb_->Get(rocksdb::ReadOptions(), key, datapos);
-        if (datastore->Read(key, key_len, (off_t) datapos, data))
+
+        PinnableSlice datapos;
+        rocksdb_->Get(rocksdb::ReadOptions(),rocksdb_->DefaultColumnFamily(), Slice(key, key_len), &datapos);
+        printf("read is key %u tail is %ld\n", *(uint32_t*)key, * (off_t*)datapos.data());
+        if (datastore->Read(key, key_len, * (off_t*)datapos.data(), data))
             return true;
         return false;
     }
