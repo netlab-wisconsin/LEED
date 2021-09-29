@@ -30,7 +30,7 @@ using fawn::DataHeader;
 using fawn::Hashes;
 using fawn::HashUtil;
 using fawn::DBID;
-std::string kDBPath = "/tmp/rocksdb_simple_example";
+std::string kDBPath = "/home/lab/disk1/rocksdb_simple_example";
 
 #ifndef O_NOATIME
 #define O_NOATIME 0  /* O_NOATIME is linux-only */
@@ -62,8 +62,9 @@ namespace fawn {
             return NULL;
         }
 
-
-
+        const char* p = kDBPath.data();
+        remove(p);
+        printf("rocks db delete success!");
         return FawnDS<T>::Create_FawnDS_From_Fd(fd, filename,
                                                 hash_table_size * FawnDS<T>::EXCESS_BUCKET_FACTOR,
                                                 0, // empty
@@ -421,7 +422,7 @@ namespace fawn {
             return false;
         }
         off_t tail=datastore->GetTail();
-        printf("insert is key %u tail is %ld\n", *(uint32_t *)key, tail);
+        //printf("insert is key %u tail is %ld\n", *(uint32_t *)key, tail);
         rocksdb_->Put(rocksdb::WriteOptions(), Slice(key, key_len), Slice((char *)&tail, 8));
 
         // Do the underlying write to the datstore
@@ -460,9 +461,11 @@ namespace fawn {
 
         PinnableSlice datapos;
         rocksdb_->Get(rocksdb::ReadOptions(),rocksdb_->DefaultColumnFamily(), Slice(key, key_len), &datapos);
-        printf("read is key %u tail is %ld\n", *(uint32_t*)key, * (off_t*)datapos.data());
+        //printf("read is key %u tail is %ld\n", *(uint32_t*)key, * (off_t*)datapos.data());
         if (datastore->Read(key, key_len, * (off_t*)datapos.data(), data))
             return true;
+        printf("error!read is key %u tail is %ld\n", *(uint32_t*)key, * (off_t*)datapos.data());
+        exit(1);
         return false;
     }
 

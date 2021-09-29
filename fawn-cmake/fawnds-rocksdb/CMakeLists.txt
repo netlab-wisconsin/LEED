@@ -5,8 +5,8 @@ add_executable (fawnds fawnds.cc hash_functions.cc fawnds_flash.cc fawnds_bench.
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
-
-target_link_libraries(fawnds Threads::Threads OpenSSL::SSL utils rocksdb -lz -lsnappy -lbz2 -ldl)
+target_link_libraries(fawnds Threads::Threads OpenSSL::SSL utils rocksdb -lz -lsnappy zstd -lbz2 -ldl)
 
 add_library (fawnds_flash fawnds_flash.cc)
 target_include_directories (fawnds_flash PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
