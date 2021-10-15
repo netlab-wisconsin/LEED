@@ -1,5 +1,5 @@
 #include "../kv_log.h"
-
+#include <string.h>
 #include "pthread.h"
 #include "stdio.h"
 #define CONCURRENT_IO_NUM 128
@@ -31,6 +31,7 @@ static void write_complete_cb(bool success, void *cb_arg) {
         return;
     }
     printf("Write %lu successfully.\n", i);
+    memset(values[i],0,64);
     kv_log_read(&log, offsets[i], (uint8_t *)(keys + i), sizeof(uint64_t), values[i], value_sizes + i, read_complete_cb, cb_arg);
 }
 
