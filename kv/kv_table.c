@@ -6,6 +6,23 @@
 #include "kv_table_concurrent.h"
 #include "memery_operation.h"
 
+void mehcached_print_bucket(const struct mehcached_bucket *bucket) {
+    printf("<bucket %zx>\n", (size_t)bucket);
+    size_t item_index;
+    for (item_index = 0; item_index < MEHCACHED_ITEMS_PER_BUCKET; item_index++)
+        printf("  item_vec[%zu]: tag=%lu, item_offset=%lu\n", item_index, MEHCACHED_ITEM_TAG(bucket->item_vec[item_index]),
+               MEHCACHED_ITEM_OFFSET(bucket->item_vec[item_index]));
+}
+
+void mehcached_print_buckets(const struct mehcached_table *table) {
+    size_t bucket_index;
+    for (bucket_index = 0; bucket_index < table->num_buckets; bucket_index++) {
+        struct mehcached_bucket *bucket = table->buckets + bucket_index;
+        mehcached_print_bucket(bucket);
+    }
+    printf("\n");
+}
+
 #define mehcached_has_extra_bucket(bucket) ((bucket->next_extra_bucket_index) != 0)
 
 static struct mehcached_bucket *mehcached_extra_bucket(const struct mehcached_table *table, uint32_t extra_bucket_index) {
@@ -97,30 +114,18 @@ static void mehcached_fill_hole(struct mehcached_table *table, struct mehcached_
     if (last_item) mehcached_free_extra_bucket(table, prev_extra_bucket);
 }
 
-static size_t mehcached_find_empty(struct mehcached_table *table, struct mehcached_bucket *bucket,
-                                   struct mehcached_bucket **located_bucket) {
-    struct mehcached_bucket *current_bucket = bucket;
+static uint64_t *mehcached_find_empty(struct mehcached_table *self, struct mehcached_bucket *bucket) {
     while (true) {
-        size_t item_index;
-        for (item_index = 0; item_index < MEHCACHED_ITEMS_PER_BUCKET; item_index++) {
-            if (current_bucket->item_vec[item_index] == 0) {
-                *located_bucket = current_bucket;
-                return item_index;
-            }
-        }
-        if (!mehcached_has_extra_bucket(current_bucket)) break;
-        current_bucket = mehcached_extra_bucket(table, current_bucket->next_extra_bucket_index);
+        for (uint64_t *p = bucket->item_vec; p != bucket->item_vec + MEHCACHED_ITEMS_PER_BUCKET; ++p)
+            if (MEHCACHED_ITEM_EMPTY(*p)) return p;
+        if (!mehcached_has_extra_bucket(bucket)) break;
+        bucket = mehcached_extra_bucket(self, bucket->next_extra_bucket_index);
     }
-
     // no space; alloc new extra_bucket
-    if (mehcached_alloc_extra_bucket(table, current_bucket)) {
-        *located_bucket = mehcached_extra_bucket(table, current_bucket->next_extra_bucket_index);
-        return 0;  // use the first slot (it should be empty)
-    } else {
-        // no free extra_bucket
-        *located_bucket = NULL;
-        return MEHCACHED_ITEMS_PER_BUCKET;
-    }
+    if (mehcached_alloc_extra_bucket(self, bucket))
+        return mehcached_extra_bucket(self, bucket->next_extra_bucket_index)->item_vec;
+    else
+        return NULL;
 }
 
 static bool mehcached_compare_keys(const uint8_t *key1, size_t key1_len, const uint8_t *key2, size_t key2_len) {
@@ -189,12 +194,11 @@ static void find_item_read_cb(bool success, void *cb_arg) {
     if (!success) {
         fprintf(stderr, "find_item_read_cb: io error.\n");
         mehcached_find_item_fini(false, ctx);
-    } else if (mehcached_compare_keys(KV_LOG_KEY(ctx->header), ctx->header->key_length, ctx->key, ctx->key_length))
-        mehcached_find_item_fini(true, ctx);
-    else {
+    } else if (mehcached_compare_keys(KV_LOG_KEY(ctx->header), ctx->header->key_length, ctx->key, ctx->key_length)) {
         ++ctx->item;
         _mehcached_find_item(ctx);
-    }
+    } else
+        mehcached_find_item_fini(true, ctx);
 }
 
 static void _mehcached_find_item(void *_arg) {
@@ -256,24 +260,21 @@ static void set_write_cb(bool success, void *cb_arg) {
         fprintf(stderr, "set_write_cb: write io erorr\n");
     else
         *(ctx->item) = MEHCACHED_ITEM_VEC(mehcached_calc_tag(ctx->key_hash), ctx->item_offset);
-    if (ctx->cb) ctx->cb(success, ctx->cb_arg);
     mehcached_unlock_bucket(ctx->self, ctx->bucket);
+    if (ctx->cb) ctx->cb(success, ctx->cb_arg);
     kv_free(ctx);
 }
 
 static void set_find_item_cb(uint64_t *located_item, struct mehcached_bucket *located_bucket, void *cb_arg) {
     struct mehcached_set_context *ctx = cb_arg;
-    if (!located_item) {
-        size_t item_index = mehcached_find_empty(ctx->self, ctx->bucket, &located_bucket);
-        if (item_index == MEHCACHED_ITEMS_PER_BUCKET) {
+    if (!located_item)
+        if (!(located_item = mehcached_find_empty(ctx->self, ctx->bucket))) {
             fprintf(stderr, "no more space\n");
-            if (ctx->cb) ctx->cb(false, ctx->cb_arg);
             mehcached_unlock_bucket(ctx->self, ctx->bucket);
+            if (ctx->cb) ctx->cb(false, ctx->cb_arg);
             kv_free(ctx);
             return;
         }
-        located_item = located_bucket->item_vec + item_index;
-    }
     ctx->item_offset = ctx->self->log->tail;
     ctx->item = located_item;
     kv_log_write(ctx->self->log, ctx->item_offset, ctx->key, ctx->key_length, ctx->value, ctx->value_length, set_write_cb, ctx);
@@ -285,6 +286,7 @@ void mehcached_set(struct mehcached_table *self, uint64_t key_hash, uint8_t *key
     mehcached_set_context_init(ctx, self, key_hash, key, key_length, value, value_length, cb, cb_arg);
     ctx->tag = mehcached_calc_tag(ctx->key_hash);
     ctx->bucket = self->buckets + mehcached_calc_bucket_index(self, key_hash);
+    mehcached_lock_bucket(self, ctx->bucket);
     mehcached_find_item(self, ctx->bucket, ctx->tag, key, key_length, NULL, set_find_item_cb, ctx);
 }
 

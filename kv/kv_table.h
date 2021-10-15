@@ -42,6 +42,9 @@ typedef kv_log_io_cb kv_table_op_cb ;
 #define mehcached_calc_bucket_index(table,key_hash) ((uint32_t)(key_hash >> 16) & table->num_buckets_mask)
 #define mehcached_calc_tag(key_hash) ((uint16_t)(key_hash & MEHCACHED_ITEM_TAG_MASK))
 
+void mehcached_print_bucket(const struct mehcached_bucket *bucket);
+void mehcached_print_buckets(const struct mehcached_table *table);
+
 void mehcached_set(struct mehcached_table *self, uint64_t key_hash, uint8_t *key, size_t key_length, uint8_t *value,
                    size_t value_length, kv_table_op_cb cb, void *cb_arg);
 void mehcached_table_reset(struct mehcached_table *self);
