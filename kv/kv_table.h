@@ -36,6 +36,14 @@ struct mehcached_table {
         uint32_t head;  // 1-base; 0 = no extra bucket
     } extra_bucket_free_list;
 };
+
+typedef kv_log_io_cb kv_table_op_cb ;
+// 16 is from MEHCACHED_ITEM_TAG_MASK's log length
+#define mehcached_calc_bucket_index(table,key_hash) ((uint32_t)(key_hash >> 16) & table->num_buckets_mask)
+#define mehcached_calc_tag(key_hash) ((uint16_t)(key_hash & MEHCACHED_ITEM_TAG_MASK))
+
+void mehcached_set(struct mehcached_table *self, uint64_t key_hash, uint8_t *key, size_t key_length, uint8_t *value,
+                   size_t value_length, kv_table_op_cb cb, void *cb_arg);
 void mehcached_table_reset(struct mehcached_table *self);
 void mehcached_table_init(struct mehcached_table *self, struct kv_log *log, size_t num_buckets, bool concurrent_table_read, uint8_t extra_buckets_percentage);
 void mehcached_table_free(struct mehcached_table *self);
