@@ -132,27 +132,6 @@ static bool mehcached_compare_keys(const uint8_t *key1, size_t key1_len, const u
     return key1_len == key2_len && kv_memcmp8(key1, key2, key1_len);
 }
 
-static size_t mehcached_find_same_tag(const struct mehcached_table *table, struct mehcached_bucket *bucket, uint16_t tag,
-                                      struct mehcached_bucket **located_bucket) {
-    struct mehcached_bucket *current_bucket = bucket;
-
-    while (true) {
-        size_t item_index;
-        for (item_index = 0; item_index < MEHCACHED_ITEMS_PER_BUCKET; item_index++) {
-            if (MEHCACHED_ITEM_TAG(current_bucket->item_vec[item_index]) != tag) continue;
-
-            *located_bucket = current_bucket;
-            return item_index;
-        }
-
-        if (!mehcached_has_extra_bucket(current_bucket)) break;
-        current_bucket = mehcached_extra_bucket(table, current_bucket->next_extra_bucket_index);
-    }
-
-    *located_bucket = NULL;
-    return MEHCACHED_ITEMS_PER_BUCKET;
-}
-
 //--- find_item ---
 typedef void (*_find_item_cb)(uint64_t *located_item, struct mehcached_bucket *located_bucket, void *cb_arg);
 struct mehcached_find_item_context {
@@ -288,6 +267,138 @@ void mehcached_set(struct mehcached_table *self, uint64_t key_hash, uint8_t *key
     ctx->bucket = self->buckets + mehcached_calc_bucket_index(self, key_hash);
     mehcached_lock_bucket(self, ctx->bucket);
     mehcached_find_item(self, ctx->bucket, ctx->tag, key, key_length, NULL, set_find_item_cb, ctx);
+}
+
+// --- delete ---
+struct mehcached_delete_context {
+    struct mehcached_table *self;
+    uint64_t key_hash;
+    uint8_t *key;
+    size_t key_length;
+    kv_table_op_cb cb;
+    void *cb_arg;
+    struct mehcached_bucket *bucket;
+    struct mehcached_bucket *located_bucket;
+    uint64_t *item;
+};
+
+#define mehcached_delete_context_init(ctx, self, key_hash, key, key_length, cb, cb_arg) \
+    do {                                                                                \
+        ctx->self = self;                                                               \
+        ctx->key_hash = key_hash;                                                       \
+        ctx->key = key;                                                                 \
+        ctx->key_length = key_length;                                                   \
+        ctx->cb = cb;                                                                   \
+        ctx->cb_arg = cb_arg;                                                           \
+    } while (0)
+
+static void delete_delete_cb(bool success, void *cb_arg) {
+    struct mehcached_delete_context *ctx = cb_arg;
+    if (!success)
+        fprintf(stderr, "delete_delete_cb: io erorr\n");
+    else {
+        *(ctx->item) = MEHCACHED_ITEM_INIT_VAL;
+        mehcached_fill_hole(ctx->self, ctx->located_bucket, ctx->item - ctx->located_bucket->item_vec);
+    }
+    mehcached_unlock_bucket(ctx->self, ctx->bucket);
+    if (ctx->cb) ctx->cb(success, ctx->cb_arg);
+    kv_free(ctx);
+}
+
+static void delete_find_item_cb(uint64_t *located_item, struct mehcached_bucket *located_bucket, void *cb_arg) {
+    struct mehcached_delete_context *ctx = cb_arg;
+    if (!located_item) {
+        fprintf(stderr, "Delete not found\n");
+        mehcached_unlock_bucket(ctx->self, ctx->bucket);
+        if (ctx->cb) ctx->cb(false, ctx->cb_arg);
+        kv_free(ctx);
+        return;
+    }
+    ctx->item = located_item;
+    ctx->located_bucket = located_bucket;
+    kv_log_delete(ctx->self->log, ctx->self->log->tail, ctx->key, ctx->key_length, delete_delete_cb, ctx);
+}
+
+void mehcached_delete(struct mehcached_table *self, uint64_t key_hash, uint8_t *key, size_t key_length, kv_table_op_cb cb,
+                      void *cb_arg) {
+    struct mehcached_delete_context *ctx = kv_malloc(sizeof(struct mehcached_delete_context));
+    mehcached_delete_context_init(ctx, self, key_hash, key, key_length, cb, cb_arg);
+    ctx->bucket = self->buckets + mehcached_calc_bucket_index(self, key_hash);
+    mehcached_lock_bucket(self, ctx->bucket);
+    mehcached_find_item(self, ctx->bucket, mehcached_calc_tag(ctx->key_hash), key, key_length, NULL, delete_find_item_cb, ctx);
+}
+// --- read ---
+struct mehcached_get_context {
+    struct mehcached_table *self;
+    uint64_t key_hash;
+    uint8_t *key;
+    size_t key_length;
+    uint8_t *value;
+    size_t *value_length;
+    kv_table_op_cb cb;
+    void *cb_arg;
+    struct kv_log_header *header;
+    uint16_t tag;
+    struct mehcached_bucket *bucket;
+    uint32_t version_start;
+};
+#define mehcached_get_context_init(ctx, self, key_hash, key, key_length, value, value_length, cb, cb_arg) \
+    do {                                                                                                  \
+        ctx->self = self;                                                                                 \
+        ctx->key_hash = key_hash;                                                                         \
+        ctx->key = key;                                                                                   \
+        ctx->key_length = key_length;                                                                     \
+        ctx->value = value;                                                                               \
+        ctx->value_length = value_length;                                                                 \
+        ctx->cb = cb;                                                                                     \
+        ctx->cb_arg = cb_arg;                                                                             \
+    } while (0)
+static void _mehcached_get(void *arg);
+static void get_read_value_cb(bool success, void *arg) {
+    struct mehcached_get_context *ctx = arg;
+    if (ctx->version_start != mehcached_read_version_end(ctx->self, ctx->bucket)) {
+        _mehcached_get(ctx);
+        return;
+    }
+    if (success)
+        *(ctx->value_length) = ctx->header->value_length;
+    else
+        fprintf(stderr, "get_read_value_cb: io erorr\n");
+    if (ctx->cb) ctx->cb(success, ctx->cb_arg);
+    kv_free(ctx->header);
+    kv_free(ctx);
+}
+
+static void get_find_item_cb(uint64_t *located_item, struct mehcached_bucket *located_bucket, void *cb_arg) {
+    struct mehcached_get_context *ctx = cb_arg;
+    if (!located_item) {
+        if (ctx->version_start != mehcached_read_version_end(ctx->self, ctx->bucket))
+            _mehcached_get(ctx);
+        else {
+            // not_found
+            if (ctx->cb) ctx->cb(false, ctx->cb_arg);
+            kv_free(ctx->header);
+            kv_free(ctx);
+        }
+    } else {
+        uint64_t offset = MEHCACHED_ITEM_OFFSET(*located_item);
+        kv_log_read_value(ctx->self->log, offset, ctx->header, ctx->value, get_read_value_cb, ctx);
+    }
+}
+static void _mehcached_get(void *arg) {
+    struct mehcached_get_context *ctx = arg;
+    ctx->version_start = mehcached_read_version_begin(ctx->self, ctx->bucket);
+    mehcached_find_item(ctx->self, ctx->bucket, ctx->tag, ctx->key, ctx->key_length, ctx->header, get_find_item_cb, ctx);
+}
+
+void mehcached_get(struct mehcached_table *self, uint64_t key_hash, uint8_t *key, size_t key_length, uint8_t *value,
+                   size_t *value_length, kv_table_op_cb cb, void *cb_arg) {
+    struct mehcached_get_context *ctx = kv_malloc(sizeof(struct mehcached_get_context));
+    mehcached_get_context_init(ctx, self, key_hash, key, key_length, value, value_length, cb, cb_arg);
+    ctx->header = kv_malloc(self->log->data_store->block_size);
+    ctx->tag = mehcached_calc_tag(ctx->key_hash);
+    ctx->bucket = self->buckets + mehcached_calc_bucket_index(self, key_hash);
+    _mehcached_get(ctx);
 }
 
 void mehcached_table_reset(struct mehcached_table *self) {
