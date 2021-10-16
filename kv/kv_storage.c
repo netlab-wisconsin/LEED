@@ -60,7 +60,7 @@ static void storage_io_wait(void *_arg);
 
 static void _storage_io(struct kv_storage *self, void *buf, int iovcnt, uint64_t offset, uint64_t nbytes, kv_storage_io_cb cb,
                         void *cb_arg, bool is_read, struct io_wait_arg *wait_arg) {
-    assert(spdk_get_thread() == priv(self)->app_thread);
+    //assert(spdk_get_thread() == priv(self)->app_thread);
     struct io_complete_arg *arg = kv_malloc(sizeof(struct io_complete_arg));
     arg->cb = cb;
     arg->cb_arg = cb_arg;
@@ -150,8 +150,7 @@ int kv_storage_start(struct kv_storage *self, const char *spdk_json_config_file,
     int rc = 0;
     if ((rc = spdk_app_start(&opts, kv_storage_create, self)))
         SPDK_ERRLOG("ERROR starting application\n");
-    else
-        spdk_app_fini();
+    spdk_app_fini();
     kv_free(self->private_data);
     return rc;
 }

@@ -6,7 +6,7 @@
 
 #define VALUE_SIZE 1000
 uint64_t key = 1;
-char value[VALUE_SIZE] = "hello world!";
+char value[VALUE_SIZE + 512] = "hello world!";
 size_t value_size;
 enum {SET1,DELETE1,GET0,DONE} state=SET1;
 char const  *op_str[]={"set0","set1","delete1","get0"};

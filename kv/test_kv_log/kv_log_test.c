@@ -3,7 +3,7 @@
 #include <string.h>
 
 #include "stdio.h"
-#define CONCURRENT_IO_NUM 128
+#define CONCURRENT_IO_NUM 1024
 #define VALUE_SIZE 1000
 uint64_t keys[CONCURRENT_IO_NUM];
 uint8_t values[CONCURRENT_IO_NUM][1024];
