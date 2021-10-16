@@ -10,6 +10,7 @@ struct {
     uint64_t num_items, read_num_items;
     uint32_t value_size;
     uint8_t extra_buckets_percentage;
+    uint32_t concurrent_io_num;
     char json_config_file[1024];
 
 } opt = {.num_items = 1024,
@@ -24,7 +25,7 @@ static void help(void) {
 }
 static void get_options(int argc, char** argv) {
     int ch;
-    while ((ch = getopt(argc, argv, "hn:r:s:b:d:")) != -1) switch (ch) {
+    while ((ch = getopt(argc, argv, "hn:r:s:b:c:i:")) != -1) switch (ch) {
             case 'h':
                 help();
                 break;
@@ -43,6 +44,9 @@ static void get_options(int argc, char** argv) {
             case 'c':
                 strcpy(opt.json_config_file, optarg);
                 break;
+            case 'i':
+                opt.concurrent_io_num=atol(optarg);
+                break;
             default:
                 help();
                 exit(-1);
@@ -50,7 +54,6 @@ static void get_options(int argc, char** argv) {
 }
 
 static inline uint64_t index_to_key(uint64_t index) { return CityHash64((char*)&index, sizeof(uint64_t)); }
-#define CONCURRENT_IO_NUM 128
 struct io_buffer_t {
     union {
         uint64_t hash;
@@ -60,8 +63,9 @@ struct io_buffer_t {
     size_t value_length;
 };
 
-struct io_buffer_t io_buffer[CONCURRENT_IO_NUM];
+struct io_buffer_t *io_buffer;
 static struct mehcached_table table;
+static struct kv_storage storage;
 //static pthread_mutex_t g_io_mtx = PTHREAD_MUTEX_INITIALIZER;
 uint64_t total_io;
 uint32_t concurrent_io = 0;
@@ -74,21 +78,28 @@ static void fill_db(bool success, void* arg) {
     mehcached_set(&table, io->key.hash, io->key.buf, 8, io->value, opt.value_size, fill_db, arg);
 }
 
-int main(int argc, char** argv) {
-    get_options(argc, argv);
-    struct storage data;
-    storage_init(&data, opt.json_config_file);
-    struct kv_log log;
-    kv_log_init(&log, &data, 0, 0);
+static void storage_start(void *log) {
+    kv_log_init(log, &storage, 0, 0);
     uint32_t num_items = opt.num_items * MEHCACHED_ITEMS_PER_BUCKET / (MEHCACHED_ITEMS_PER_BUCKET - 3);
     uint32_t num_buckets = (num_items + MEHCACHED_ITEMS_PER_BUCKET - 1) / MEHCACHED_ITEMS_PER_BUCKET;
-    mehcached_table_init(&table, &log, num_buckets, true, opt.extra_buckets_percentage);
-    for (size_t i = 0; i < CONCURRENT_IO_NUM; i++) io_buffer->value = malloc(opt.value_size);
-    total_io = opt.num_items;
-    // mehcached_set(&table, key, (uint8_t *)&key, 8, (uint8_t *)value, VALUE_SIZE, test_cb, NULL);
+    mehcached_table_init(&table, log, num_buckets, true, opt.extra_buckets_percentage);
 
-    for (size_t i = 0; i < CONCURRENT_IO_NUM; i++) free(io_buffer->value);
+}
+
+int main(int argc, char** argv) {
+    get_options(argc, argv);
+    struct kv_log log;
+    io_buffer=calloc(opt.concurrent_io_num,sizeof(struct io_buffer_t));
+    for (size_t i = 0; i < opt.concurrent_io_num; i++) io_buffer->value = malloc(opt.value_size);
+    total_io = opt.num_items;
+    kv_storage_start(&storage, opt.json_config_file,storage_start,&log);
+
+
+
+    
+
+    for (size_t i = 0; i < opt.concurrent_io_num; i++) free(io_buffer->value);
     mehcached_table_free(&table);
     kv_log_fini(&log);
-    storage_fini(&data);
+    kv_storage_stop(&storage);
 }

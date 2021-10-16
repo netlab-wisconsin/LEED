@@ -199,7 +199,7 @@ static void mehcached_find_item(const struct mehcached_table *self, struct mehca
                                 size_t key_length, struct kv_log_header *header, _find_item_cb cb, void *cb_arg) {
     assert(cb);
     struct mehcached_find_item_context *ctx = kv_malloc(sizeof(struct mehcached_find_item_context));
-    if ((ctx->alloc_header = (header == NULL))) header = kv_malloc(self->log->data_store->block_size);
+    if ((ctx->alloc_header = (header == NULL))) header = kv_malloc(self->log->storage->block_size);
     mehcached_find_item_context_init(ctx, self, bucket, tag, key, key_length, header, cb, cb_arg);
     ctx->item = ctx->bucket->item_vec;
     _mehcached_find_item(ctx);
@@ -395,7 +395,7 @@ void mehcached_get(struct mehcached_table *self, uint64_t key_hash, uint8_t *key
                    size_t *value_length, kv_table_op_cb cb, void *cb_arg) {
     struct mehcached_get_context *ctx = kv_malloc(sizeof(struct mehcached_get_context));
     mehcached_get_context_init(ctx, self, key_hash, key, key_length, value, value_length, cb, cb_arg);
-    ctx->header = kv_malloc(self->log->data_store->block_size);
+    ctx->header = kv_malloc(self->log->storage->block_size);
     ctx->tag = mehcached_calc_tag(ctx->key_hash);
     ctx->bucket = self->buckets + mehcached_calc_bucket_index(self, key_hash);
     _mehcached_get(ctx);

@@ -139,7 +139,7 @@ static void kv_storage_create(void *arg) {
     if (priv(self)->start_fn) priv(self)->start_fn(priv(self)->fn_arg);
 }
 
-int kv_storage_init(struct kv_storage *self, const char *spdk_json_config_file, kv_storage_start_fn start_fn, void *fn_arg) {
+int kv_storage_start(struct kv_storage *self, const char *spdk_json_config_file, kv_storage_start_fn start_fn, void *fn_arg) {
     self->private_data = kv_malloc(sizeof(struct private_data_t));
     struct spdk_app_opts opts;
     spdk_app_opts_init(&opts);

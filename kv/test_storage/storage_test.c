@@ -39,6 +39,6 @@ static void storage_start(void * arg){
 
 int main(int argc, char **argv) {
     struct kv_storage storage;
-    kv_storage_init(&storage, argv[1],storage_start,&storage);
+    kv_storage_start(&storage, argv[1],storage_start,&storage);
     return 0;
 }

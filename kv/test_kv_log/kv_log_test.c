@@ -34,7 +34,7 @@ static void write_complete_cb(bool success, void *cb_arg) {
                 cb_arg);
 }
 
-static void kv_storage_start(void *arg) {
+static void storage_start(void *arg) {
     struct kv_storage *storage = arg;
     kv_log_init(&log, storage, 0, 0);
     for (size_t i = 0; i < CONCURRENT_IO_NUM; i++) {
@@ -50,6 +50,6 @@ int main(int argc, char **argv) {
         sprintf((char *)values[i], "%lu. hello world!", i);
     }
     struct kv_storage storage;
-    kv_storage_init(&storage, argv[1], kv_storage_start, &storage);
+    kv_storage_start(&storage, argv[1], storage_start, &storage);
     kv_log_fini(&log);
 }
