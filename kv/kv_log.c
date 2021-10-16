@@ -7,12 +7,12 @@
 #include "memery_operation.h"
 #define EMPTY_BUF_LEN(blk_size, length) ((blk_size) - (length - 1) % (blk_size)-1)
 
-int kv_log_init(struct kv_log *self, struct storage *data_store, uint64_t head, uint64_t tail) {
-    assert(data_store->block_size >= sizeof(struct kv_log_header));
-    self->data_store = data_store;
+int kv_log_init(struct kv_log *self, struct kv_storage *storage, uint64_t head, uint64_t tail) {
+    assert(storage->block_size >= sizeof(struct kv_log_header));
+    self->storage = storage;
     self->head = head;
     self->tail = tail;
-    self->empty_buf = kv_malloc(self->data_store->block_size);
+    self->empty_buf = kv_malloc(self->storage->block_size);
     return 0;
 }
 
@@ -46,9 +46,9 @@ static void _kv_log_write(struct kv_log *self, struct kv_log_header *header, uin
     arg->iov[0] = (struct iovec){header, sizeof(struct kv_log_header)};
     arg->iov[1] = (struct iovec){key, header->key_length};
     arg->iov[2] = (struct iovec){value, header->value_length};
-    arg->iov[3] = (struct iovec){self->empty_buf, EMPTY_BUF_LEN(self->data_store->block_size, length)};
+    arg->iov[3] = (struct iovec){self->empty_buf, EMPTY_BUF_LEN(self->storage->block_size, length)};
     length += arg->iov[3].iov_len;
-    storage_write(self->data_store, arg->iov, 4, self->tail, length, kv_log_write_complete, arg);
+    kv_storage_write(self->storage, arg->iov, 4, self->tail, length, kv_log_write_complete, arg);
     self->tail += length;
 }
 
@@ -70,12 +70,12 @@ void kv_log_delete(struct kv_log *self, uint64_t offset, uint8_t *key, uint16_t 
 }
 
 void kv_log_read_header(struct kv_log *self, uint64_t offset, struct kv_log_header *header, kv_log_io_cb cb, void *cb_arg) {
-    storage_read(self->data_store, header, 0, offset, self->data_store->block_size, cb, cb_arg);
+    kv_storage_read(self->storage, header, 0, offset, self->storage->block_size, cb, cb_arg);
 }
 
 void kv_log_read_value(struct kv_log *self, uint64_t offset, struct kv_log_header *header, uint8_t *value, kv_log_io_cb cb,
                        void *cb_arg) {
-    const uint32_t blk_size = self->data_store->block_size;
+    const uint32_t blk_size = self->storage->block_size;
     uint32_t length = sizeof(struct kv_log_header) + header->key_length + header->value_length;
     if (length <= blk_size) {
         kv_memcpy(value, KV_LOG_VALUE(header), header->value_length);
@@ -83,7 +83,7 @@ void kv_log_read_value(struct kv_log *self, uint64_t offset, struct kv_log_heade
         return;
     }
     kv_memcpy(value, KV_LOG_VALUE(header), blk_size);
-    storage_read(self->data_store, value + blk_size, 0, offset + blk_size, length + EMPTY_BUF_LEN(blk_size, length) - blk_size,
+    kv_storage_read(self->storage, value + blk_size, 0, offset + blk_size, length + EMPTY_BUF_LEN(blk_size, length) - blk_size,
                  cb, cb_arg);
 }
 
@@ -144,7 +144,7 @@ fail:
 
 void kv_log_read(struct kv_log *self, uint64_t offset, uint8_t *key, uint16_t key_length, uint8_t *value,
                  uint32_t *value_length, kv_log_io_cb cb, void *cb_arg) {
-    struct kv_log_header *header = kv_malloc(self->data_store->block_size);
+    struct kv_log_header *header = kv_malloc(self->storage->block_size);
     struct kv_log_read_cb_arg *arg = kv_malloc(sizeof(struct kv_log_read_cb_arg));
     kv_log_read_cb_arg_init(arg, self, offset, key, key_length, value, value_length, cb, cb_arg, header);
     kv_log_read_header(self, offset, header, kv_log_read_header_cb, arg);

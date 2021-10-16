@@ -36,8 +36,8 @@ include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 
 DIRS-y = test_storage
 DIRS-y += test_kv_log
-DIRS-y += test_kv_table
-DIRS-y += benchmark
+# DIRS-y += test_kv_table
+# DIRS-y += benchmark
 
 .PHONY: all clean $(DIRS-y)
 

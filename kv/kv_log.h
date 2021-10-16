@@ -1,6 +1,6 @@
 #ifndef _KV_LOG_H_
 #define _KV_LOG_H_
-#include "storage.h"
+#include "kv_storage.h"
 struct kv_log_header {
     uint16_t flag;
     uint16_t key_length;
@@ -14,13 +14,13 @@ struct kv_log_header {
 };
 struct kv_log {
     uint64_t head, tail;
-    struct storage *data_store;
+    struct kv_storage *storage;
     uint8_t *empty_buf;
 };
 
-typedef storage_io_completion_cb kv_log_io_cb;
+typedef kv_storage_io_cb kv_log_io_cb;
 
-int kv_log_init(struct kv_log *self, struct storage *data_store, uint64_t head, uint64_t tail);
+int kv_log_init(struct kv_log *self, struct kv_storage *storage, uint64_t head, uint64_t tail);
 int kv_log_fini(struct kv_log *self);
 void kv_log_write(struct kv_log *self, uint64_t offset, uint8_t *key, uint16_t key_length, uint8_t *value,
                   uint32_t value_length, kv_log_io_cb cb, void *cb_arg);
