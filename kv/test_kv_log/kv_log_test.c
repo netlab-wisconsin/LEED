@@ -3,10 +3,10 @@
 #include <string.h>
 
 #include "stdio.h"
-#define CONCURRENT_IO_NUM 1024
+#define CONCURRENT_IO_NUM 1000
 #define VALUE_SIZE 1000
 uint64_t keys[CONCURRENT_IO_NUM];
-uint8_t values[CONCURRENT_IO_NUM][1024];
+uint8_t *values[CONCURRENT_IO_NUM];
 uint32_t value_sizes[CONCURRENT_IO_NUM];
 uint64_t offsets[CONCURRENT_IO_NUM];
 static struct kv_log log;
@@ -36,20 +36,22 @@ static void write_complete_cb(bool success, void *cb_arg) {
 
 static void storage_start(void *arg) {
     struct kv_storage *storage = arg;
+    for (size_t i = 0; i < CONCURRENT_IO_NUM; i++) {
+        keys[i] = i;
+        values[i] = kv_storage_malloc(storage, 1024);
+        sprintf((char *)values[i], "%lu. hello world!", i);
+    }
     kv_log_init(&log, storage, 0, 0);
     for (size_t i = 0; i < CONCURRENT_IO_NUM; i++) {
-        offsets[i] = log.tail;
         kv_log_write(&log, log.tail, (uint8_t *)(keys + i), sizeof(uint64_t), values[i], VALUE_SIZE, write_complete_cb,
                      keys + i);
+        offsets[i] = kv_log_get_offset(&log);
     }
 }
 
 int main(int argc, char **argv) {
-    for (size_t i = 0; i < CONCURRENT_IO_NUM; i++) {
-        keys[i] = i;
-        sprintf((char *)values[i], "%lu. hello world!", i);
-    }
     struct kv_storage storage;
     kv_storage_start(&storage, argv[1], storage_start, &storage);
     kv_log_fini(&log);
+    for (size_t i = 0; i < CONCURRENT_IO_NUM; i++) kv_storage_free(values[i]);
 }

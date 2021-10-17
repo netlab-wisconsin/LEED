@@ -3,10 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/time.h>
+
 #include "../kv_table.h"
 #include "city.h"
 #include "timing.h"
-
+#define ALIGN(a, b) (((a) + (b)-1) / (b) * (b))
 struct {
     uint64_t num_items, read_num_items;
     uint32_t value_size;
@@ -76,7 +77,7 @@ uint32_t concurrent_io = 0;
 
 static void storage_stop(void) {
     if (keys) free(keys);
-    for (size_t i = 0; i < opt.concurrent_io_num; i++) free(io_buffer[i].value);
+    for (size_t i = 0; i < opt.concurrent_io_num; i++) kv_storage_free(io_buffer[i].value);
     free(io_buffer);
     mehcached_table_free(&table);
     kv_log_fini(&_log);
@@ -88,7 +89,7 @@ static void get_test(bool success, void* arg) {
     if (!total_io) {
         if (--concurrent_io == 0) {
             gettimeofday(&tv_end, NULL);
-            printf("Query rate: %f\n", ((double)opt.read_num_items / timeval_diff(&tv_start,&tv_end)));
+            printf("Query rate: %f\n", ((double)opt.read_num_items / timeval_diff(&tv_start, &tv_end)));
             storage_stop();
         }
         return;
@@ -124,7 +125,8 @@ static void fill_db(bool success, void* arg) {
 
 static void storage_start(void* arg) {
     io_buffer = calloc(opt.concurrent_io_num, sizeof(struct io_buffer_t));
-    for (size_t i = 0; i < opt.concurrent_io_num; i++) io_buffer[i].value = malloc(opt.value_size + storage.block_size);
+    for (size_t i = 0; i < opt.concurrent_io_num; i++)
+        io_buffer[i].value = kv_storage_malloc(&storage, ALIGN(opt.value_size, storage.block_size));
     kv_log_init(&_log, &storage, 0, 0);
     uint32_t num_items = opt.num_items * MEHCACHED_ITEMS_PER_BUCKET / (MEHCACHED_ITEMS_PER_BUCKET - 3);
     uint32_t num_buckets = (num_items + MEHCACHED_ITEMS_PER_BUCKET - 1) / MEHCACHED_ITEMS_PER_BUCKET;

@@ -136,6 +136,7 @@ static void kv_storage_create(void *arg) {
     SPDK_NOTICELOG("Storage created.\n");
     priv(self)->app_thread = spdk_get_thread();
     self->block_size = spdk_bdev_get_block_size(priv(self)->bdev);
+    self->align = spdk_bdev_get_buf_align(priv(self)->bdev);
     if (priv(self)->start_fn) priv(self)->start_fn(priv(self)->fn_arg);
 }
 
@@ -161,4 +162,12 @@ void kv_storage_stop(struct kv_storage *self) {
     spdk_put_io_channel(priv(self)->io_channel);
     spdk_bdev_close(priv(self)->bdev_desc);
     spdk_app_stop(0);
+}
+
+void *kv_storage_malloc(struct kv_storage *self, size_t size){
+    return spdk_dma_malloc(size, self->align, NULL);
+}
+
+void kv_storage_free(void *buf){
+    spdk_free(buf);
 }

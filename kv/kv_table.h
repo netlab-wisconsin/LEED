@@ -1,7 +1,7 @@
 #ifndef _KV_TABLE_H_
 #define _KV_TABLE_H_
 #include "kv_log.h"
-#define MEHCACHED_CONCURRENT
+//#define MEHCACHED_CONCURRENT
 #define MEHCACHED_ITEMS_PER_BUCKET (15)  // 7 15 31
 
 struct mehcached_bucket {
