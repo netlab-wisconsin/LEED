@@ -43,10 +43,20 @@ struct Option{
     uint32_t value_size;
     uint8_t extra_buckets_percentage;
     char filename[1024]{};
-    Option():num_items(1024),read_num_items(512),value_size(1024),extra_buckets_percentage(10){}
+    Option():num_items(1024),read_num_items(512),value_size(1024),extra_buckets_percentage(20){}
 };
 void help(){
-    //TODO: HELP TEXT
+    fprintf(stderr,
+        "./mica [-h] [-n num_items] [-r read_num_items] [-s value_size] [-b extra_buckets_percentage] <-d \"db_file_path\">\n"
+        );
+    fprintf(stderr,
+        "   -h      help (this text)\n"
+        "   -n #    number of items to fill.\n"
+        "   -r #    number of items to randomly query\n"
+        "   -s #    set value size (bytes)\n"
+        "   -b #    percentage of extra buckets (0~100, default: 20)\n"
+        "   -d #    path to database file\n"
+        );
 }
 void get_options(int argc, char** argv,Option *opt){
     int ch;
@@ -54,7 +64,7 @@ void get_options(int argc, char** argv,Option *opt){
         switch (ch) {
             case 'h':
                 help();
-                break;
+                exit(-1);
             case 'n':
                 opt->num_items=stoull(optarg);
                 break;
