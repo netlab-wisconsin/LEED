@@ -5,6 +5,7 @@
 #include <sys/time.h>
 
 #include "../kv_table.h"
+#include "../kv_app.h"
 #include "city.h"
 #include "timing.h"
 #define ALIGN(a, b) (((a) + (b)-1) / (b) * (b))
@@ -80,8 +81,9 @@ static void storage_stop(void) {
     for (size_t i = 0; i < opt.concurrent_io_num; i++) kv_storage_free(io_buffer[i].value);
     free(io_buffer);
     mehcached_table_free(&table);
+    kv_storage_fini(&storage);
     kv_log_fini(&_log);
-    kv_storage_stop(&storage);
+    kv_app_stop(0);
 }
 static void get_test(bool success, void* arg) {
     struct io_buffer_t* io = arg;
@@ -124,6 +126,7 @@ static void fill_db(bool success, void* arg) {
 }
 
 static void storage_start(void* arg) {
+    kv_storage_init(&storage, 0);
     io_buffer = calloc(opt.concurrent_io_num, sizeof(struct io_buffer_t));
     for (size_t i = 0; i < opt.concurrent_io_num; i++)
         io_buffer[i].value = kv_storage_malloc(&storage, ALIGN(opt.value_size, storage.block_size));
@@ -139,5 +142,5 @@ static void storage_start(void* arg) {
 
 int main(int argc, char** argv) {
     get_options(argc, argv);
-    kv_storage_start(&storage, opt.json_config_file, storage_start, NULL);
+    kv_app_start_single_task(opt.json_config_file, storage_start, NULL);
 }

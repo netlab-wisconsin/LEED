@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "../kv_app.h"
 #include "stdio.h"
 #define CONCURRENT_IO_NUM 1000
 #define VALUE_SIZE 1000
@@ -18,14 +19,24 @@ static void read_complete_cb(bool success, void *cb_arg) {
         fprintf(stderr, "Read %lu failed.\n", i);
     else
         printf("read %u bytes: %s\n", value_sizes[i], values[i]);
-    if (--io_num == 0) kv_storage_stop(log.storage);
+    if (--io_num == 0) {
+        kv_storage_fini(log.storage);
+        kv_log_fini(&log);
+        for (size_t i = 0; i < CONCURRENT_IO_NUM; i++) kv_storage_free(values[i]);
+        kv_app_stop(0);
+    }
 }
 
 static void write_complete_cb(bool success, void *cb_arg) {
     uint64_t i = *(uint64_t *)cb_arg;
     if (!success) {
         fprintf(stderr, "Write failed.\n");
-        if (--io_num == 0) kv_storage_stop(log.storage);
+        if (--io_num == 0) {
+            kv_storage_fini(log.storage);
+            kv_log_fini(&log);
+            for (size_t i = 0; i < CONCURRENT_IO_NUM; i++) kv_storage_free(values[i]);
+            kv_app_stop(-1);
+        }
         return;
     }
     printf("Write %lu successfully.\n", i);
@@ -34,8 +45,9 @@ static void write_complete_cb(bool success, void *cb_arg) {
                 cb_arg);
 }
 
-static void storage_start(void *arg) {
+static void start(void *arg) {
     struct kv_storage *storage = arg;
+    kv_storage_init(storage, 0);
     for (size_t i = 0; i < CONCURRENT_IO_NUM; i++) {
         keys[i] = i;
         values[i] = kv_storage_malloc(storage, 1024);
@@ -51,7 +63,5 @@ static void storage_start(void *arg) {
 
 int main(int argc, char **argv) {
     struct kv_storage storage;
-    kv_storage_start(&storage, argv[1], storage_start, &storage);
-    kv_log_fini(&log);
-    for (size_t i = 0; i < CONCURRENT_IO_NUM; i++) kv_storage_free(values[i]);
+    kv_app_start_single_task(argv[1], start, &storage);
 }

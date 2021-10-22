@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../kv_app.h"
+
 #define VALUE_SIZE 1000
 uint64_t key = 1;
 char *value;
@@ -39,10 +41,13 @@ static void test_cb(bool success, void *cb_arg) {
             printf("Get %lu bytes: %s\n", value_size, value);
             mehcached_table_free(&table);
             kv_log_fini(&_log);
-            kv_storage_stop(&storage);
+            kv_storage_fini(&storage);
+            kv_storage_free(value);
+            kv_app_stop(0);
     }
 }
 static void storage_start(void *arg) {
+    kv_storage_init(&storage, 0);
     kv_log_init(&_log, &storage, 0, 0);
     value = kv_storage_malloc(&storage, 1024);
     sprintf(value, "hello world!");
@@ -52,7 +57,4 @@ static void storage_start(void *arg) {
     mehcached_set(&table, key, (uint8_t *)&key, 8, (uint8_t *)value, VALUE_SIZE, test_cb, NULL);
 }
 
-int main(int argc, char **argv) {
-    kv_storage_start(&storage, argv[1], storage_start, NULL);
-    kv_storage_free(value);
-}
+int main(int argc, char **argv) { kv_app_start_single_task(argv[1], storage_start, NULL); }
