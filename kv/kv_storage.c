@@ -1,4 +1,5 @@
 #include "kv_storage.h"
+
 #include "memery_operation.h"
 #include "spdk/bdev.h"
 #include "spdk/bdev_module.h"
@@ -77,15 +78,21 @@ static void _storage_io(struct kv_storage *self, void *buf, int iovcnt, uint64_t
         /* In case we cannot perform I/O now, queue I/O */
         if (!wait_arg) {
             wait_arg = kv_malloc(sizeof(struct io_wait_arg));
+            if (iovcnt) {
+                struct iovec *iov = kv_calloc(iovcnt, sizeof(struct iovec));
+                kv_memcpy(iov, buf, iovcnt * sizeof(struct iovec));
+                buf = iov;
+            }
             io_wait_arg_init(wait_arg, self, buf, iovcnt, offset, n, cb, cb_arg, is_read, is_block);
         }
         wait_arg->bdev_io_wait.bdev = priv(self)->bdev;
         wait_arg->bdev_io_wait.cb_fn = storage_io_wait;
         wait_arg->bdev_io_wait.cb_arg = arg;
         spdk_bdev_queue_io_wait(priv(self)->bdev, priv(self)->io_channel, &wait_arg->bdev_io_wait);
-
-    } else if (wait_arg)
+    } else if (wait_arg) {
+        if (iovcnt) kv_free(buf);
         kv_free(wait_arg);
+    }
 }
 
 static void storage_io_wait(void *_arg) {
@@ -142,7 +149,7 @@ int kv_storage_init(struct kv_storage *self, uint32_t index) {
     }
     self->block_size = spdk_bdev_get_block_size(priv(self)->bdev);
     self->align = spdk_bdev_get_buf_align(priv(self)->bdev);
-    self->num_blocks=spdk_bdev_get_num_blocks(priv(self)->bdev);
+    self->num_blocks = spdk_bdev_get_num_blocks(priv(self)->bdev);
 
     return rc;
 }
@@ -154,6 +161,7 @@ void kv_storage_fini(struct kv_storage *self) {
 }
 
 void *kv_storage_malloc(struct kv_storage *self, size_t size) { return spdk_dma_malloc(size, self->align, NULL); }
+void *kv_storage_zmalloc(struct kv_storage *self, size_t size) { return spdk_dma_zmalloc(size, self->align, NULL); }
 void *kv_storage_blk_alloc(struct kv_storage *self, uint64_t n) {
     return spdk_dma_malloc(n * self->block_size, self->align, NULL);
 }

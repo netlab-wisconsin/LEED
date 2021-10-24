@@ -15,6 +15,7 @@ typedef void (*kv_storage_io_cb)(bool success, void *cb_arg);
 
 
 void *kv_storage_malloc(struct kv_storage *self, size_t size);
+void *kv_storage_zmalloc(struct kv_storage *self, size_t size);
 void *kv_storage_blk_alloc(struct kv_storage *self, uint64_t n);
 void kv_storage_free(void *buf);
 
