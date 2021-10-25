@@ -17,6 +17,9 @@ char const *op_str[] = {
 static void test_cb(bool success, void *cb_arg) {
     if (!success) {
         fprintf(stderr, "%s failed.\n", op_str[(int)state]);
+        kv_circular_log_fini(&circular_log);
+        kv_storage_fini(&storage);
+        kv_storage_free(buf);
         kv_app_stop(-1);
         return;
     }

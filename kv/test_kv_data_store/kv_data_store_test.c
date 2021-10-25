@@ -1,0 +1,60 @@
+#include "../kv_data_store.h"
+
+#include <stdio.h>
+
+#include "../kv_app.h"
+#include "../memery_operation.h"
+#define VALUE_NUM 3
+struct kv_storage storage;
+struct kv_data_store data_store;
+uint8_t *key[] = {"00000000", "00000000", "00000000"};
+uint8_t *value[VALUE_NUM];
+uint32_t value_length;
+enum { INIT, SET0, GET0 } state = INIT;
+char const *op_str[] = {
+    "INIT",
+    "SET0",
+    "GET0",
+};
+static void test_cb(bool success, void *cb_arg) {
+    if (!success) {
+        fprintf(stderr, "%s failed.\n", op_str[(int)state]);
+        kv_data_store_fini(&data_store);
+        kv_storage_fini(&storage);
+        for (size_t i = 0; i < VALUE_NUM; i++) kv_storage_free(value[i]);
+        kv_app_stop(-1);
+        return;
+    }
+    printf("%s successfully.\n", op_str[(int)state]);
+    switch (state) {
+        case INIT:
+            state = SET0;
+            sprintf(value[0], "hello world!");
+            sprintf(value[1], "hi!");
+            sprintf(value[2], "bye!");
+            kv_data_store_set(&data_store, key[0], 8, value[0], 256, NULL, NULL);
+            kv_data_store_set(&data_store, key[1], 8, value[1], 513, NULL, NULL);
+            kv_data_store_set(&data_store, key[2], 8, value[2], 1000, test_cb, NULL);
+            break;
+        case SET0:
+            state = GET0;
+            kv_memset(value[0], 0, 5 * storage.block_size);
+            kv_data_store_get(&data_store, key[0], 8, value[0], &value_length, test_cb, NULL);
+            break;
+        case GET0:
+            puts(value[0]);
+            printf("value length: %u\n", value_length);
+            kv_data_store_fini(&data_store);
+            kv_storage_fini(&storage);
+            for (size_t i = 0; i < VALUE_NUM; i++) kv_storage_free(value[i]);
+            kv_app_stop(0);
+    }
+}
+
+static void start(void *arg) {
+    kv_storage_init(&storage, 0);
+    for (size_t i = 0; i < VALUE_NUM; i++) value[i] = kv_storage_blk_alloc(&storage, 5);
+    kv_data_store_init(&data_store, &storage, 0, 4 << 10, test_cb, NULL);
+}
+
+int main(int argc, char **argv) { kv_app_start_single_task(argv[1], start, NULL); }

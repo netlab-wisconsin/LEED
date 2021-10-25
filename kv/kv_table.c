@@ -129,7 +129,7 @@ static uint64_t *mehcached_find_empty(struct mehcached_table *self, struct mehca
 }
 
 static bool mehcached_compare_keys(const uint8_t *key1, size_t key1_len, const uint8_t *key2, size_t key2_len) {
-    return key1_len == key2_len && kv_memcmp8(key1, key2, key1_len);
+    return key1_len == key2_len && !kv_memcmp8(key1, key2, key1_len);
 }
 
 //--- find_item ---
@@ -174,10 +174,11 @@ static void find_item_read_cb(bool success, void *cb_arg) {
         fprintf(stderr, "find_item_read_cb: io error.\n");
         mehcached_find_item_fini(false, ctx);
     } else if (mehcached_compare_keys(KV_LOG_KEY(ctx->header), ctx->header->key_length, ctx->key, ctx->key_length)) {
+        mehcached_find_item_fini(true, ctx);
+    } else {
         ++ctx->item;
         _mehcached_find_item(ctx);
-    } else
-        mehcached_find_item_fini(true, ctx);
+    }
 }
 
 static void _mehcached_find_item(void *_arg) {
