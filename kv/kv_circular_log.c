@@ -38,7 +38,7 @@ static void read_cb(bool success, void *arg) {
 }
 void kv_circular_log_read(struct kv_circular_log *self, uint64_t offset, void *blocks, uint64_t n, kv_circular_log_io_cb cb,
                           void *cb_arg) {
-    assert((offset - self->head) % self->size < kv_circular_log_length(self));
+    assert((self->size + offset - self->head) % self->size < kv_circular_log_length(self));
     uint64_t remaining_blocks = self->size - offset;
     if (remaining_blocks >= n) {
         kv_storage_read_blocks(self->storage, blocks, 0, self->base + offset, n, cb, cb_arg);

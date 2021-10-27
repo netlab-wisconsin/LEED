@@ -16,8 +16,13 @@ struct kv_data_store {
     uint32_t buckets_mask;
     uint8_t *bit_map;
     uint32_t free_list_head;
-    struct kv_bucket *compact_buffer;
+    void *private_data;
     void *waiting_map;
+    #define COMPACT_BUCKET_NUM 256
+    struct kv_bucket *compact_buffer;
+    struct iovec compact_iov[COMPACT_BUCKET_NUM];
+    uint32_t compact_iovcnt,compact_offset; 
+    bool is_compact_task_running;
 };
 typedef  kv_storage_io_cb kv_data_store_cb;
 void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, uint32_t base, uint32_t size,

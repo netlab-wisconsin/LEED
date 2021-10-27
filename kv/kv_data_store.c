@@ -9,11 +9,10 @@
 #include "memery_operation.h"
 
 #define INIT_CON_IO_NUM 128
-#define WRITE_BUCKET_NUM 256
 
 // --- init & fini ---
 static void init(struct kv_data_store *self, kv_data_store_cb cb, void *cb_arg) {
-    self->compact_buffer = kv_storage_blk_alloc(self->bucket_log.log.storage, WRITE_BUCKET_NUM);
+    self->compact_buffer = kv_storage_blk_alloc(self->bucket_log.log.storage, COMPACT_BUCKET_NUM);
     kv_memset(self->compact_buffer, 0, sizeof(struct kv_bucket));
 
     uint32_t num_buckets = self->main_bucket_num + self->extra_bucket_num;
@@ -37,7 +36,7 @@ struct init_ctx {
 };
 
 struct init_write_ctx {
-    struct kv_bucket buckets[WRITE_BUCKET_NUM];
+    struct kv_bucket buckets[COMPACT_BUCKET_NUM];
     struct init_ctx *init_ctx;
 };
 
@@ -54,10 +53,10 @@ static void init_write_cb(bool success, void *arg) {
         kv_storage_free(ctx);
         return;
     }
-    if (n <= WRITE_BUCKET_NUM)
+    if (n <= COMPACT_BUCKET_NUM)
         kv_bucket_log_move_head(&self->bucket_log, self->extra_bucket_num);
     else
-        n = WRITE_BUCKET_NUM;
+        n = COMPACT_BUCKET_NUM;
     for (size_t i = 0; i < n; i++) {
         if (self->bucket_log.tail + i < self->extra_bucket_num)
             ctx->buckets[i].index = self->free_list_head;
@@ -129,6 +128,54 @@ static inline bool compare_keys(const uint8_t *key1, size_t key1_len, const uint
     return key1_len == key2_len && !kv_memcmp8(key1, key2, key1_len);
 }
 #define has_extra_bucket(bucket) ((bucket->next_extra_bucket_index) != 0)
+// --- compact ---
+static void compact_writev_cb(bool success, void *arg) {
+    struct kv_data_store *self = arg;
+    if (!success) {
+        fprintf(stderr, "compact_writev_cb: IO error!\n");
+        return;
+    }
+    for (size_t i = 0; i < self->compact_iovcnt; i++) {
+        struct kv_bucket *bucket = self->compact_iov[i].iov_base;
+        struct kv_bucket_offset *offset = self->bucket_offsets + bucket->index;
+        offset->flag = 0;
+        offset->bucket_offset = (self->compact_offset + i) % self->bucket_log.log.size;
+    }
+    kv_bucket_log_move_head(&self->bucket_log, COMPACT_BUCKET_NUM);
+    self->is_compact_task_running = false;
+}
+static void compact_read_cb(bool success, void *arg) {
+    struct kv_data_store *self = arg;
+    if (!success) {
+        fprintf(stderr, "compact_read_cb: IO error!\n");
+        return;
+    }
+    self->compact_iovcnt = 0;
+    for (size_t i = 0; i < COMPACT_BUCKET_NUM; i++) {
+        struct kv_bucket_offset *offset = self->bucket_offsets + self->compact_buffer[i].index;
+        if (offset->bucket_offset == self->bucket_log.log.head + i && !offset->flag) {
+            offset->flag = 1;
+            self->compact_iov[self->compact_iovcnt++] = (struct iovec){self->compact_buffer + i, 1};
+        }
+    }
+    // printf("compact rate:%lf\n", ((double)self->compact_iovcnt) / COMPACT_BUCKET_NUM);
+    self->compact_offset = self->bucket_log.log.tail;
+    kv_bucket_log_writev(&self->bucket_log, self->compact_iov, self->compact_iovcnt, compact_writev_cb, self);
+}
+
+static void _compact(void *arg) {
+    struct kv_data_store *self = arg;
+    // TODO: using bit map
+    assert(kv_circular_log_length(&self->bucket_log.log) >= COMPACT_BUCKET_NUM);
+    kv_bucket_log_read(&self->bucket_log, self->bucket_log.log.head, self->compact_buffer, COMPACT_BUCKET_NUM, compact_read_cb,
+                       self);
+}
+static inline void compact(struct kv_data_store *self) {
+    if (kv_circular_log_length(&self->bucket_log.log) >= 7 * self->bucket_log.log.size / 8 && !self->is_compact_task_running) {
+        self->is_compact_task_running = true;
+        kv_app_send_msg(kv_app_get_index(), _compact, self);
+    }
+}
 //--- find item ---
 
 struct bucket_chain {
@@ -146,6 +193,7 @@ struct find_item_ctx {
     _find_item_cb cb;
     void *cb_arg;
     struct bucket_chain_head buckets;
+    uint32_t last_bucket_index; // for debuging
 };
 #define find_item_ctx_init(ctx, self, bucket_index, key, key_length, cb, cb_arg) \
     do {                                                                         \
@@ -173,6 +221,7 @@ static void find_item_read_cb(bool success, void *arg) {
         return;
     }
     struct kv_bucket *bucket = &TAILQ_LAST(&ctx->buckets, bucket_chain_head)->bucket;
+    assert(ctx->last_bucket_index == bucket->index);
     for (struct kv_item *item = bucket->items; item - bucket->items < KV_ITEM_PER_BUCKET; ++item) {
         // if(KV_EMPTY_ITEM(item)) continue; // empty item key_length != ctx->key_length
         if (compare_keys(item->key, item->key_length, ctx->key, ctx->key_length)) {
@@ -188,6 +237,7 @@ static void find_item_read_cb(bool success, void *arg) {
         struct bucket_chain *_bucket = kv_storage_malloc(ctx->self->bucket_log.log.storage, sizeof(struct bucket_chain));
         _bucket->is_modify = false;
         TAILQ_INSERT_TAIL(&ctx->buckets, _bucket, next);
+        ctx->last_bucket_index = bucket->next_extra_bucket_index;  // for debuging
         kv_bucket_log_read(&ctx->self->bucket_log, ctx->self->bucket_offsets[bucket->next_extra_bucket_index].bucket_offset,
                            &_bucket->bucket, 1, find_item_read_cb, ctx);
     } else {
@@ -203,8 +253,10 @@ static void find_item(struct kv_data_store *self, uint32_t bucket_index, uint8_t
     find_item_ctx_init(ctx, self, bucket_index, key, key_length, cb, cb_arg);
     TAILQ_INIT(&ctx->buckets);
     struct bucket_chain *bucket = kv_storage_malloc(ctx->self->bucket_log.log.storage, sizeof(struct bucket_chain));
+    assert(bucket);
     bucket->is_modify = false;
     TAILQ_INSERT_TAIL(&ctx->buckets, bucket, next);
+    ctx->last_bucket_index = ctx->bucket_index; // for debuging
     kv_bucket_log_read(&ctx->self->bucket_log, ctx->self->bucket_offsets[ctx->bucket_index].bucket_offset, &bucket->bucket, 1,
                        find_item_read_cb, ctx);
 }
@@ -214,8 +266,8 @@ static bool alloc_extra_bucket(struct kv_data_store *self, struct bucket_chain_h
     struct bucket_chain *p = kv_storage_zmalloc(self->bucket_log.log.storage, sizeof(struct bucket_chain));
     p->is_modify = true;
     p->bucket.index = self->free_list_head;
-    self->free_list_head = self->bucket_offsets[self->free_list_head].bucket_offset;
     self->bucket_offsets[self->free_list_head].flag = 1;
+    self->free_list_head = self->bucket_offsets[self->free_list_head].bucket_offset;
     TAILQ_LAST(buckets, bucket_chain_head)->bucket.next_extra_bucket_index = p->bucket.index;
     TAILQ_LAST(buckets, bucket_chain_head)->is_modify = true;
     TAILQ_INSERT_TAIL(buckets, p, next);
@@ -276,6 +328,7 @@ static void set_bucket_log_writev_cb(bool success, void *arg) {
     bucket_chain_free(ctx->buckets);
     kv_free(ctx->iov);
     if (ctx->cb) ctx->cb(success, ctx->cb_arg);
+    compact(ctx->self);
     kv_free(ctx);
 }
 

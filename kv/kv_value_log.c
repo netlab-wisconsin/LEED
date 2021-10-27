@@ -11,7 +11,7 @@ static inline uint64_t align(struct kv_value_log *self, uint64_t size) {
 }
 uint64_t kv_value_log_write(struct kv_value_log *self, uint8_t *value, uint32_t value_length, kv_value_log_io_cb cb,
                             void *cb_arg) {
-    if ((self->head - 1 - self->tail) % self->size < 2 * self->storage->block_size + value_length) {
+    if ((self->size + self->head - 1 - self->tail) % self->size < 2 * self->storage->block_size + value_length) {
         fprintf(stderr, "kv_value_log_write: Not enough space!\n");
         cb(false, cb_arg);
         return KV_VALUE_LOG_ERROR_OFFSET;

@@ -10,7 +10,9 @@ struct kv_circular_log {
 };
 #define KV_CIRCULAR_LOG_ERROR_OFFSET INT32_MAX
 typedef kv_storage_io_cb kv_circular_log_io_cb;
-static inline uint64_t kv_circular_log_length(struct kv_circular_log *self) { return (self->tail - self->head) % self->size; }
+static inline uint64_t kv_circular_log_length(struct kv_circular_log *self) {
+    return (self->size + self->tail - self->head) % self->size;
+}
 void kv_circular_log_init(struct kv_circular_log *self, struct kv_storage *storage, uint64_t base, uint64_t size, uint64_t head,
                           uint64_t tail);
 void kv_circular_log_read(struct kv_circular_log *self, uint64_t offset, void *blocks, uint64_t n, kv_circular_log_io_cb cb,

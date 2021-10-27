@@ -20,7 +20,7 @@ void kv_bucket_log_writev(struct kv_bucket_log *self, struct iovec *buckets, int
     for (int i = 0; i < iovcnt; i++) {
         for (size_t j = 0; j < buckets[i].iov_len; j++) {
             struct kv_bucket *bucket = (struct kv_bucket *)buckets[i].iov_base + j;
-            self->tail = (self->tail + 1) % (self->size << 1);
+            self->tail = (self->tail + 1) % self->size;
             bucket->head = self->head;
             bucket->tail = self->tail;
         }
