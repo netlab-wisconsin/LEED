@@ -165,4 +165,7 @@ void *kv_storage_zmalloc(struct kv_storage *self, size_t size) { return spdk_dma
 void *kv_storage_blk_alloc(struct kv_storage *self, uint64_t n) {
     return spdk_dma_malloc(n * self->block_size, self->align, NULL);
 }
+void *kv_storage_zblk_alloc(struct kv_storage *self, uint64_t n) {
+    return spdk_dma_zmalloc(n * self->block_size, self->align, NULL);
+}
 void kv_storage_free(void *buf) { spdk_free(buf); }

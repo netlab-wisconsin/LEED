@@ -3,25 +3,26 @@
 #include "kv_bucket_log.h"
 #include "kv_value_log.h"
 #include "kv_storage.h"
-struct kv_bucket_offset {
-    uint32_t flag : 1;
-    uint32_t bucket_offset : 31;
-};
+struct kv_bucket_meta {
+    uint8_t lock : 1;
+    uint8_t chain_length:7;
+    uint32_t bucket_offset;
+}__attribute__((packed));
+
 struct kv_data_store {
-    struct kv_bucket_offset *bucket_offsets;
+    struct kv_bucket_meta *bucket_meta;
     struct kv_bucket_log bucket_log;
     struct kv_value_log value_log;
-    uint32_t main_bucket_num;
-    uint32_t extra_bucket_num;
+    uint32_t bucket_num;
     uint32_t buckets_mask;
+    uint32_t extra_bucket_num,allocated_bucket_num;
     uint8_t *bit_map;
-    uint32_t free_list_head;
     void *private_data;
     void *waiting_map;
     #define COMPACT_BUCKET_NUM 256
     struct kv_bucket *compact_buffer;
     struct iovec compact_iov[COMPACT_BUCKET_NUM];
-    uint32_t compact_iovcnt,compact_offset; 
+    uint32_t compact_iovcnt,compact_offset,compact_length; 
     bool is_compact_task_running;
 };
 typedef  kv_storage_io_cb kv_data_store_cb;

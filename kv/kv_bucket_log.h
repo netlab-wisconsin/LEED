@@ -15,7 +15,8 @@ struct kv_item {
 
 struct kv_bucket {
     uint32_t index;
-    uint32_t next_extra_bucket_index;
+    uint8_t chain_length,chain_index;
+    uint16_t reserved;
     uint32_t head, tail;
     struct kv_item items[KV_ITEM_PER_BUCKET];
 };
