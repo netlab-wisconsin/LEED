@@ -9,7 +9,7 @@
 #include "../kv_data_store.h"
 #include "city.h"
 #include "timing.h"
-
+#define ALIGN(a, b) (((a) + (b)-1) / (b))
 struct {
     uint64_t num_items, read_num_items, db_size;
     uint32_t value_size;
@@ -45,7 +45,7 @@ static void get_options(int argc, char** argv) {
                 opt.value_size = atol(optarg);
                 break;
             case 's':
-                opt.db_size = atoll(optarg)<<20;
+                opt.db_size = atoll(optarg) << 20;
                 break;
             case 'b':
                 opt.extra_buckets_percentage = atoi(optarg);
@@ -69,7 +69,7 @@ struct io_buffer_t {
         uint8_t buf[8];
     } key;
     uint8_t* value;
-    size_t value_length;
+    uint32_t value_length;
 };
 
 struct io_buffer_t* io_buffer;
@@ -88,31 +88,31 @@ static void stop(void) {
     kv_storage_fini(&storage);
     kv_app_stop(0);
 }
-// static void get_test(bool success, void* arg) {
-//     struct io_buffer_t* io = arg;
-//     if (!success) fprintf(stderr, "get fail. key hash: %lu\n", io->key.hash);
-//     if (!total_io) {
-//         if (--concurrent_io == 0) {
-//             gettimeofday(&tv_end, NULL);
-//             printf("Query rate: %f\n", ((double)opt.read_num_items / timeval_diff(&tv_start, &tv_end)));
-//             storage_stop();
-//         }
-//         return;
-//     }
-//     io->key.hash = keys[--total_io];
-//     mehcached_get(&table, io->key.hash, io->key.buf, 8, io->value, &io->value_length, get_test, arg);
-// }
+static void get_test(bool success, void* arg) {
+    struct io_buffer_t* io = arg;
+    if (!success) fprintf(stderr, "get fail. key hash: %lu\n", io->key.hash);
+    if (!total_io) {
+        if (--concurrent_io == 0) {
+            gettimeofday(&tv_end, NULL);
+            printf("Query rate: %f\n", ((double)opt.read_num_items / timeval_diff(&tv_start, &tv_end)));
+            stop();
+        }
+        return;
+    }
+    io->key.hash = keys[--total_io];
+    kv_data_store_get(&data_store, io->key.buf, 8, io->value, &io->value_length, get_test, arg);
+}
 
-// static void start_get(void* arg) {
-//     // mehcached_print_buckets(&table);
-//     keys = calloc(opt.read_num_items, sizeof(uint64_t));
-//     for (uint64_t i = 0; i < opt.read_num_items; ++i) keys[i] = index_to_key(random() % opt.num_items);
-//     puts("keys generated.");
-//     total_io = opt.read_num_items;
-//     gettimeofday(&tv_start, NULL);
-//     for (concurrent_io = 0; concurrent_io != opt.concurrent_io_num; ++concurrent_io) get_test(true, io_buffer +
-//     concurrent_io);
-// }
+static void start_get(void* arg) {
+    keys = calloc(opt.read_num_items, sizeof(uint64_t));
+    for (uint64_t i = 0; i < opt.read_num_items; ++i) keys[i] = index_to_key(random() % opt.num_items);
+    puts("keys generated.");
+    total_io = opt.read_num_items;
+    gettimeofday(&tv_start, NULL);
+    for (concurrent_io = 0; concurrent_io != opt.concurrent_io_num; ++concurrent_io) {
+        get_test(true, io_buffer + concurrent_io);
+    }
+}
 
 static void fill_db(bool success, void* arg) {
     struct io_buffer_t* io = arg;
@@ -120,8 +120,7 @@ static void fill_db(bool success, void* arg) {
     if (!total_io) {
         if (--concurrent_io == 0) {
             puts("db created successfully.");
-            // start_get(NULL);
-            stop();
+            start_get(NULL);
         }
         return;
     }
@@ -139,14 +138,17 @@ static void start(bool success, void* arg) {
     io_buffer = calloc(opt.concurrent_io_num, sizeof(struct io_buffer_t));
     for (size_t i = 0; i < opt.concurrent_io_num; i++)
         io_buffer[i].value = kv_storage_malloc(&storage, opt.value_size + storage.block_size);
+    printf("database initialization complete.\n");
     total_io = opt.num_items;
-    for (concurrent_io = 0; concurrent_io != opt.concurrent_io_num; ++concurrent_io)
-        fill_db(true, io_buffer + concurrent_io);
-    // TODO: need to change kv_table_concurrent.c to support concurrent set.
+    uint32_t cio_num = opt.concurrent_io_num > 32 ? 32 : opt.concurrent_io_num;
+    // Temporary solution： compaction is too slow.
+    for (concurrent_io = 0; concurrent_io != cio_num; ++concurrent_io) fill_db(true, io_buffer + concurrent_io);
 }
 static void init(void* arg) {
     kv_storage_init(&storage, 0);
-    kv_data_store_init(&data_store, &storage, 0, opt.db_size/storage.block_size, start, NULL);
+    uint32_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET;
+    uint64_t value_log_block_num = ALIGN(opt.value_size, storage.block_size) * opt.num_items + 10;
+    kv_data_store_init(&data_store, &storage, 0, bucket_num, value_log_block_num, start, NULL);
 }
 int main(int argc, char** argv) {
     get_options(argc, argv);

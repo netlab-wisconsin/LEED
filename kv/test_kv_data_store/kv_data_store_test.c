@@ -54,7 +54,7 @@ static void test_cb(bool success, void *cb_arg) {
 static void start(void *arg) {
     kv_storage_init(&storage, 0);
     for (size_t i = 0; i < VALUE_NUM; i++) value[i] = kv_storage_blk_alloc(&storage, 5);
-    kv_data_store_init(&data_store, &storage, 0, 4 << 10, test_cb, NULL);
+    kv_data_store_init(&data_store, &storage, 0, 1 << 10, 14 << 10, test_cb, NULL);
 }
 
 int main(int argc, char **argv) { kv_app_start_single_task(argv[1], start, NULL); }

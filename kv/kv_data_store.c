@@ -61,21 +61,28 @@ static void init_write_cb(bool success, void *arg) {
     kv_bucket_log_write(&self->bucket_log, ctx->buckets, n, init_write_cb, ctx);
 }
 
-void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, uint32_t base, uint32_t size,
-                        kv_data_store_cb cb, void *cb_arg) {
-    assert(base + size <= storage->num_blocks);
-    uint32_t num_buckets = size / 16;
+void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, uint32_t base, uint32_t num_buckets,
+                        uint64_t value_log_block_num, kv_data_store_cb cb, void *cb_arg) {
+    //assert(base + size <= storage->num_blocks);
     size_t log_num_buckets = 0;
     while (((size_t)1 << log_num_buckets) < num_buckets) log_num_buckets++;
     assert(log_num_buckets <= 32);
-    self->bucket_num = (size_t)1 << --log_num_buckets;
+    self->bucket_num = (size_t)1 << log_num_buckets;
 
     self->buckets_mask = self->bucket_num - 1;
-    self->extra_bucket_num = num_buckets - self->bucket_num;
+    self->extra_bucket_num = self->bucket_num;
+    num_buckets=self->extra_bucket_num + self->bucket_num;
+    if(num_buckets+value_log_block_num>storage->num_blocks){
+        fprintf(stderr,"kv_data_store_init: Not enough space.\n");
+        if (cb) cb(false, cb_arg);
+        return;
+    }
 
     kv_bucket_log_init(&self->bucket_log, storage, base, num_buckets, 0, 0);
     kv_value_log_init(&self->value_log, storage, (base + num_buckets) * storage->block_size,
-                      (size - num_buckets) * storage->block_size, 0, 0);
+                      value_log_block_num * storage->block_size, 0, 0);
+    printf("bucket log size: %lf GB\n", ((double)num_buckets)*storage->block_size/(1<<30));
+    printf("value log size: %lf GB\n", ((double)value_log_block_num)*storage->block_size/(1<<30));
     struct init_ctx *ctx = kv_malloc(sizeof(struct init_ctx));
     ctx->self = self;
     ctx->cb = cb;
@@ -125,20 +132,30 @@ static void bucket_unlock(struct kv_data_store *self, uint32_t index) {
 static inline bool compare_keys(const uint8_t *key1, size_t key1_len, const uint8_t *key2, size_t key2_len) {
     return key1_len == key2_len && !kv_memcmp8(key1, key2, key1_len);
 }
-#define has_extra_bucket(bucket) ((bucket->next_extra_bucket_index) != 0)
+// --- debug ---
+static inline void verify_buckets(struct kv_bucket *buckets, uint32_t index, uint8_t length) {
+    assert(length);
+    for (size_t i = 0; i < length; i++) {
+        assert(buckets[i].chain_index == i);
+        assert(buckets[i].chain_length == length);
+        assert(buckets[i].index == index);
+    }
+}
 // --- compact ---
 static void compact_writev_cb(bool success, void *arg) {
     struct kv_data_store *self = arg;
     if (!success) {
         fprintf(stderr, "compact_writev_cb: IO error!\n");
+        self->is_compact_task_running = false;
         return;
     }
+    uint32_t n = 0;
     for (size_t i = 0; i < self->compact_iovcnt; i++) {
         struct kv_bucket *bucket = self->compact_iov[i].iov_base;
-        if (bucket->chain_index == 0) {
-            self->bucket_meta[bucket->index].bucket_offset = (self->compact_offset + i) % self->bucket_log.log.size;
-            bucket_unlock(self, bucket->index);
-        }
+        self->bucket_meta[bucket->index].bucket_offset = (self->compact_offset + n) % self->bucket_log.log.size;
+        bucket_unlock(self, bucket->index);
+        verify_buckets(bucket, bucket->index, self->bucket_meta[bucket->index].chain_length);
+        n += self->compact_iov[i].iov_len;
     }
     kv_bucket_log_move_head(&self->bucket_log, self->compact_length);
     self->is_compact_task_running = false;
@@ -147,15 +164,16 @@ static void compact_read_cb(bool success, void *arg) {
     struct kv_data_store *self = arg;
     if (!success) {
         fprintf(stderr, "compact_read_cb: IO error!\n");
+        self->is_compact_task_running = false;
         return;
     }
     self->compact_iovcnt = 0;
     self->compact_length = COMPACT_BUCKET_NUM;
-    for (size_t i = 0; i < COMPACT_BUCKET_NUM; i++) {
+    for (size_t i = 0; i < COMPACT_BUCKET_NUM; i += self->compact_buffer[i].chain_length) {
+        assert(self->compact_buffer[i].chain_index == 0);
         uint32_t bucket_offset = (self->bucket_log.log.head + i) % self->bucket_log.log.size;
         struct kv_bucket_meta *meta = self->bucket_meta + self->compact_buffer[i].index;
-        if (self->compact_buffer[i].chain_length - self->compact_buffer[i].chain_index + i > COMPACT_BUCKET_NUM) {
-            assert(self->compact_buffer[i].chain_index == 0);
+        if (self->compact_buffer[i].chain_length + i > COMPACT_BUCKET_NUM) {
             if (meta->bucket_offset == bucket_offset && !meta->lock)
                 self->compact_length = i;
             else
@@ -163,9 +181,10 @@ static void compact_read_cb(bool success, void *arg) {
             break;
         }
         if (meta->bucket_offset == bucket_offset && bucket_lock_nowait(self, self->compact_buffer[i].index))
-            self->compact_iov[self->compact_iovcnt++] = (struct iovec){self->compact_buffer + i, 1};
+            self->compact_iov[self->compact_iovcnt++] =
+                (struct iovec){self->compact_buffer + i, self->compact_buffer[i].chain_length};
     }
-    // printf("compact rate:%lf, compact_length: %u\n", ((double)self->compact_iovcnt) / COMPACT_BUCKET_NUM,
+    // printf("compact rate:%lf, compact_length: %u\n", ((double)self->compact_iovcnt) / self->compact_length,
     // self->compact_length);
     self->compact_offset = self->bucket_log.log.tail;
     if (self->compact_iovcnt)
@@ -187,6 +206,7 @@ static inline void compact(struct kv_data_store *self) {
         kv_app_send_msg(kv_app_get_index(), _compact, self);
     }
 }
+
 //--- find item ---
 
 typedef void (*_find_item_cb)(bool success, struct kv_item *located_item, struct kv_bucket *located_bucket, void *cb_arg);
@@ -217,8 +237,7 @@ static void find_item_read_cb(bool success, void *arg) {
         kv_free(ctx);
         return;
     }
-    assert(ctx->bucket_index == ctx->buckets->index);
-    assert(ctx->buckets->chain_index == 0);
+    verify_buckets(ctx->buckets, ctx->bucket_index, ctx->self->bucket_meta[ctx->bucket_index].chain_length);
     for (struct kv_bucket *bucket = ctx->buckets; bucket - ctx->buckets < ctx->buckets->chain_length; ++bucket) {
         for (struct kv_item *item = bucket->items; item - bucket->items < KV_ITEM_PER_BUCKET; ++item) {
             // if(KV_EMPTY_ITEM(item)) continue; // empty item key_length != ctx->key_length
@@ -292,6 +311,7 @@ static void set_bucket_log_writev_cb(bool success, void *arg) {
         struct kv_bucket_meta *meta = ctx->self->bucket_meta + ctx->bucket_index;
         meta->chain_length = ctx->buckets->chain_length;
         meta->bucket_offset = ctx->tail;
+        verify_buckets(ctx->buckets, ctx->bucket_index, meta->chain_length);
     }
     bucket_unlock(ctx->self, ctx->bucket_index);
     kv_storage_free(ctx->buckets);
@@ -348,7 +368,7 @@ static void set_find_item_cb(bool success, struct kv_item *located_item, struct 
 static void set_lock_cb(void *arg) {
     struct set_ctx *ctx = arg;
     struct kv_storage *storage = ctx->self->bucket_log.log.storage;
-    // in case of alloc a new bucket
+    // in case a new bucket is allocated.
     ctx->buckets = kv_storage_zblk_alloc(storage, ctx->self->bucket_meta[ctx->bucket_index].chain_length + 1);
     find_item(ctx->self, ctx->bucket_index, ctx->key, ctx->key_length, ctx->buckets, set_find_item_cb, ctx);
 }

@@ -78,12 +78,14 @@ static void writev_cb(bool success, void *arg) {
     kv_free(ctx);
 }
 
-void kv_circular_log_writev(struct kv_circular_log *self, struct iovec *blocks, int iovcnt, kv_circular_log_io_cb cb,
+void kv_circular_log_writev(struct kv_circular_log *self, struct iovec *_blocks, int iovcnt, kv_circular_log_io_cb cb,
                             void *cb_arg) {
     uint64_t n = 0;
+    struct iovec * blocks=kv_calloc(iovcnt,sizeof(struct iovec));
     for (int i = 0; i < iovcnt; i++) {
-        n += blocks[i].iov_len;
-        blocks[i].iov_len *= self->storage->block_size;
+        n += _blocks[i].iov_len;
+        blocks[i].iov_base=_blocks[i].iov_base;
+        blocks[i].iov_len = _blocks[i].iov_len*self->storage->block_size;
     }
     if (self->size - 1 - kv_circular_log_length(self) < n) {
         fprintf(stderr, "kv_circular_log_writes: No more space!\n");
@@ -97,7 +99,7 @@ void kv_circular_log_writev(struct kv_circular_log *self, struct iovec *blocks, 
         uint64_t remaining_length = remaining_blocks * self->storage->block_size;
         uint64_t length = 0, i;
         for (i = 0; length + blocks[i].iov_len <= remaining_length; i++) length += blocks[i].iov_len;
-        struct iovec *_blocks = kv_calloc(iovcnt - i, sizeof(struct iovec));
+        _blocks = kv_calloc(iovcnt - i, sizeof(struct iovec));
         kv_memcpy(_blocks + 1, blocks + i + 1, (iovcnt - i - 1) * sizeof(struct iovec));
         struct writev_ctx *ctx = kv_malloc(sizeof(struct writev_ctx));
         writev_ctx_init(ctx, self, _blocks, iovcnt - i, cb, cb_arg);
@@ -108,5 +110,6 @@ void kv_circular_log_writev(struct kv_circular_log *self, struct iovec *blocks, 
         kv_storage_write_blocks(self->storage, blocks, iovcnt, self->base + self->tail, remaining_blocks, writev_cb, ctx);
     }
     self->tail = (self->tail + n) % self->size;
+    kv_free(blocks);
 }
 void kv_circular_log_fini(struct kv_circular_log *self) {}
