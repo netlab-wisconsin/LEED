@@ -70,9 +70,9 @@ static void _storage_io(struct kv_storage *self, void *buf, int iovcnt, uint64_t
     int rc = 0;
     uint32_t i = ((is_block ? 1 : 0) << 1) | (is_read ? 1 : 0);
     if (iovcnt)
-        funcv[i](priv(self)->bdev_desc, priv(self)->io_channel, buf, iovcnt, offset, n, io_complete, arg);
+        rc = funcv[i](priv(self)->bdev_desc, priv(self)->io_channel, buf, iovcnt, offset, n, io_complete, arg);
     else
-        func[i](priv(self)->bdev_desc, priv(self)->io_channel, buf, offset, n, io_complete, arg);
+        rc = func[i](priv(self)->bdev_desc, priv(self)->io_channel, buf, offset, n, io_complete, arg);
     if (rc == -ENOMEM) {
         SPDK_NOTICELOG("Queueing io\n");
         /* In case we cannot perform I/O now, queue I/O */
@@ -89,7 +89,10 @@ static void _storage_io(struct kv_storage *self, void *buf, int iovcnt, uint64_t
         wait_arg->bdev_io_wait.cb_fn = storage_io_wait;
         wait_arg->bdev_io_wait.cb_arg = arg;
         spdk_bdev_queue_io_wait(priv(self)->bdev, priv(self)->io_channel, &wait_arg->bdev_io_wait);
-    } else if (wait_arg) {
+        return;
+    }
+    if (rc && cb) cb(false, cb_arg);
+    if (wait_arg) {
         if (iovcnt) kv_free(buf);
         kv_free(wait_arg);
     }

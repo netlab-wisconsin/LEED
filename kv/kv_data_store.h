@@ -19,7 +19,7 @@ struct kv_data_store {
     uint8_t *bit_map;
     void *private_data;
     void *waiting_map;
-#define COMPACT_BUCKET_NUM 256
+#define COMPACT_BUCKET_NUM 32
     struct kv_bucket *compact_buffer;
     struct iovec compact_iov[COMPACT_BUCKET_NUM];
     uint32_t compact_iovcnt, compact_offset, compact_length;

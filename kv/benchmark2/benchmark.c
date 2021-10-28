@@ -140,9 +140,9 @@ static void start(bool success, void* arg) {
         io_buffer[i].value = kv_storage_malloc(&storage, opt.value_size + storage.block_size);
     printf("database initialization complete.\n");
     total_io = opt.num_items;
-    uint32_t cio_num = opt.concurrent_io_num > 32 ? 32 : opt.concurrent_io_num;
+    // uint32_t cio_num = opt.concurrent_io_num > 8 ? 8 : opt.concurrent_io_num;
     // Temporary solution： compaction is too slow.
-    for (concurrent_io = 0; concurrent_io != cio_num; ++concurrent_io) fill_db(true, io_buffer + concurrent_io);
+    for (concurrent_io = 0; concurrent_io != opt.concurrent_io_num; ++concurrent_io) fill_db(true, io_buffer + concurrent_io);
 }
 static void init(void* arg) {
     kv_storage_init(&storage, 0);
