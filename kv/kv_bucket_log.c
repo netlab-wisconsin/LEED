@@ -6,7 +6,7 @@
 
 #include "kv_circular_log.h"
 #include "memery_operation.h"
-void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, uint32_t base, uint32_t size, uint32_t head,
+void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, uint64_t base, uint32_t size, uint32_t head,
                         uint32_t tail) {
     assert(storage->block_size == sizeof(struct kv_bucket));
     kv_circular_log_init(&self->log, storage, base, size, head % size, tail % size);

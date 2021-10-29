@@ -61,9 +61,9 @@ static void init_write_cb(bool success, void *arg) {
     kv_bucket_log_write(&self->bucket_log, ctx->buckets, n, init_write_cb, ctx);
 }
 
-void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, uint32_t base, uint32_t num_buckets,
+void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets,
                         uint64_t value_log_block_num, kv_data_store_cb cb, void *cb_arg) {
-    //assert(base + size <= storage->num_blocks);
+    // assert(base + size <= storage->num_blocks);
     size_t log_num_buckets = 0;
     while (((size_t)1 << log_num_buckets) < num_buckets) log_num_buckets++;
     assert(log_num_buckets <= 32);
@@ -71,9 +71,9 @@ void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, 
 
     self->buckets_mask = self->bucket_num - 1;
     self->extra_bucket_num = self->bucket_num;
-    num_buckets=self->extra_bucket_num + self->bucket_num;
-    if(num_buckets+value_log_block_num>storage->num_blocks){
-        fprintf(stderr,"kv_data_store_init: Not enough space.\n");
+    num_buckets = self->extra_bucket_num + self->bucket_num;
+    if (num_buckets + value_log_block_num > storage->num_blocks) {
+        fprintf(stderr, "kv_data_store_init: Not enough space.\n");
         if (cb) cb(false, cb_arg);
         return;
     }
@@ -81,8 +81,8 @@ void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, 
     kv_bucket_log_init(&self->bucket_log, storage, base, num_buckets, 0, 0);
     kv_value_log_init(&self->value_log, storage, (base + num_buckets) * storage->block_size,
                       value_log_block_num * storage->block_size, 0, 0);
-    printf("bucket log size: %lf GB\n", ((double)num_buckets)*storage->block_size/(1<<30));
-    printf("value log size: %lf GB\n", ((double)value_log_block_num)*storage->block_size/(1<<30));
+    printf("bucket log size: %lf GB\n", ((double)num_buckets) * storage->block_size / (1 << 30));
+    printf("value log size: %lf GB\n", ((double)value_log_block_num) * storage->block_size / (1 << 30));
     struct init_ctx *ctx = kv_malloc(sizeof(struct init_ctx));
     ctx->self = self;
     ctx->cb = cb;
@@ -158,6 +158,7 @@ static void compact_writev_cb(bool success, void *arg) {
         n += self->compact_iov[i].iov_len;
     }
     kv_bucket_log_move_head(&self->bucket_log, self->compact_length);
+    //compression ratio: n/self->compact_length
     self->is_compact_task_running = false;
 }
 static void compact_read_cb(bool success, void *arg) {
@@ -184,9 +185,7 @@ static void compact_read_cb(bool success, void *arg) {
             self->compact_iov[self->compact_iovcnt++] =
                 (struct iovec){self->compact_buffer + i, self->compact_buffer[i].chain_length};
     }
-    // printf("compact rate:%lf, compact_length: %u\n", ((double)self->compact_iovcnt) / self->compact_length,
-    // self->compact_length);
-    self->compact_offset = self->bucket_log.log.tail;
+    self->compact_offset = kv_bucket_log_offset(&self->bucket_log);
     if (self->compact_iovcnt)
         kv_bucket_log_writev(&self->bucket_log, self->compact_iov, self->compact_iovcnt, compact_writev_cb, self);
     else
@@ -330,7 +329,7 @@ static void set_write_value_log_cb(bool success, void *arg) {
         kv_free(ctx);
         return;
     }
-    ctx->tail = ctx->self->bucket_log.log.tail;
+    ctx->tail = kv_bucket_log_offset(&ctx->self->bucket_log);
     kv_bucket_log_write(&ctx->self->bucket_log, ctx->buckets, ctx->buckets->chain_length, set_bucket_log_writev_cb, ctx);
 }
 

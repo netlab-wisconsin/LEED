@@ -119,6 +119,8 @@ static void fill_db(bool success, void* arg) {
     if (!success) fprintf(stderr, "set fail:%s\n", io->value);
     if (!total_io) {
         if (--concurrent_io == 0) {
+            gettimeofday(&tv_end, NULL);
+            printf("Write rate: %f\n", ((double)opt.num_items / timeval_diff(&tv_start, &tv_end)));
             puts("db created successfully.");
             start_get(NULL);
         }
@@ -140,9 +142,10 @@ static void start(bool success, void* arg) {
         io_buffer[i].value = kv_storage_malloc(&storage, opt.value_size + storage.block_size);
     printf("database initialization complete.\n");
     total_io = opt.num_items;
-    // uint32_t cio_num = opt.concurrent_io_num > 8 ? 8 : opt.concurrent_io_num;
+    uint32_t cio_num = opt.concurrent_io_num > 32 ? 32 : opt.concurrent_io_num;
     // Temporary solution： compaction is too slow.
-    for (concurrent_io = 0; concurrent_io != opt.concurrent_io_num; ++concurrent_io) fill_db(true, io_buffer + concurrent_io);
+    gettimeofday(&tv_start, NULL);
+    for (concurrent_io = 0; concurrent_io != cio_num; ++concurrent_io) fill_db(true, io_buffer + concurrent_io);
 }
 static void init(void* arg) {
     kv_storage_init(&storage, 0);

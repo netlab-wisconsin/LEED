@@ -15,7 +15,7 @@ struct kv_item {
 
 struct kv_bucket {
     uint32_t index;
-    uint8_t chain_length,chain_index;
+    uint8_t chain_length, chain_index;
     uint16_t reserved;
     uint32_t head, tail;
     struct kv_item items[KV_ITEM_PER_BUCKET];
@@ -30,7 +30,7 @@ static inline void kv_bucket_log_move_head(struct kv_bucket_log *self, uint32_t 
     self->head = (self->head + n) % self->size;
     self->log.head = (self->log.head + n) % self->log.size;
 }
-void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, uint32_t base, uint32_t size, uint32_t head,
+void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, uint64_t base, uint32_t size, uint32_t head,
                         uint32_t tail);
 static inline void kv_bucket_log_read(struct kv_bucket_log *self, uint32_t offset, struct kv_bucket *buckets, uint32_t n,
                                       kv_circular_log_io_cb cb, void *cb_arg) {
@@ -43,5 +43,6 @@ static inline void kv_bucket_log_write(struct kv_bucket_log *self, struct kv_buc
     struct iovec iov = {.iov_base = buckets, .iov_len = n};
     kv_bucket_log_writev(self, &iov, 1, cb, cb_arg);
 }
+static inline uint32_t kv_bucket_log_offset(struct kv_bucket_log *self) { return (uint32_t)self->log.tail; }
 void kv_bucket_log_fini(struct kv_bucket_log *self);
 #endif
