@@ -124,7 +124,7 @@ static void bucket_unlock(struct kv_data_store *self, uint32_t index) {
     assert(self->bucket_meta[index].lock);
     struct kv_waiting_task task = kv_waiting_map_get(&self->waiting_map, index);
     if (task.cb)
-        kv_app_send_msg(kv_app_get_index(), task.cb, task.cb_arg);
+        kv_app_send_msg(kv_app_get_thread(), task.cb, task.cb_arg);
     else
         self->bucket_meta[index].lock = 0;
 }
@@ -202,7 +202,7 @@ static void _compact(void *arg) {
 static inline void compact(struct kv_data_store *self) {
     if (kv_circular_log_length(&self->bucket_log.log) >= 7 * self->bucket_log.log.size / 8 && !self->is_compact_task_running) {
         self->is_compact_task_running = true;
-        kv_app_send_msg(kv_app_get_index(), _compact, self);
+        kv_app_send_msg(kv_app_get_thread(), _compact, self);
     }
 }
 

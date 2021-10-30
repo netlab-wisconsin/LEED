@@ -19,7 +19,7 @@ static void read_cb(bool success, void *cb_arg) {
     }
     kv_storage_fini(storage);
     kv_app_stop(0);
-    if (index == 1) kv_app_send_msg(2, storage_start, storages + 2);
+    if (index == 1) kv_app_send_msg(kv_app().threads[2], storage_start, storages + 2);
 }
 
 static void write_cb(bool success, void *cb_arg) {
