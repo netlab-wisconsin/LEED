@@ -9,11 +9,18 @@
 #include "memery_operation.h"
 
 #define INIT_CON_IO_NUM 128
-
+#define COMPACT_BUF(self) ((self)->compact_buffer[(self)->compact_i])
+#define COMPACT_PREFETCH_BUF(self) ((self)->compact_buffer[!(self)->compact_i])
 // --- init & fini ---
 static void init(struct kv_data_store *self, kv_data_store_cb cb, void *cb_arg) {
-    self->compact_buffer = kv_storage_blk_alloc(self->bucket_log.log.storage, self->compact_buf_len);
-    self->compact_iov=kv_calloc(self->compact_buf_len,sizeof(struct iovec));
+    for (size_t i = 0; i < 2; i++)
+        self->compact_buffer[i] = kv_storage_zblk_alloc(self->bucket_log.log.storage, self->compact_buf_len);
+    for (size_t i = 0; i < self->compact_buf_len; i++) {
+        COMPACT_BUF(self)[i].index = i;
+        COMPACT_BUF(self)[i].chain_length = 1;
+    }
+    self->compact_iov = kv_calloc(self->compact_buf_len, sizeof(struct iovec));
+
     self->bucket_meta = kv_calloc(self->bucket_num, sizeof(struct kv_bucket_meta));
     kv_memset(self->bucket_meta, 0, sizeof(struct kv_bucket_meta) * self->bucket_num);
     for (size_t i = 0; i < self->bucket_num; i++) {
@@ -64,6 +71,7 @@ static void init_write_cb(bool success, void *arg) {
 
 void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets,
                         uint64_t value_log_block_num, uint32_t compact_buf_len, kv_data_store_cb cb, void *cb_arg) {
+    kv_memset(self, 0, sizeof(struct kv_data_store));
     // assert(base + size <= storage->num_blocks);
     size_t log_num_buckets = 0;
     while (((size_t)1 << log_num_buckets) < num_buckets) log_num_buckets++;
@@ -100,7 +108,8 @@ void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, 
 void kv_data_store_fini(struct kv_data_store *self) {
     kv_free(self->bucket_meta);
     kv_free(self->compact_iov);
-    kv_storage_free(self->compact_buffer);
+    kv_storage_free(self->compact_buffer[0]);
+    kv_storage_free(self->compact_buffer[1]);
     kv_bucket_log_fini(&self->bucket_log);
     kv_value_log_fini(&self->value_log);
 }
@@ -145,66 +154,62 @@ static inline void verify_buckets(struct kv_bucket *buckets, uint32_t index, uin
     }
 }
 // --- compact ---
-static void compact_writev_cb(bool success, void *arg) {
+static void compact_cb(bool success, void *arg) {
     struct kv_data_store *self = arg;
-    if (!success) {
-        fprintf(stderr, "compact_writev_cb: IO error!\n");
-        self->is_compact_task_running = false;
-        return;
-    }
-    uint32_t n = 0;
-    for (size_t i = 0; i < self->compact_iovcnt; i++) {
-        struct kv_bucket *bucket = self->compact_iov[i].iov_base;
-        self->bucket_meta[bucket->index].bucket_offset = (self->compact_offset + n) % self->bucket_log.log.size;
-        bucket_unlock(self, bucket->index);
-        verify_buckets(bucket, bucket->index, self->bucket_meta[bucket->index].chain_length);
-        n += self->compact_iov[i].iov_len;
-    }
-    kv_bucket_log_move_head(&self->bucket_log, self->compact_length);
-    // compression ratio: n/self->compact_length
-    self->is_compact_task_running = false;
-}
-static void compact_read_cb(bool success, void *arg) {
-    struct kv_data_store *self = arg;
-    if (!success) {
-        fprintf(stderr, "compact_read_cb: IO error!\n");
-        self->is_compact_task_running = false;
-        return;
-    }
-    self->compact_iovcnt = 0;
-    self->compact_length = self->compact_buf_len;
-    for (size_t i = 0; i < self->compact_buf_len; i += self->compact_buffer[i].chain_length) {
-        assert(self->compact_buffer[i].chain_index == 0);
-        uint32_t bucket_offset = (self->bucket_log.log.head + i) % self->bucket_log.log.size;
-        struct kv_bucket_meta *meta = self->bucket_meta + self->compact_buffer[i].index;
-        if (self->compact_buffer[i].chain_length + i > self->compact_buf_len) {
-            if (meta->bucket_offset == bucket_offset && !meta->lock)
-                self->compact_length = i;
-            else
-                self->compact_length = self->compact_buffer[i].chain_length + i;
-            break;
+    self->compact_state.err = self->compact_state.err||!success;
+    if (--self->compact_state.io_cnt == 0) {
+        if (self->compact_state.err) {
+            fprintf(stderr, "compact_cb: IO error!\n");
+            self->compact_state.err = 0;
+            return;
         }
-        if (meta->bucket_offset == bucket_offset && bucket_lock_nowait(self, self->compact_buffer[i].index))
-            self->compact_iov[self->compact_iovcnt++] =
-                (struct iovec){self->compact_buffer + i, self->compact_buffer[i].chain_length};
+        uint32_t n = 0;
+        for (size_t i = 0; i < self->compact_iovcnt; i++) {
+            struct kv_bucket *bucket = self->compact_iov[i].iov_base;
+            self->bucket_meta[bucket->index].bucket_offset = (self->compact_offset + n) % self->bucket_log.log.size;
+            bucket_unlock(self, bucket->index);
+            verify_buckets(bucket, bucket->index, self->bucket_meta[bucket->index].chain_length);
+            n += self->compact_iov[i].iov_len;
+        }
+        kv_bucket_log_move_head(&self->bucket_log, self->compact_length);
+        self->compact_i = !self->compact_i;
+        //printf("compression ratio: %lf\n", (double)n / self->compact_length);
     }
-    self->compact_offset = kv_bucket_log_offset(&self->bucket_log);
-    if (self->compact_iovcnt)
-        kv_bucket_log_writev(&self->bucket_log, self->compact_iov, self->compact_iovcnt, compact_writev_cb, self);
-    else
-        compact_writev_cb(true, self);
 }
 
 static void _compact(void *arg) {
     struct kv_data_store *self = arg;
+    self->compact_iovcnt = 0;
+    self->compact_length = self->compact_buf_len;
+    for (size_t i = 0; i < self->compact_buf_len; i += COMPACT_BUF(self)[i].chain_length) {
+        assert(COMPACT_BUF(self)[i].chain_index == 0);
+        uint32_t bucket_offset = (self->bucket_log.log.head + i) % self->bucket_log.log.size;
+        struct kv_bucket_meta *meta = self->bucket_meta + COMPACT_BUF(self)[i].index;
+        if (COMPACT_BUF(self)[i].chain_length + i > self->compact_buf_len) {
+            if (meta->bucket_offset == bucket_offset && !meta->lock)
+                self->compact_length = i;
+            else
+                self->compact_length = COMPACT_BUF(self)[i].chain_length + i;
+            break;
+        }
+        if (meta->bucket_offset == bucket_offset && bucket_lock_nowait(self, COMPACT_BUF(self)[i].index))
+            self->compact_iov[self->compact_iovcnt++] =
+                (struct iovec){COMPACT_BUF(self) + i, COMPACT_BUF(self)[i].chain_length};
+    }
+    self->compact_offset = kv_bucket_log_offset(&self->bucket_log);
+    if (self->compact_iovcnt)
+        kv_bucket_log_writev(&self->bucket_log, self->compact_iov, self->compact_iovcnt, compact_cb, self);
+    else
+        compact_cb(true, self);
+    uint32_t offset = (self->bucket_log.log.head + self->compact_length) % self->bucket_log.log.size;
+    // prefetch
     // TODO: using bit map
-    assert(kv_circular_log_length(&self->bucket_log.log) >= self->compact_buf_len);
-    kv_bucket_log_read(&self->bucket_log, self->bucket_log.log.head, self->compact_buffer, self->compact_buf_len, compact_read_cb,
-                       self);
+    kv_bucket_log_read(&self->bucket_log, offset, COMPACT_PREFETCH_BUF(self), self->compact_buf_len, compact_cb, self);
 }
+
 static inline void compact(struct kv_data_store *self) {
-    if (kv_circular_log_length(&self->bucket_log.log) >= 7 * self->bucket_log.log.size / 8 && !self->is_compact_task_running) {
-        self->is_compact_task_running = true;
+    if (kv_circular_log_length(&self->bucket_log.log) >= 7 * self->bucket_log.log.size / 8 && !self->compact_state.io_cnt){
+        self->compact_state.io_cnt = 2;
         kv_app_send_msg(kv_app_get_thread(), _compact, self);
     }
 }

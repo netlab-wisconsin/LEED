@@ -19,11 +19,14 @@ struct kv_data_store {
     uint8_t *bit_map;
     void *private_data;
     void *waiting_map;
-    uint32_t compact_buf_len;
-    struct kv_bucket *compact_buffer;
+    uint32_t compact_buf_len, compact_i;
+    struct kv_bucket *compact_buffer[2];
     struct iovec *compact_iov;
     uint32_t compact_iovcnt, compact_offset, compact_length;
-    bool is_compact_task_running;
+    struct{
+        uint8_t err:1;
+        uint8_t io_cnt:7;
+    } compact_state;
 };
 typedef kv_storage_io_cb kv_data_store_cb;
 void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets,

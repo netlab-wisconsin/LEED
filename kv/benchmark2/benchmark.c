@@ -135,15 +135,13 @@ static void start(bool success, void* arg) {
         return;
     }
     gettimeofday(&tv_end, NULL);
-    printf("database initialized in %lf s.\n",timeval_diff(&tv_start, &tv_end));
+    printf("database initialized in %lf s.\n", timeval_diff(&tv_start, &tv_end));
     io_buffer = calloc(opt.concurrent_io_num, sizeof(struct io_buffer_t));
     for (size_t i = 0; i < opt.concurrent_io_num; i++)
-        io_buffer[i].value = kv_storage_malloc(&storage, opt.value_size + storage.block_size);    
+        io_buffer[i].value = kv_storage_malloc(&storage, opt.value_size + storage.block_size);
     total_io = opt.num_items;
-    uint32_t cio_num = opt.concurrent_io_num > 32 ? 32 : opt.concurrent_io_num;
-    // Temporary solution： compaction is too slow.
     gettimeofday(&tv_start, NULL);
-    for (concurrent_io = 0; concurrent_io != cio_num; ++concurrent_io) fill_db(true, io_buffer + concurrent_io);
+    for (concurrent_io = 0; concurrent_io != opt.concurrent_io_num; ++concurrent_io) fill_db(true, io_buffer + concurrent_io);
 }
 static void init(void* arg) {
     kv_storage_init(&storage, 0);
@@ -153,6 +151,11 @@ static void init(void* arg) {
     kv_data_store_init(&data_store, &storage, 0, bucket_num, value_log_block_num, opt.compact_buf_len, start, NULL);
 }
 int main(int argc, char** argv) {
+#ifdef NDEBUG
+    printf("NDEBUG\n");
+#else
+    printf("!NDEBUG (low performance)\n");
+#endif
     get_options(argc, argv);
     kv_app_start_single_task(opt.json_config_file, init, NULL);
 }
