@@ -5,6 +5,7 @@
 
     + bucket log bit map
     + concurrent bucket log compact
+    + bucket log prefetch buffer
 
 + delete
 + ~~data store benchmark~~
