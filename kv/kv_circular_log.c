@@ -91,7 +91,7 @@ void kv_circular_log_writev(struct kv_circular_log *self, struct iovec *blocks, 
         ctx->blocks[i + ctx->io_index].iov_base = blocks[i].iov_base;
         ctx->blocks[i + ctx->io_index].iov_len = blocks[i].iov_len * self->storage->block_size;
     }
-    if (self->size - 1 - kv_circular_log_length(self) < n) {
+    if (kv_circular_log_empty_space(self) < n) {
         fprintf(stderr, "kv_circular_log_writes: No more space!\n");
         cb(false, cb_arg);
         return;
