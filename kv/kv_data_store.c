@@ -71,7 +71,7 @@ static void init_write_cb(bool success, void *arg) {
 void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets,
                         uint64_t value_log_block_num, uint32_t compact_buf_len, kv_data_store_cb cb, void *cb_arg) {
     kv_memset(self, 0, sizeof(struct kv_data_store));
-    num_buckets = num_buckets > compact_buf_len << 3 ? num_buckets : compact_buf_len << 3;
+    num_buckets = num_buckets > compact_buf_len << 4 ? num_buckets : compact_buf_len << 4;
     size_t log_num_buckets = 0;
     while (((size_t)1 << log_num_buckets) < num_buckets) log_num_buckets++;
     assert(log_num_buckets <= 32);
@@ -173,8 +173,6 @@ static void compact_cb(bool success, void *arg) {
         }
         kv_bucket_log_move_head(&self->bucket_log, self->compact.length);
         self->compact.i = !self->compact.i;
-        struct kv_waiting_task task;
-        while ((task = kv_waiting_queue_get(&self->waiting_map)).cb) task.cb(task.cb_arg);
         // printf("compression ratio: %lf\n", (double)n / self->compact.length);
     }
 }
@@ -210,16 +208,11 @@ static void _compact(void *arg) {
     kv_bucket_log_read(&self->bucket_log, offset, COMPACT_PREFETCH_BUF(self), self->compact.buf_len, compact_cb, self);
 }
 
-static void compact(struct kv_data_store *self, kv_task_cb cb, void *cb_arg) {
-    assert(cb);
-    if (kv_circular_log_empty_space(&self->bucket_log.log) < self->compact.buf_len << 3 && !self->compact.state.running) {
+static void compact(struct kv_data_store *self) {
+    if (kv_circular_log_empty_space(&self->bucket_log.log) < self->compact.buf_len << 4 && !self->compact.state.running) {
         self->compact.state.running = true;
         kv_app_send_msg(kv_app_get_thread(), _compact, self);
     }
-    if (kv_circular_log_empty_space(&self->bucket_log.log) <= self->compact.buf_len)
-        kv_waiting_queue_put(&self->bucket_log_waitting_q, cb, cb_arg);
-    else
-        cb(cb_arg);
 }
 
 //--- find item ---
@@ -332,18 +325,14 @@ static void set_bucket_log_writev_cb(bool success, void *arg) {
     kv_storage_free(ctx->buckets);
     if (ctx->cb) ctx->cb(success, ctx->cb_arg);
     kv_free(ctx);
-}
-
-static void set_compact_cb(void *arg) {
-    struct set_ctx *ctx = arg;
-    ctx->tail = kv_bucket_log_offset(&ctx->self->bucket_log);
-    kv_bucket_log_write(&ctx->self->bucket_log, ctx->buckets, ctx->buckets->chain_length, set_bucket_log_writev_cb, ctx);
-}
+} 
 
 static void set_write_value_log_cb(bool success, void *arg) {
     struct set_ctx *ctx = arg;
     if (success) {
-        compact(ctx->self, set_compact_cb, ctx);
+        ctx->tail = kv_bucket_log_offset(&ctx->self->bucket_log);
+        compact(ctx->self);
+        kv_bucket_log_write(&ctx->self->bucket_log, ctx->buckets, ctx->buckets->chain_length, set_bucket_log_writev_cb, ctx);
     } else {
         fprintf(stderr, "set_write_value_log_cb: IO error.\n");
         bucket_unlock(ctx->self, ctx->bucket_index);
