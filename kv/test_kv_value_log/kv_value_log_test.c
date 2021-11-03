@@ -20,7 +20,8 @@ static void test_cb(bool success, void *cb_arg) {
     printf("%s successfully.\n", op_str[(int)state]);
     switch (state) {
         case WRITE1:
-            offset = kv_value_log_write(&value_log, buf + 3 * storage.block_size / 2, 5 * storage.block_size, test_cb, NULL);
+            offset = kv_value_log_offset(&value_log);
+            kv_value_log_write(&value_log, buf + 3 * storage.block_size / 2, 5 * storage.block_size, test_cb, NULL);
             state = READ0;
             break;
         case READ0:
@@ -33,9 +34,9 @@ static void test_cb(bool success, void *cb_arg) {
             state = DONE;
             break;
         case DONE:
-            puts(buf);  // 1. hello
-            puts(buf + storage.block_size / 2);// 2. hello
-            puts(buf + 3 * storage.block_size / 2);// 3. hello
+            puts(buf);                               // 1. hello
+            puts(buf + storage.block_size / 2);      // 2. hello
+            puts(buf + 3 * storage.block_size / 2);  // 3. hello
             kv_value_log_fini(&value_log);
             kv_storage_fini(&storage);
             kv_storage_free(buf);

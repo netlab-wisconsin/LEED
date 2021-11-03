@@ -3,13 +3,13 @@
 ### TODO List
 + ~~bucket log compact~~
 
-    + bucket log bit map
+    + ~~bucket log bit map~~ 
     + concurrent bucket log compact
-    + bucket log prefetch buffer
+    + ~~bucket log prefetch buffer~~
 
 + delete
 + ~~data store benchmark~~
-+ rewrite value log (using circular log)
++ ~~rewrite value log (using circular log)~~
 + value log compact
 
     + key log

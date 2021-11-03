@@ -354,15 +354,15 @@ static void set_find_item_cb(bool success, struct kv_item *located_item, struct 
     }
     if (located_item) {  // update
         located_item->value_length = ctx->value_length;
-        located_item->value_offset =
-            kv_value_log_write(&ctx->self->value_log, ctx->value, ctx->value_length, set_write_value_log_cb, ctx);
+        located_item->value_offset = kv_value_log_offset(&ctx->self->value_log);            
+        kv_value_log_write(&ctx->self->value_log, ctx->value, ctx->value_length, set_write_value_log_cb, ctx);
     } else {  // new
         if ((located_item = find_empty(ctx->self, ctx->buckets))) {
             located_item->key_length = ctx->key_length;
             kv_memcpy(located_item->key, ctx->key, ctx->key_length);
             located_item->value_length = ctx->value_length;
-            located_item->value_offset =
-                kv_value_log_write(&ctx->self->value_log, ctx->value, ctx->value_length, set_write_value_log_cb, ctx);
+            located_item->value_offset = kv_value_log_offset(&ctx->self->value_log);            
+            kv_value_log_write(&ctx->self->value_log, ctx->value, ctx->value_length, set_write_value_log_cb, ctx);
         } else {
             fprintf(stderr, "set_find_item_cb: No more bucket available.\n");
             bucket_unlock(ctx->self, ctx->bucket_index);
