@@ -6,14 +6,13 @@
 
 #include "memery_operation.h"
 static inline uint64_t align(struct kv_value_log *self, uint64_t size) {
-    if (size & self->blk_mask) return (size & ~self->blk_mask) + self->log.storage->block_size;
-    return size;
+    if (size & self->blk_mask) return (size >> self->blk_shift) + 1;
+    return size >> self->blk_shift;
 }
-static inline uint64_t align_blk(struct kv_value_log *self, uint64_t size) { return align(self, size) >> self->blk_shift; }
 
 void kv_value_log_write(struct kv_value_log *self, uint8_t *value, uint32_t value_length, kv_circular_log_io_cb cb,
                         void *cb_arg) {
-    kv_circular_log_write(&self->log, value, align_blk(self, value_length), cb, cb_arg);
+    kv_circular_log_write(&self->log, value, align(self, value_length), cb, cb_arg);
 }
 
 struct read_ctx {
@@ -43,10 +42,10 @@ void kv_value_log_read(struct kv_value_log *self, uint64_t offset, uint8_t *valu
         ctx->buf_offset = offset & self->blk_mask;
         ctx->len_in_buf = self->log.storage->block_size - ctx->buf_offset;
         ctx->buf = kv_storage_blk_alloc(self->log.storage, 1);
-        struct iovec iov[2] = {{ctx->buf, 1}, {value + ctx->len_in_buf, align_blk(self, value_length - ctx->len_in_buf)}};
+        struct iovec iov[2] = {{ctx->buf, 1}, {value + ctx->len_in_buf, align(self, value_length - ctx->len_in_buf)}};
         kv_circular_log_readv(&self->log, offset >> self->blk_shift, iov, 2, read_cb, ctx);
     } else
-        kv_circular_log_read(&self->log, offset >> self->blk_shift, value, align_blk(self, value_length), cb, cb_arg);
+        kv_circular_log_read(&self->log, offset >> self->blk_shift, value, align(self, value_length), cb, cb_arg);
 }
 
 void kv_value_log_init(struct kv_value_log *self, struct kv_storage *storage, uint64_t base, uint64_t size, uint64_t head,
