@@ -10,12 +10,8 @@ struct kv_data_store data_store;
 uint8_t *key[] = {"00000000", "00000000", "00000000"};
 uint8_t *value[VALUE_NUM];
 uint32_t value_length;
-enum { INIT, SET0, GET0 } state = INIT;
-char const *op_str[] = {
-    "INIT",
-    "SET0",
-    "GET0",
-};
+enum { INIT, SET0, GET0, DELETE } state = INIT;
+char const *op_str[] = {"INIT", "SET0", "GET0", "DELETE"};
 static void test_cb(bool success, void *cb_arg) {
     if (!success) {
         fprintf(stderr, "%s failed.\n", op_str[(int)state]);
@@ -44,6 +40,10 @@ static void test_cb(bool success, void *cb_arg) {
         case GET0:
             puts(value[0]);
             printf("value length: %u\n", value_length);
+            state = DELETE;
+            kv_data_store_delete(&data_store, key[0], 8, test_cb, NULL);
+            break;
+        case DELETE:
             kv_data_store_fini(&data_store);
             kv_storage_fini(&storage);
             for (size_t i = 0; i < VALUE_NUM; i++) kv_storage_free(value[i]);

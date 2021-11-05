@@ -72,13 +72,13 @@ void kv_circular_log_iov(struct kv_circular_log *self, uint64_t offset, struct i
             break;
         case CIRCULAR_LOG_APPEND:
             offset = self->tail;
-            self->tail = (self->tail + n) % self->size;
             if (kv_circular_log_empty_space(self) < n) {
                 fprintf(stderr, "kv_circular_log_append: No more space!\n");
                 ctx->io_cnt = 1;
                 kv_app_send_msg(kv_app_get_thread(), iov_fail_cb, ctx);
                 return;
             }
+            self->tail = (self->tail + n) % self->size;
             // fall through
         case CIRCULAR_LOG_WRITE:
             if (blocks2) {

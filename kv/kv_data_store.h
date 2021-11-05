@@ -40,4 +40,5 @@ void kv_data_store_set(struct kv_data_store *self, uint8_t *key, uint8_t key_len
                        kv_data_store_cb cb, void *cb_arg);
 void kv_data_store_get(struct kv_data_store *self, uint8_t *key, uint8_t key_length, uint8_t *value, uint32_t *value_length,
                        kv_data_store_cb cb, void *cb_arg);
+void kv_data_store_delete(struct kv_data_store *self, uint8_t *key, uint8_t key_length, kv_data_store_cb cb, void *cb_arg);
 #endif

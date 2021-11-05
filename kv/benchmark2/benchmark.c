@@ -84,6 +84,29 @@ static void stop(void) {
     kv_storage_fini(&storage);
     kv_app_stop(0);
 }
+static void delete_test(bool success, void* arg){
+    struct io_buffer_t* io = arg;
+    if (!success) fprintf(stderr, "delete fail. key hash: %lu\n", io->key.hash);
+    if (!total_io) {
+        if (--concurrent_io == 0) {
+            gettimeofday(&tv_end, NULL);
+            printf("Delete rate: %f\n", ((double)opt.num_items / timeval_diff(&tv_start, &tv_end)));
+            stop();
+        }
+        return;
+    }
+    io->key.hash = index_to_key(--total_io);
+    kv_data_store_delete(&data_store, io->key.buf, 8, delete_test, arg);
+}
+
+static void start_delete(void* arg) {
+    total_io = opt.num_items;
+    gettimeofday(&tv_start, NULL);
+    for (concurrent_io = 0; concurrent_io != opt.concurrent_io_num; ++concurrent_io) {
+        delete_test(true, io_buffer + concurrent_io);
+    }
+}
+
 static void get_test(bool success, void* arg) {
     struct io_buffer_t* io = arg;
     if (!success) fprintf(stderr, "get fail. key hash: %lu\n", io->key.hash);
@@ -91,7 +114,7 @@ static void get_test(bool success, void* arg) {
         if (--concurrent_io == 0) {
             gettimeofday(&tv_end, NULL);
             printf("Query rate: %f\n", ((double)opt.read_num_items / timeval_diff(&tv_start, &tv_end)));
-            stop();
+            start_delete(NULL);
         }
         return;
     }

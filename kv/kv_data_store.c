@@ -144,6 +144,21 @@ static inline bool compare_keys(const uint8_t *key1, size_t key1_len, const uint
     return key1_len == key2_len && !kv_memcmp8(key1, key2, key1_len);
 }
 // --- debug ---
+static void print_buckets(struct kv_bucket *buckets) __attribute__((unused));
+static void print_buckets(struct kv_bucket *buckets) {
+    printf("bucket index %u: \n", buckets->index);
+    for (struct kv_bucket *bucket = buckets; bucket - buckets < buckets->chain_length; ++bucket) {
+        printf("chain index %u: ", bucket->chain_index);
+        for (struct kv_item *item = bucket->items; item - bucket->items < KV_ITEM_PER_BUCKET; ++item)
+            if (KV_EMPTY_ITEM(item))
+                printf("0 ");
+            else
+                printf("1 ");
+        puts("");
+    }
+    puts("-----");
+}
+
 static inline void verify_buckets(struct kv_bucket *buckets, uint32_t index, uint8_t length) {
     assert(length);
     for (size_t i = 0; i < length; i++) {
@@ -282,12 +297,43 @@ static bool alloc_extra_bucket(struct kv_data_store *self, struct kv_bucket *buc
     for (size_t i = 0; i < length; i++) buckets[i].chain_length = length;
     return true;
 }
+
+static void free_extra_bucket(struct kv_data_store *self, struct kv_bucket *buckets) {
+    self->allocated_bucket_num--;
+    uint8_t chain_length = buckets->chain_length - 1;
+    for (struct kv_bucket *bucket = buckets; bucket - buckets < chain_length; ++bucket) {
+        bucket->chain_length = chain_length;
+    }
+}
+
 static struct kv_item *find_empty(struct kv_data_store *self, struct kv_bucket *buckets) {
     for (struct kv_bucket *bucket = buckets; bucket - buckets < buckets->chain_length; ++bucket)
         for (struct kv_item *item = bucket->items; item - bucket->items < KV_ITEM_PER_BUCKET; ++item)
             if (KV_EMPTY_ITEM(item)) return item;
     if (alloc_extra_bucket(self, buckets)) return buckets[buckets->chain_length - 1].items;
     return NULL;
+}
+
+static void fill_the_hole(struct kv_data_store *self, struct kv_bucket *buckets) {
+    if (buckets->chain_length == 1) return;
+    struct kv_bucket *bucket = buckets;
+    struct kv_item *item = bucket->items;
+    for (size_t i = 0; i < KV_ITEM_PER_BUCKET; i++) {
+        struct kv_item *item_to_move = buckets[buckets->chain_length - 1].items + i;
+        if (KV_EMPTY_ITEM(item_to_move)) continue;
+        for (; bucket - buckets < buckets->chain_length - 1; item = (++bucket)->items)
+            for (; item - bucket->items < KV_ITEM_PER_BUCKET; ++item)
+                if (KV_EMPTY_ITEM(item)) {
+                    kv_memcpy(item, item_to_move, sizeof(struct kv_item));
+                    item_to_move->key_length = 0;
+                    goto find_next_item_to_move;
+                }
+        // no hole to fill
+        return;
+    find_next_item_to_move:;
+    }
+    // last bucket is empty
+    free_extra_bucket(self, buckets);
 }
 //--- set ---
 struct set_ctx {
@@ -313,7 +359,7 @@ struct set_ctx {
         ctx->cb_arg = cb_arg;                                                     \
     } while (0)
 
-static void set_bucket_log_writev_cb(bool success, void *arg) {
+static void set_bucket_log_write_cb(bool success, void *arg) {
     struct set_ctx *ctx = arg;
     if (success) {
         struct kv_bucket_meta *meta = ctx->self->bucket_meta + ctx->bucket_index;
@@ -325,14 +371,14 @@ static void set_bucket_log_writev_cb(bool success, void *arg) {
     kv_storage_free(ctx->buckets);
     if (ctx->cb) ctx->cb(success, ctx->cb_arg);
     kv_free(ctx);
-} 
+}
 
 static void set_write_value_log_cb(bool success, void *arg) {
     struct set_ctx *ctx = arg;
     if (success) {
         ctx->tail = kv_bucket_log_offset(&ctx->self->bucket_log);
         compact(ctx->self);
-        kv_bucket_log_write(&ctx->self->bucket_log, ctx->buckets, ctx->buckets->chain_length, set_bucket_log_writev_cb, ctx);
+        kv_bucket_log_write(&ctx->self->bucket_log, ctx->buckets, ctx->buckets->chain_length, set_bucket_log_write_cb, ctx);
     } else {
         fprintf(stderr, "set_write_value_log_cb: IO error.\n");
         bucket_unlock(ctx->self, ctx->bucket_index);
@@ -354,14 +400,14 @@ static void set_find_item_cb(bool success, struct kv_item *located_item, struct 
     }
     if (located_item) {  // update
         located_item->value_length = ctx->value_length;
-        located_item->value_offset = kv_value_log_offset(&ctx->self->value_log);            
+        located_item->value_offset = kv_value_log_offset(&ctx->self->value_log);
         kv_value_log_write(&ctx->self->value_log, ctx->value, ctx->value_length, set_write_value_log_cb, ctx);
     } else {  // new
         if ((located_item = find_empty(ctx->self, ctx->buckets))) {
             located_item->key_length = ctx->key_length;
             kv_memcpy(located_item->key, ctx->key, ctx->key_length);
             located_item->value_length = ctx->value_length;
-            located_item->value_offset = kv_value_log_offset(&ctx->self->value_log);            
+            located_item->value_offset = kv_value_log_offset(&ctx->self->value_log);
             kv_value_log_write(&ctx->self->value_log, ctx->value, ctx->value_length, set_write_value_log_cb, ctx);
         } else {
             fprintf(stderr, "set_find_item_cb: No more bucket available.\n");
@@ -428,4 +474,69 @@ void kv_data_store_get(struct kv_data_store *self, uint8_t *key, uint8_t key_len
     get_ctx_init(ctx, self, value, value_length, cb, cb_arg);
     ctx->buckets = kv_storage_blk_alloc(self->bucket_log.log.storage, self->bucket_meta[bucket_index].chain_length);
     find_item(self, bucket_index, key, key_length, ctx->buckets, get_find_item_cb, ctx);
+}
+
+// --- delete ---
+struct delete_ctx {
+    struct kv_data_store *self;
+    uint8_t *key;
+    uint8_t key_length;
+    kv_data_store_cb cb;
+    void *cb_arg;
+    uint32_t bucket_index;
+    struct kv_bucket *buckets;
+    uint32_t tail;
+};
+#define delete_ctx_init(ctx, self, key, key_length, cb, cb_arg) \
+    do {                                                        \
+        ctx->self = self;                                       \
+        ctx->key = key;                                         \
+        ctx->key_length = key_length;                           \
+        ctx->cb = cb;                                           \
+        ctx->cb_arg = cb_arg;                                   \
+    } while (0)
+
+static void delete_bucket_log_write_cb(bool success, void *arg) {
+    struct delete_ctx *ctx = arg;
+    if (success) {
+        struct kv_bucket_meta *meta = ctx->self->bucket_meta + ctx->bucket_index;
+        meta->chain_length = ctx->buckets->chain_length;
+        meta->bucket_offset = ctx->tail;
+        verify_buckets(ctx->buckets, ctx->bucket_index, meta->chain_length);
+    }
+    bucket_unlock(ctx->self, ctx->bucket_index);
+    kv_storage_free(ctx->buckets);
+    if (ctx->cb) ctx->cb(success, ctx->cb_arg);
+    kv_free(ctx);
+}
+
+static void delete_find_item_cb(bool success, struct kv_item *located_item, struct kv_bucket *located_bucket, void *cb_arg) {
+    struct delete_ctx *ctx = cb_arg;
+    if (!success || !located_item) {
+        if (!success) fprintf(stderr, "delete_find_item_cb: IO error.\n");
+        bucket_unlock(ctx->self, ctx->bucket_index);
+        kv_storage_free(ctx->buckets);
+        if (ctx->cb) ctx->cb(false, ctx->cb_arg);
+        kv_free(ctx);
+        return;
+    }
+    located_item->key_length = 0;
+    fill_the_hole(ctx->self, ctx->buckets);
+    compact(ctx->self);
+    ctx->tail = kv_bucket_log_offset(&ctx->self->bucket_log);
+    kv_bucket_log_write(&ctx->self->bucket_log, ctx->buckets, ctx->buckets->chain_length, delete_bucket_log_write_cb, ctx);
+}
+
+static void delete_lock_cb(void *arg) {
+    struct delete_ctx *ctx = arg;
+    struct kv_storage *storage = ctx->self->bucket_log.log.storage;
+    ctx->buckets = kv_storage_blk_alloc(storage, ctx->self->bucket_meta[ctx->bucket_index].chain_length);
+    find_item(ctx->self, ctx->bucket_index, ctx->key, ctx->key_length, ctx->buckets, delete_find_item_cb, ctx);
+}
+
+void kv_data_store_delete(struct kv_data_store *self, uint8_t *key, uint8_t key_length, kv_data_store_cb cb, void *cb_arg) {
+    struct delete_ctx *ctx = kv_malloc(sizeof(struct delete_ctx));
+    delete_ctx_init(ctx, self, key, key_length, cb, cb_arg);
+    ctx->bucket_index = kv_data_store_bucket_index(self, key);
+    bucket_lock(self, ctx->bucket_index, delete_lock_cb, ctx);
 }

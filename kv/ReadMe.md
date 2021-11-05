@@ -7,12 +7,12 @@
     + concurrent bucket log compact
     + ~~bucket log prefetch buffer~~
 
-+ delete
++ ~~delete~~
 + ~~data store benchmark~~
 + ~~rewrite value log (using circular log)~~
 + value log compact
 
-    + key log
+    + ~~index log~~
     + key log bit map
 
 ### spdk bugs
