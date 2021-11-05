@@ -31,7 +31,7 @@ static void iov_cb(bool success, void *arg) {
 static void iov_fail_cb(void *arg) { iov_cb(false, arg); }
 
 void kv_circular_log_iov(struct kv_circular_log *self, uint64_t offset, struct iovec *blocks, int iovcnt,
-                         kv_circular_log_io_cb cb, void *cb_arg, bool is_read) {
+                         kv_circular_log_io_cb cb, void *cb_arg, enum kv_circular_log_operation operation) {
     struct iov_ctx *ctx = kv_malloc(sizeof(struct iov_ctx));
     ctx->cb = cb;
     ctx->cb_arg = cb_arg;
@@ -56,36 +56,40 @@ void kv_circular_log_iov(struct kv_circular_log *self, uint64_t offset, struct i
             ctx->blocks[i + (int)is_splitted].iov_len = blocks[i].iov_len * self->storage->block_size;
         }
     }
-    if (is_read) {
-        assert((self->size + offset - self->head) % self->size < kv_circular_log_length(self));
-        assert((self->size + self->tail - offset) % self->size >= n);
-        if (blocks2) {
-            ctx->io_cnt = 2;
-            kv_storage_read_blocks(self->storage, ctx->blocks, i2, self->base + offset, remaining_blocks, iov_cb, ctx);
-            kv_storage_read_blocks(self->storage, blocks2, ctx->blocks + iovcnt + 1 - blocks2, self->base, n - remaining_blocks,
-                                   iov_cb, ctx);
-        } else {
-            ctx->io_cnt = 1;
-            kv_storage_read_blocks(self->storage, ctx->blocks, iovcnt, self->base + offset, n, iov_cb, ctx);
-        }
-    } else {
-        assert(offset == self->tail);
-        if (kv_circular_log_empty_space(self) < n) {
-            fprintf(stderr, "kv_circular_log_writes: No more space!\n");
-            ctx->io_cnt = 1;
-            kv_app_send_msg(kv_app_get_thread(), iov_fail_cb, ctx);
-            return;
-        }
-        if (blocks2) {
-            ctx->io_cnt = 2;
-            kv_storage_write_blocks(self->storage, ctx->blocks, i2, self->base + offset, remaining_blocks, iov_cb, ctx);
-            kv_storage_write_blocks(self->storage, blocks2, ctx->blocks + iovcnt + 1 - blocks2, self->base,
-                                    n - remaining_blocks, iov_cb, ctx);
-        } else {
-            ctx->io_cnt = 1;
-            kv_storage_write_blocks(self->storage, ctx->blocks, iovcnt, self->base + offset, n, iov_cb, ctx);
-        }
-        self->tail = (self->tail + n) % self->size;
+    switch (operation) {
+        case CIRCULAR_LOG_READ:
+            assert((self->size + offset - self->head) % self->size < kv_circular_log_length(self));
+            assert((self->size + self->tail - offset) % self->size >= n);
+            if (blocks2) {
+                ctx->io_cnt = 2;
+                kv_storage_read_blocks(self->storage, ctx->blocks, i2, self->base + offset, remaining_blocks, iov_cb, ctx);
+                kv_storage_read_blocks(self->storage, blocks2, ctx->blocks + iovcnt + 1 - blocks2, self->base,
+                                       n - remaining_blocks, iov_cb, ctx);
+            } else {
+                ctx->io_cnt = 1;
+                kv_storage_read_blocks(self->storage, ctx->blocks, iovcnt, self->base + offset, n, iov_cb, ctx);
+            }
+            break;
+        case CIRCULAR_LOG_APPEND:
+            offset = self->tail;
+            self->tail = (self->tail + n) % self->size;
+            if (kv_circular_log_empty_space(self) < n) {
+                fprintf(stderr, "kv_circular_log_append: No more space!\n");
+                ctx->io_cnt = 1;
+                kv_app_send_msg(kv_app_get_thread(), iov_fail_cb, ctx);
+                return;
+            }
+            // fall through
+        case CIRCULAR_LOG_WRITE:
+            if (blocks2) {
+                ctx->io_cnt = 2;
+                kv_storage_write_blocks(self->storage, ctx->blocks, i2, self->base + offset, remaining_blocks, iov_cb, ctx);
+                kv_storage_write_blocks(self->storage, blocks2, ctx->blocks + iovcnt + 1 - blocks2, self->base,
+                                        n - remaining_blocks, iov_cb, ctx);
+            } else {
+                ctx->io_cnt = 1;
+                kv_storage_write_blocks(self->storage, ctx->blocks, iovcnt, self->base + offset, n, iov_cb, ctx);
+            }
     }
 }
 void kv_circular_log_fini(struct kv_circular_log *self) {}

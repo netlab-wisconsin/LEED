@@ -34,7 +34,7 @@ include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 include $(SPDK_ROOT_DIR)/mk/spdk.modules.mk
 
 APP = test_kv_data_store
-C_SRCS := ../kv_app.c ../kv_storage.c ../kv_circular_log.c ../kv_value_log.c ../kv_bucket_log.c ../kv_waiting_map.c ../kv_data_store.c kv_data_store_test.c
+C_SRCS := ../kv_app.c ../kv_storage.c ../kv_circular_log.c ../kv_value_log.c ../kv_bucket_log.c ../kv_waiting_map.c ../kv_index_log.c ../kv_data_store.c kv_data_store_test.c
 
 SPDK_LIB_LIST = $(ALL_MODULES_LIST)
 SPDK_LIB_LIST += $(EVENT_BDEV_SUBSYSTEM)

@@ -12,7 +12,7 @@ static inline uint64_t align(struct kv_value_log *self, uint64_t size) {
 
 void kv_value_log_write(struct kv_value_log *self, uint8_t *value, uint32_t value_length, kv_circular_log_io_cb cb,
                         void *cb_arg) {
-    kv_circular_log_write(&self->log, value, align(self, value_length), cb, cb_arg);
+    kv_circular_log_append(&self->log, value, align(self, value_length), cb, cb_arg);
 }
 
 struct read_ctx {

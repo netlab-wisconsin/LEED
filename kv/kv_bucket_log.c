@@ -25,7 +25,7 @@ void kv_bucket_log_writev(struct kv_bucket_log *self, struct iovec *buckets, int
             bucket->tail = self->tail;
         }
     }
-    kv_circular_log_writev(&self->log, buckets, iovcnt, cb, cb_arg);
+    kv_circular_log_appendv(&self->log, buckets, iovcnt, cb, cb_arg);
 }
 
 void kv_bucket_log_fini(struct kv_bucket_log *self) { kv_circular_log_fini(&self->log); }

@@ -27,7 +27,7 @@ static void test_cb(bool success, void *cb_arg) {
     printf("%s successfully.\n", op_str[(int)state]);
     switch (state) {
         case WRITE1:
-            kv_circular_log_writev(&circular_log, iov, 3, test_cb, NULL);
+            kv_circular_log_appendv(&circular_log, iov, 3, test_cb, NULL);
             state = READ0;
             break;
         case READ0:
@@ -48,7 +48,7 @@ static void start(void *arg) {
     kv_circular_log_init(&circular_log, &storage, 1000, 20, 16, 16);
     buf = kv_storage_blk_alloc(&storage, 10);
     for (uint32_t i = 0; i < 10; i++) sprintf(buf + i * storage.block_size, "%u. hello", i);
-    kv_circular_log_write(&circular_log, buf, 1, test_cb, NULL);
+    kv_circular_log_append(&circular_log, buf, 1, test_cb, NULL);
 }
 
 int main(int argc, char **argv) { kv_app_start_single_task(argv[1], start, NULL); }

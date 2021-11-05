@@ -9,7 +9,7 @@ struct kv_circular_log {
     uint64_t head, tail;
 };
 typedef kv_storage_io_cb kv_circular_log_io_cb;
-
+enum kv_circular_log_operation { CIRCULAR_LOG_READ, CIRCULAR_LOG_APPEND, CIRCULAR_LOG_WRITE };
 static inline uint64_t kv_circular_log_length(struct kv_circular_log *self) {
     return (self->size + self->tail - self->head) % self->size;
 }
@@ -21,25 +21,35 @@ void kv_circular_log_init(struct kv_circular_log *self, struct kv_storage *stora
                           uint64_t tail);
 
 void kv_circular_log_iov(struct kv_circular_log *self, uint64_t offset, struct iovec *blocks, int iovcnt,
-                         kv_circular_log_io_cb cb, void *cb_arg, bool is_read);
+                         kv_circular_log_io_cb cb, void *cb_arg, enum kv_circular_log_operation operation);
 static inline void kv_circular_log_read(struct kv_circular_log *self, uint64_t offset, void *blocks, uint64_t n,
                                         kv_circular_log_io_cb cb, void *cb_arg) {
     struct iovec iov = {.iov_base = blocks, .iov_len = n};
-    kv_circular_log_iov(self, offset, &iov, 1, cb, cb_arg, true);
+    kv_circular_log_iov(self, offset, &iov, 1, cb, cb_arg, CIRCULAR_LOG_READ);
 }
 static inline void kv_circular_log_readv(struct kv_circular_log *self, uint64_t offset, struct iovec *blocks, int iovcnt,
                                          kv_circular_log_io_cb cb, void *cb_arg) {
-    kv_circular_log_iov(self, offset, blocks, iovcnt, cb, cb_arg, true);
+    kv_circular_log_iov(self, offset, blocks, iovcnt, cb, cb_arg, CIRCULAR_LOG_READ);
 }
 
-static inline void kv_circular_log_write(struct kv_circular_log *self, void *blocks, uint64_t n, kv_circular_log_io_cb cb,
-                                         void *cb_arg) {
+static inline void kv_circular_log_append(struct kv_circular_log *self, void *blocks, uint64_t n, kv_circular_log_io_cb cb,
+                                          void *cb_arg) {
     struct iovec iov = {.iov_base = blocks, .iov_len = n};
-    kv_circular_log_iov(self, self->tail, &iov, 1, cb, cb_arg, false);
+    kv_circular_log_iov(self, self->tail, &iov, 1, cb, cb_arg, CIRCULAR_LOG_APPEND);
 }
-static inline void kv_circular_log_writev(struct kv_circular_log *self, struct iovec *blocks, int iovcnt,
+static inline void kv_circular_log_appendv(struct kv_circular_log *self, struct iovec *blocks, int iovcnt,
+                                           kv_circular_log_io_cb cb, void *cb_arg) {
+    kv_circular_log_iov(self, self->tail, blocks, iovcnt, cb, cb_arg, CIRCULAR_LOG_APPEND);
+}
+
+static inline void kv_circular_log_write(struct kv_circular_log *self, uint64_t offset, void *blocks, uint64_t n,
+                                         kv_circular_log_io_cb cb, void *cb_arg) {
+    struct iovec iov = {.iov_base = blocks, .iov_len = n};
+    kv_circular_log_iov(self, offset, &iov, 1, cb, cb_arg, CIRCULAR_LOG_WRITE);
+}
+static inline void kv_circular_log_writev(struct kv_circular_log *self, uint64_t offset, struct iovec *blocks, int iovcnt,
                                           kv_circular_log_io_cb cb, void *cb_arg) {
-    kv_circular_log_iov(self, self->tail, blocks, iovcnt, cb, cb_arg, false);
+    kv_circular_log_iov(self, offset, blocks, iovcnt, cb, cb_arg, CIRCULAR_LOG_WRITE);
 }
 
 void kv_circular_log_fini(struct kv_circular_log *self);
