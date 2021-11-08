@@ -84,7 +84,7 @@ static void stop(void) {
     kv_storage_fini(&storage);
     kv_app_stop(0);
 }
-static void delete_test(bool success, void* arg){
+static void delete_test(bool success, void* arg) {
     struct io_buffer_t* io = arg;
     if (!success) fprintf(stderr, "delete fail. key hash: %lu\n", io->key.hash);
     if (!total_io) {
@@ -169,7 +169,7 @@ static void start(bool success, void* arg) {
 static void init(void* arg) {
     kv_storage_init(&storage, 0);
     uint32_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET;
-    uint64_t value_log_block_num = ALIGN(opt.value_size, storage.block_size) * opt.num_items + 10;
+    uint64_t value_log_block_num = opt.value_size * opt.num_items * 1.016 / storage.block_size;
     gettimeofday(&tv_start, NULL);
     kv_data_store_init(&data_store, &storage, 0, bucket_num, value_log_block_num, opt.compact_buf_len, start, NULL);
 }
@@ -177,7 +177,7 @@ int main(int argc, char** argv) {
 #ifdef NDEBUG
     printf("NDEBUG\n");
 #else
-    printf("!NDEBUG (low performance)\n");
+    printf("DEBUG (low performance)\n");
 #endif
     get_options(argc, argv);
     kv_app_start_single_task(opt.json_config_file, init, NULL);

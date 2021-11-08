@@ -21,7 +21,7 @@ static void test_cb(bool success, void *cb_arg) {
     switch (state) {
         case WRITE1:
             offset = kv_value_log_offset(&value_log);
-            kv_value_log_write(&value_log, buf + 3 * storage.block_size / 2, 5 * storage.block_size, test_cb, NULL);
+            kv_value_log_write(&value_log, 1, buf + 3 * storage.block_size / 2, 5 * storage.block_size, test_cb, NULL);
             state = READ0;
             break;
         case READ0:
@@ -45,12 +45,12 @@ static void test_cb(bool success, void *cb_arg) {
 }
 static void start(void *arg) {
     kv_storage_init(&storage, 0);
-    kv_value_log_init(&value_log, &storage, storage.block_size * storage.num_blocks / 3,
-                      storage.block_size * storage.num_blocks / 3, -1, 0);
+    kv_value_log_init(&value_log, &storage, NULL, storage.block_size * storage.num_blocks / 3,
+                      storage.block_size * storage.num_blocks / 3, 1);
     buf = kv_storage_blk_alloc(&storage, 10);
     for (uint32_t i = 0; i < 20; i++) sprintf(buf + i * storage.block_size / 2, "    %u. hello", i);
 
-    kv_value_log_write(&value_log, buf, 1.5 * storage.block_size, test_cb, NULL);
+    kv_value_log_write(&value_log, 0, buf, 1.5 * storage.block_size, test_cb, NULL);
 }
 
 int main(int argc, char **argv) { kv_app_start_single_task(argv[1], start, NULL); }

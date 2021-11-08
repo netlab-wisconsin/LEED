@@ -64,9 +64,8 @@ void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, 
                         uint32_t log_num_buckets, uint32_t compact_buf_len, kv_circular_log_io_cb cb, void *cb_arg);
 void kv_bucket_log_fini(struct kv_bucket_log *self);
 
-static inline void kv_bucket_log_read(struct kv_bucket_log *self, uint32_t offset, struct kv_bucket *buckets, uint32_t n,
-                                      kv_circular_log_io_cb cb, void *cb_arg) {
-    kv_circular_log_read(&self->log, offset, buckets, n, cb, cb_arg);
+static inline void kv_bucket_log_read(struct kv_bucket_log *self, uint32_t index, struct kv_bucket *buckets,  kv_circular_log_io_cb cb, void *cb_arg) {
+    kv_circular_log_read(&self->log, self->bucket_meta[index].bucket_offset, buckets, self->bucket_meta[index].chain_length, cb, cb_arg);
 }
 void kv_bucket_log_writev(struct kv_bucket_log *self, struct iovec *buckets, int iovcnt, kv_circular_log_io_cb cb,
                           void *cb_arg);

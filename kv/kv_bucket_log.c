@@ -195,7 +195,7 @@ static void compact(struct kv_bucket_log *self) {
     uint32_t offset = (self->log.head + self->compact.length) % self->log.size;
     // prefetch
     // TODO: using bit map
-    kv_bucket_log_read(self, offset, COMPACT_PREFETCH_BUF(self), self->compact.buf_len, compact_cb, self);
+    kv_circular_log_read(&self->log, offset, COMPACT_PREFETCH_BUF(self), self->compact.buf_len, compact_cb, self);
 }
 
 // --- writev ---
