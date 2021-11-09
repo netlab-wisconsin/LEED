@@ -8,7 +8,7 @@
 #include "kv_circular_log.h"
 #include "memery_operation.h"
 
-#define INIT_CON_IO_NUM 8
+#define INIT_CON_IO_NUM 32
 #define COMPACT_BUF(self) ((self)->compact.buffer[(self)->compact.i])
 #define COMPACT_PREFETCH_BUF(self) ((self)->compact.buffer[!(self)->compact.i])
 
@@ -81,7 +81,7 @@ void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, 
                         uint32_t log_num_buckets, uint32_t compact_buf_len, kv_circular_log_io_cb cb, void *cb_arg) {
     assert(storage->block_size == sizeof(struct kv_bucket));
     kv_memset(self, 0, sizeof(struct kv_bucket_log));
-    kv_circular_log_init(&self->log, storage, base, size, 0, 0);
+    kv_circular_log_init(&self->log, storage, base, size, 0, 0, compact_buf_len * 2 + 8);
     self->size = size << 1;
     self->compact.buf_len = compact_buf_len;
     self->bucket_num = 1U << log_num_buckets;
@@ -160,7 +160,11 @@ static void compact_cb(bool success, void *arg) {
             // verify_buckets(bucket, bucket->index, self->bucket_meta[bucket->index].chain_length);
             n += self->compact.iov[i].iov_len;
         }
-        kv_bucket_log_move_head(self, self->compact.length);
+        // kv_bucket_log_move_head(self, self->compact.length);
+        self->head = (self->head + self->compact.length) % self->size;
+        // self->log.head = (self->log.head + self->compact.length) % self->log.size;
+        kv_circular_log_move_head(&self->log, self->compact.length);
+
         self->compact.i = !self->compact.i;
         // printf("compression ratio: %lf\n", (double)n / self->compact.length);
     }
@@ -171,20 +175,30 @@ static void compact(struct kv_bucket_log *self) {
     self->compact.state.running = true;
     self->compact.iovcnt = 0;
     self->compact.length = self->compact.buf_len;
-    for (size_t i = 0; i < self->compact.buf_len; i += COMPACT_BUF(self)[i].chain_length) {
-        assert(COMPACT_BUF(self)[i].chain_index == 0);
+    struct kv_bucket *buckets, *buckets2;
+    struct iovec iov[2];
+    kv_circular_log_fetch(&self->log, 0, self->compact.buf_len, iov);
+    buckets = COMPACT_BUF(self);
+    buckets2 = iov->iov_base;
+
+    // for (size_t i = 0; i < self->compact.buf_len; i++) {
+    //     assert(COMPACT_BUF(self)[i].index == buckets[i].index);
+    // }
+    for (size_t i = 0; i < self->compact.buf_len; i += buckets[i].chain_length) {
+        assert(buckets[i].chain_index == 0);
         uint32_t bucket_offset = (self->log.head + i) % self->log.size;
-        struct kv_bucket_meta *meta = self->bucket_meta + COMPACT_BUF(self)[i].index;
-        if (COMPACT_BUF(self)[i].chain_length + i > self->compact.buf_len) {
+        struct kv_bucket_meta *meta = self->bucket_meta + buckets[i].index;
+        if (buckets[i].chain_length + i > self->compact.buf_len) {
             if (meta->bucket_offset == bucket_offset && !meta->lock)
                 self->compact.length = i;
             else
-                self->compact.length = COMPACT_BUF(self)[i].chain_length + i;
+                self->compact.length = buckets[i].chain_length + i;
             break;
         }
-        if (meta->bucket_offset == bucket_offset && bucket_lock_nowait(self, COMPACT_BUF(self)[i].index))
-            self->compact.iov[self->compact.iovcnt++] =
-                (struct iovec){COMPACT_BUF(self) + i, COMPACT_BUF(self)[i].chain_length};
+        // if bucket is locked -> wait for lock before commit
+        // else -> locked & move the bucket
+        if (meta->bucket_offset == bucket_offset && bucket_lock_nowait(self, buckets[i].index))
+            self->compact.iov[self->compact.iovcnt++] = (struct iovec){buckets + i, buckets[i].chain_length};
     }
     self->compact.state.io_cnt = 2;
     self->compact.offset = kv_bucket_log_offset(self);

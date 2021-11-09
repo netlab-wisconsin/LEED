@@ -45,7 +45,7 @@ static void test_cb(bool success, void *cb_arg) {
 }
 static void start(void *arg) {
     kv_storage_init(&storage, 0);
-    kv_circular_log_init(&circular_log, &storage, 1000, 20, 16, 16);
+    kv_circular_log_init(&circular_log, &storage, 1000, 20, 16, 16, 0);
     buf = kv_storage_blk_alloc(&storage, 10);
     for (uint32_t i = 0; i < 10; i++) sprintf(buf + i * storage.block_size, "%u. hello", i);
     kv_circular_log_append(&circular_log, buf, 1, test_cb, NULL);

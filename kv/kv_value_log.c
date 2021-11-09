@@ -57,20 +57,22 @@ void kv_value_log_init(struct kv_value_log *self, struct kv_storage *storage, st
     assert(!(base & self->blk_mask || size & self->blk_mask));
 
     uint64_t index_log_block_num = size / (KV_VALUE_LOG_UNIT_SIZE + sizeof(uint32_t)) / KV_INDEX_LOG_ENTRY_PER_BLOCK;
-    kv_circular_log_init(&self->index_log, storage, base >> self->blk_shift, index_log_block_num, 0, 0);
+    kv_circular_log_init(&self->index_log, storage, base >> self->blk_shift, index_log_block_num, 0, 0, 0);
     uint64_t units_per_block = storage->block_size / KV_VALUE_LOG_UNIT_SIZE;
     uint64_t block_num = index_log_block_num * KV_INDEX_LOG_ENTRY_PER_BLOCK / units_per_block;
-    kv_circular_log_init(&self->log, storage, self->index_log.base + self->index_log.size, block_num, 0, 0);
     for (size_t i = 0; i < 2; i++) {
-        self->append_buf[i] = kv_storage_blk_alloc(self->log.storage, append_buf_len);
+        self->append_buf[i] = kv_storage_blk_alloc(storage, append_buf_len);
         for (size_t j = 0; j < append_buf_len * KV_INDEX_LOG_ENTRY_PER_BLOCK; j++) self->append_buf[i][j] = UINT32_MAX;
     }
+
     self->bucket_log = bucket_log;
     self->buf_len = append_buf_len;
     self->compact.index_blk_num = 256;  // TODO: change this
     self->compact.index_buf = kv_storage_blk_alloc(storage, self->compact.index_blk_num);
     self->compact.val_buf_len = self->compact.index_blk_num * KV_INDEX_LOG_ENTRY_PER_BLOCK / units_per_block;
     self->compact.val_buf = kv_storage_blk_alloc(storage, self->compact.val_buf_len);
+    kv_circular_log_init(&self->log, storage, self->index_log.base + self->index_log.size, block_num, 0, 0,
+                         self->compact.val_buf_len * 2);
 }
 
 void kv_value_log_fini(struct kv_value_log *self) { kv_circular_log_fini(&self->log); }
@@ -263,5 +265,5 @@ void kv_value_log_write(struct kv_value_log *self, int32_t bucket_index, uint8_t
                         kv_circular_log_io_cb cb, void *cb_arg) {
     index_log_write(self, kv_value_log_offset(self), bucket_index);
     kv_circular_log_append(&self->log, value, align(self, value_length), cb, cb_arg);
-    compact(self);
+    // compact(self);
 }
