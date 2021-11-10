@@ -27,17 +27,6 @@ struct kv_bucket_meta {
     uint32_t bucket_offset;
 } __attribute__((packed));
 
-struct kv_bucket_log_compact {
-    struct kv_bucket *buffer[2];
-    struct iovec *iov;
-    uint32_t iovcnt;
-    uint32_t offset, length, buf_len, i;
-    struct {
-        uint32_t err : 1;
-        uint32_t running : 1;
-        uint32_t io_cnt : 30;
-    } state;
-};
 
 struct kv_bucket_log {
     struct kv_circular_log log;
@@ -46,13 +35,9 @@ struct kv_bucket_log {
     struct kv_bucket_meta *bucket_meta;
     uint32_t bucket_num;
     void *waiting_map;
-    struct kv_bucket_log_compact compact;
+    void *compact;
 };
 
-static inline void kv_bucket_log_move_head(struct kv_bucket_log *self, uint32_t n) {
-    self->head = (self->head + n) % self->size;
-    self->log.head = (self->log.head + n) % self->log.size;
-}
 
 static inline uint32_t kv_bucket_log_offset(struct kv_bucket_log *self) { return (uint32_t)self->log.tail; }
 

@@ -7,14 +7,15 @@
 #include "memery_operation.h"
 // --- init & fini ---
 void kv_circular_log_init(struct kv_circular_log *self, struct kv_storage *storage, uint64_t base, uint64_t size, uint64_t head,
-                          uint64_t tail, uint64_t fetch_len) {
+                          uint64_t tail, uint64_t fetch_buf_size, uint64_t fetch_len) {
     self->storage = storage;
     self->base = base;
     self->size = size;
     self->head = head;
     self->tail = tail;
     kv_memset(&self->fetch, 0, sizeof(self->fetch));
-    self->fetch.size = fetch_len + 1;
+    self->fetch.size = fetch_buf_size + 1;
+    self->fetch.fetch_len = fetch_len;
     self->fetch.buffer = kv_storage_blk_alloc(storage, self->fetch.size);
     self->fetch.valid = kv_malloc(self->fetch.size);
     kv_memset(self->fetch.valid, 0, self->fetch.size);
@@ -27,7 +28,6 @@ void kv_circular_log_fini(struct kv_circular_log *self) {
 
 // --- fetch ---
 #define FETCH_CON_IO 32
-#define FETCH_LEN 256
 
 static void copy_to_fetch_buf(struct kv_circular_log *self, struct iovec *blocks, int iovcnt) {
     struct kv_circular_log_fetch *fetch = &self->fetch;
@@ -39,43 +39,17 @@ static void copy_to_fetch_buf(struct kv_circular_log *self, struct iovec *blocks
         uint64_t block_size = self->storage->block_size;
         if (fetch->tail + len > fetch->size) {
             uint64_t len0 = fetch->size - fetch->tail;
-            kv_memcpy(fetch->buffer + fetch->tail, blocks[i].iov_base, len0 * block_size);
+            kv_memcpy(fetch->buffer + fetch->tail * block_size, blocks[i].iov_base, len0 * block_size);
             kv_memset(fetch->valid + fetch->tail, 1, len0);
             kv_memcpy(fetch->buffer, (uint8_t *)blocks[i].iov_base + len0 * block_size, (len - len0) * block_size);
             kv_memset(fetch->valid, 1, len - len0);
         } else {
-            kv_memcpy(fetch->buffer + fetch->tail, blocks[i].iov_base, len * block_size);
+            kv_memcpy(fetch->buffer + fetch->tail * block_size, blocks[i].iov_base, len * block_size);
             kv_memset(fetch->valid + fetch->tail, 1, len);
         }
         fetch->tail = (fetch->tail + len) % fetch->size;
     }
     fetch->tail1 = fetch->tail;
-    // if (kv_circular_log_length(self) >= 2 * self->fetch.buf_len) return;
-    // for (int i = 0; i < iovcnt; i++) {
-    //     uint8_t *buf = self->fetch.buf[self->fetch.tail0.i] + self->fetch.tail0.len * self->storage->block_size;
-    //     uint64_t len = self->fetch.buf_len - self->fetch.tail0.len;
-    //     if (len > blocks[i].iov_len) {
-    //         kv_memcpy(buf, blocks[i].iov_base, blocks[i].iov_len);
-    //         self->fetch.tail0.len += blocks[i].iov_len;
-    //     } else {
-    //         kv_memcpy(buf, blocks[i].iov_base, len);
-    //         if (self->fetch.tail0.i == self->fetch.buf_i) {
-    //             self->fetch.read_len[self->fetch.tail0.i] = self->fetch.buf_len;
-    //             self->fetch.tail0.i = !self->fetch.tail0.i;
-    //             uint8_t *src = (uint8_t *)blocks[i].iov_base + len * self->storage->block_size;
-    //             if (blocks[i].iov_len - len > self->fetch.buf_len) {
-    //                 kv_memcpy(self->fetch.buf[self->fetch.tail0.i], src, self->fetch.buf_len);
-    //             } else {
-    //                 self->fetch.tail0.len = blocks[i].iov_len - len;
-    //                 kv_memcpy(self->fetch.buf[self->fetch.tail0.i], src, self->fetch.tail0.len);
-    //                 continue;
-    //             }
-    //         }
-    //         self->fetch.tail0.len = self->fetch.buf_len;
-    //         break;
-    //     }
-    // }
-    // self->fetch.read_len[self->fetch.tail0.i] = self->fetch.tail0.len;
 }
 
 struct fetch_ctx {
@@ -90,7 +64,6 @@ static void _fetch(bool success, void *arg) {
     struct kv_circular_log *self = ctx->self;
     struct kv_circular_log_fetch *fetch = &self->fetch;
     if (success) {
-        // self->fetch.read_len[ctx->buf_i] += ctx->n;
         for (int i = 0; i < ctx->iovcnt; i++) {
             uint8_t *base = fetch->valid + ((uint8_t *)ctx->iov[i].iov_base - fetch->buffer) / self->storage->block_size;
             for (size_t j = 0; j < ctx->iov[i].iov_len; j++) base[j] = true;
@@ -110,7 +83,7 @@ static void _fetch(bool success, void *arg) {
         uint64_t remaining_len = fetch->size - 1 - len;
         ctx->offset = (self->head + len) % self->size;
         ctx->n = (self->size - ctx->offset + self->tail) % self->size;
-        ctx->n = ctx->n < FETCH_LEN ? ctx->n : FETCH_LEN;
+        ctx->n = ctx->n < fetch->fetch_len ? ctx->n : fetch->fetch_len;
         ctx->n = ctx->n < remaining_len ? ctx->n : remaining_len;
         if (ctx->n + fetch->tail1 > fetch->size) {
             ctx->iov[0].iov_base = fetch->buffer + fetch->tail1 * self->storage->block_size;
@@ -126,25 +99,6 @@ static void _fetch(bool success, void *arg) {
         kv_circular_log_readv(self, ctx->offset, ctx->iov, ctx->iovcnt, _fetch, ctx);
         fetch->tail1 = (fetch->tail1 + ctx->n) % fetch->size;
     }
-
-    // if (self->fetch.tail0.len == self->fetch.buf_len && self->fetch.tail0.i == self->fetch.buf_i) {
-    //     self->fetch.tail0.i = !self->fetch.tail0.i;
-    //     self->fetch.tail0.len = 0;
-    // }
-    // ctx->offset = (self->fetch.tail0.i != self->fetch.buf_i ? self->fetch.buf_len : 0) + self->fetch.tail0.len;
-    // if (self->fetch.tail0.len == self->fetch.buf_len || ctx->offset == kv_circular_log_length(self)) {
-    //     self->fetch.io_cnt--;
-    //     kv_free(ctx);
-    // } else {
-    //     ctx->buf_i = self->fetch.tail0.i;
-    //     ctx->offset = (self->head + ctx->offset) % self->size;
-    //     ctx->buf = self->fetch.buf[self->fetch.tail0.i] + self->fetch.tail0.len * self->storage->block_size;
-    //     ctx->n = (self->size - ctx->offset + self->tail) % self->size;
-    //     ctx->n = ctx->n < FETCH_LEN ? ctx->n : FETCH_LEN;
-    //     ctx->n = ctx->n < self->fetch.buf_len - self->fetch.tail0.len ? ctx->n : self->fetch.buf_len - self->fetch.tail0.len;
-    //     kv_circular_log_read(self, ctx->offset, ctx->buf, ctx->n, _fetch, ctx);
-    //     self->fetch.tail0.len += ctx->n;
-    // }
 }
 
 void kv_circular_log_move_head(struct kv_circular_log *self, uint64_t n) {
@@ -162,33 +116,24 @@ void kv_circular_log_move_head(struct kv_circular_log *self, uint64_t n) {
         _fetch(true, ctx);
         if (self->fetch.io_cnt != i) break;
     }
-
-    // assert(self->fetch.read_len[self->fetch.buf_i] == self->fetch.buf_len);
-    // self->head = (self->head + self->fetch.buf_len) % self->size;
-    // self->fetch.read_len[self->fetch.buf_i] = 0;
-    // self->fetch.buf_i = !self->fetch.buf_i;
-    // while (++self->fetch.io_cnt < FETCH_CON_IO) {
-    //     uint32_t i = self->fetch.io_cnt;
-    //     struct fetch_ctx *ctx = kv_malloc(sizeof(struct fetch_ctx));
-    //     kv_memset(ctx, 0, sizeof(struct fetch_ctx));
-    //     ctx->self = self;
-    //     _fetch(true, ctx);
-    //     if (self->fetch.io_cnt != i) break;
-    // }
 }
 
 // offset start from head
 void kv_circular_log_fetch(struct kv_circular_log *self, uint64_t offset, uint64_t n, struct iovec iov[2]) {
-    // assert(self->fetch.read_len[self->fetch.buf_i] == self->fetch.buf_len);  // TODO: maybe wait for fetch task to finish
-    // *blocks = self->fetch.buf[self->fetch.buf_i];
     struct kv_circular_log_fetch *fetch = &self->fetch;
     assert(offset < kv_circular_log_length(fetch));
     offset = (fetch->head + offset) % fetch->size;
     assert((fetch->size + fetch->tail - offset) % fetch->size >= n);
     iov[0].iov_base = fetch->buffer + offset * self->storage->block_size;
-    iov[0].iov_len = fetch->head + offset + n > fetch->size ? fetch->size - offset : n;
+    iov[0].iov_len = offset + n > fetch->size ? fetch->size - offset : n;
     iov[1].iov_base = fetch->buffer;
     iov[1].iov_len = n - iov[0].iov_len;
+}
+
+void kv_circular_log_fetch_one(struct kv_circular_log *self, uint64_t offset, void **buf) {
+    assert(offset < kv_circular_log_length(&self->fetch));
+    offset = (self->fetch.head + offset) % self->fetch.size;
+    *buf = self->fetch.buffer + offset * self->storage->block_size;
 }
 
 // --- iov ---

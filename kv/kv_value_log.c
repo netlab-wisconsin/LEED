@@ -57,7 +57,7 @@ void kv_value_log_init(struct kv_value_log *self, struct kv_storage *storage, st
     assert(!(base & self->blk_mask || size & self->blk_mask));
 
     uint64_t index_log_block_num = size / (KV_VALUE_LOG_UNIT_SIZE + sizeof(uint32_t)) / KV_INDEX_LOG_ENTRY_PER_BLOCK;
-    kv_circular_log_init(&self->index_log, storage, base >> self->blk_shift, index_log_block_num, 0, 0, 0);
+    kv_circular_log_init(&self->index_log, storage, base >> self->blk_shift, index_log_block_num, 0, 0, 0, 0);
     uint64_t units_per_block = storage->block_size / KV_VALUE_LOG_UNIT_SIZE;
     uint64_t block_num = index_log_block_num * KV_INDEX_LOG_ENTRY_PER_BLOCK / units_per_block;
     for (size_t i = 0; i < 2; i++) {
@@ -72,7 +72,7 @@ void kv_value_log_init(struct kv_value_log *self, struct kv_storage *storage, st
     self->compact.val_buf_len = self->compact.index_blk_num * KV_INDEX_LOG_ENTRY_PER_BLOCK / units_per_block;
     self->compact.val_buf = kv_storage_blk_alloc(storage, self->compact.val_buf_len);
     kv_circular_log_init(&self->log, storage, self->index_log.base + self->index_log.size, block_num, 0, 0,
-                         self->compact.val_buf_len * 2);
+                         self->compact.val_buf_len * 2, 256);
 }
 
 void kv_value_log_fini(struct kv_value_log *self) { kv_circular_log_fini(&self->log); }
