@@ -38,11 +38,11 @@ struct kv_bucket_log {
     struct kv_circular_log log;
     uint32_t size;
     uint32_t head, tail;
-    uint32_t compact_head;
+    uint32_t compact_head,compact_len;
     struct kv_bucket_meta *bucket_meta;
     uint32_t bucket_num;
     void *waiting_queue;
-    void *compact;
+    bool init;
 };
 
 typedef void (*kv_task_cb)(void *);
