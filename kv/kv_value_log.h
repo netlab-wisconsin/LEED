@@ -15,8 +15,9 @@ struct kv_value_log_compact {
     uint32_t *index_buf;
     struct iovec *iov;
     uint32_t iovcnt;
-    void *bucket_map, *current_bucket;
+    void *bucket_map, *map_tail;
     uint64_t val_buf_len;
+    uint64_t head,tail;
     uint64_t index_blk_num;
     uint32_t lock_cnt;
     struct {

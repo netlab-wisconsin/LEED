@@ -16,7 +16,7 @@ void kv_circular_log_init(struct kv_circular_log *self, struct kv_storage *stora
     kv_memset(&self->fetch, 0, sizeof(self->fetch));
     self->fetch.size = fetch_buf_size + 1;
     self->fetch.fetch_len = fetch_len;
-    self->fetch.buffer = kv_storage_blk_alloc(storage, self->fetch.size);
+    self->fetch.buffer = kv_storage_blk_alloc(storage, self->fetch.size + 1);
     self->fetch.valid = kv_malloc(self->fetch.size);
     kv_memset(self->fetch.valid, 0, self->fetch.size);
 }
@@ -120,6 +120,7 @@ void kv_circular_log_move_head(struct kv_circular_log *self, uint64_t n) {
 
 // offset start from head
 void kv_circular_log_fetch(struct kv_circular_log *self, uint64_t offset, uint64_t n, struct iovec iov[2]) {
+    offset = (self->size - self->head + offset) % self->size;
     struct kv_circular_log_fetch *fetch = &self->fetch;
     assert(offset < kv_circular_log_length(fetch));
     offset = (fetch->head + offset) % fetch->size;
@@ -131,6 +132,7 @@ void kv_circular_log_fetch(struct kv_circular_log *self, uint64_t offset, uint64
 }
 
 void kv_circular_log_fetch_one(struct kv_circular_log *self, uint64_t offset, void **buf) {
+    offset = (self->size - self->head + offset) % self->size;
     assert(offset < kv_circular_log_length(&self->fetch));
     offset = (self->fetch.head + offset) % self->fetch.size;
     *buf = self->fetch.buffer + offset * self->storage->block_size;

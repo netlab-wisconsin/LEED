@@ -66,6 +66,7 @@ struct io_buffer_t {
     } key;
     uint8_t* value;
     uint32_t value_length;
+    uint64_t index;
 };
 
 struct io_buffer_t* io_buffer;
@@ -86,7 +87,7 @@ static void stop(void) {
 }
 static void delete_test(bool success, void* arg) {
     struct io_buffer_t* io = arg;
-    if (!success) fprintf(stderr, "delete fail. key hash: %lu\n", io->key.hash);
+    if (!success) fprintf(stderr, "delete fail. key index: %lu\n", io->index);
     if (!total_io) {
         if (--concurrent_io == 0) {
             gettimeofday(&tv_end, NULL);
@@ -96,6 +97,7 @@ static void delete_test(bool success, void* arg) {
         return;
     }
     io->key.hash = index_to_key(--total_io);
+    io->index=total_io;
     kv_data_store_delete(&data_store, io->key.buf, 8, delete_test, arg);
 }
 
