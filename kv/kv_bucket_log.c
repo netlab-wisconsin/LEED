@@ -70,7 +70,7 @@ void kv_bucket_unlock(struct kv_bucket_log *self, struct kv_bucket_lock_entry **
 }
 
 // --- compact ---
-#define COMPACT_CIO_NUM 2
+#define COMPACT_CIO_NUM 4
 static void compact_move_head(struct kv_bucket_log *self) {
     struct kv_bucket *bucket;
     uint32_t i;

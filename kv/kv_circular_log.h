@@ -4,7 +4,6 @@
 
 #include "kv_storage.h"
 struct kv_circular_log_fetch {
-    uint32_t io_cnt;
     uint64_t fetch_len;
     uint64_t head, tail, tail1, size;
     uint8_t *buffer;

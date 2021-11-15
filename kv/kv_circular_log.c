@@ -76,15 +76,16 @@ static void _fetch(bool success, void *arg) {
         return;
     }
     uint64_t len = (fetch->size - fetch->head + fetch->tail1) % fetch->size;
-    if (len == fetch->size - 1 || kv_circular_log_length(fetch) == kv_circular_log_length(self)) {
-        fetch->io_cnt--;
+    uint64_t fetching_len = (fetch->size - fetch->tail + fetch->tail1) % fetch->size;
+    uint64_t remaining_len = fetch->size - 1 - len;
+    ctx->offset = (self->head + len) % self->size;
+    ctx->n = (self->size - ctx->offset + self->tail) % self->size;
+    ctx->n = ctx->n < fetch->fetch_len ? ctx->n : fetch->fetch_len;
+    ctx->n = ctx->n < remaining_len ? ctx->n : remaining_len;
+    if (ctx->n < fetch->fetch_len || kv_circular_log_length(fetch) == kv_circular_log_length(self) ||
+        fetching_len >= fetch->fetch_len * FETCH_CON_IO) {
         kv_free(ctx);
     } else {
-        uint64_t remaining_len = fetch->size - 1 - len;
-        ctx->offset = (self->head + len) % self->size;
-        ctx->n = (self->size - ctx->offset + self->tail) % self->size;
-        ctx->n = ctx->n < fetch->fetch_len ? ctx->n : fetch->fetch_len;
-        ctx->n = ctx->n < remaining_len ? ctx->n : remaining_len;
         if (ctx->n + fetch->tail1 > fetch->size) {
             ctx->iov[0].iov_base = fetch->buffer + fetch->tail1 * self->storage->block_size;
             ctx->iov[0].iov_len = fetch->size - fetch->tail1;
@@ -108,13 +109,13 @@ void kv_circular_log_move_head(struct kv_circular_log *self, uint64_t n) {
     for (size_t i = 0; i < n; i++) fetch->valid[(fetch->head + i) % fetch->size] = 0;
     fetch->head = (fetch->head + n) % fetch->size;
 
-    while (++self->fetch.io_cnt < FETCH_CON_IO) {
-        uint32_t i = self->fetch.io_cnt;
+    while (true) {
         struct fetch_ctx *ctx = kv_malloc(sizeof(struct fetch_ctx));
         kv_memset(ctx, 0, sizeof(struct fetch_ctx));
         ctx->self = self;
+        uint64_t tail1 = fetch->tail1;
         _fetch(true, ctx);
-        if (self->fetch.io_cnt != i) break;
+        if (tail1 == fetch->tail1) break;
     }
 }
 
