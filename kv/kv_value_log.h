@@ -25,6 +25,7 @@ struct kv_value_log_compact {
         uint32_t running : 1;
         uint32_t io_cnt : 30;
     } state;
+    struct kv_bucket_lock_entry *index_set;
 };
 
 struct kv_value_log {
@@ -32,9 +33,10 @@ struct kv_value_log {
     struct kv_circular_log index_log;
     struct kv_bucket_log *bucket_log;
     uint64_t head, blk_mask, blk_shift;
-    uint32_t *append_buf[2], buf_len;
-    uint8_t append_buf_i;
-    bool index_log_dump_running;
+    // uint32_t *append_buf[2], buf_len;
+    // uint8_t append_buf_i;
+    // bool index_log_dump_running;
+    uint32_t *index_buf,index_buf_len;
     struct kv_value_log_compact compact;
 };
 

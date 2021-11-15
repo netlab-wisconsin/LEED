@@ -273,7 +273,7 @@ void kv_data_store_set(struct kv_data_store *self, uint8_t *key, uint8_t key_len
     ctx->bucket_index = kv_data_store_bucket_index(self, key);
     ctx->index_set = NULL;
     kv_bucket_lock_add_index(&ctx->index_set, ctx->bucket_index);
-    kv_bucket_lock(&self->bucket_log, &ctx->index_set, set_lock_cb, ctx);
+    kv_bucket_lock(&self->bucket_log, ctx->index_set, set_lock_cb, ctx);
 }
 // --- get ---
 struct get_ctx {
@@ -384,5 +384,5 @@ void kv_data_store_delete(struct kv_data_store *self, uint8_t *key, uint8_t key_
     ctx->bucket_index = kv_data_store_bucket_index(self, key);
     ctx->index_set = NULL;
     kv_bucket_lock_add_index(&ctx->index_set, ctx->bucket_index);
-    kv_bucket_lock(&self->bucket_log, &ctx->index_set, delete_lock_cb, ctx);
+    kv_bucket_lock(&self->bucket_log, ctx->index_set, delete_lock_cb, ctx);
 }

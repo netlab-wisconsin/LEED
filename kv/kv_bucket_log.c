@@ -36,15 +36,15 @@ static inline void lock_flip(struct kv_bucket_log *self, struct kv_bucket_lock_e
         self->bucket_meta[entry->index].lock = ~self->bucket_meta[entry->index].lock;
 }
 
-void kv_bucket_lock(struct kv_bucket_log *self, struct kv_bucket_lock_entry **set, kv_task_cb cb, void *cb_arg) {
-    if (lockable(self, *set)) {
-        lock_flip(self, *set);
+void kv_bucket_lock(struct kv_bucket_log *self, struct kv_bucket_lock_entry *set, kv_task_cb cb, void *cb_arg) {
+    if (lockable(self, set)) {
+        lock_flip(self, set);
         if (cb) kv_app_send_msg(kv_app_get_thread(), cb, cb_arg);
     } else {
         struct bucket_lock_q_entry *q_entry = kv_malloc(sizeof(struct bucket_lock_q_entry));
         q_entry->cb = cb;
         q_entry->cb_arg = cb_arg;
-        q_entry->index_set = *set;
+        q_entry->index_set = set;
         TAILQ_INSERT_TAIL((struct bucket_lock_q_head *)self->waiting_queue, q_entry, entry);
     }
 }
@@ -159,7 +159,7 @@ static void compact(struct kv_bucket_log *self) {
             kv_bucket_lock_add_index(&ctx->index_set, bucket->index);
     }
     self->compact_head = (self->compact_head + ctx->len) % self->log.size;
-    kv_bucket_lock(self, &ctx->index_set, compact_lock_cb, ctx);
+    kv_bucket_lock(self, ctx->index_set, compact_lock_cb, ctx);
 }
 
 // --- init & fini ---

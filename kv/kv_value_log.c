@@ -48,7 +48,7 @@ void kv_value_log_read(struct kv_value_log *self, uint64_t offset, uint8_t *valu
 
 // --- init & fini ---
 void kv_value_log_init(struct kv_value_log *self, struct kv_storage *storage, struct kv_bucket_log *bucket_log, uint64_t base,
-                       uint64_t size, uint32_t append_buf_len) {
+                       uint64_t size, uint32_t index_buf_len) {
     kv_memset(self, 0, sizeof(struct kv_value_log));
     for (self->blk_shift = 0; !((storage->block_size >> self->blk_shift) & 1); ++self->blk_shift)
         ;
@@ -57,16 +57,16 @@ void kv_value_log_init(struct kv_value_log *self, struct kv_storage *storage, st
     assert(!(base & self->blk_mask || size & self->blk_mask));
 
     uint64_t index_log_block_num = size / (KV_VALUE_LOG_UNIT_SIZE + sizeof(uint32_t)) / KV_INDEX_LOG_ENTRY_PER_BLOCK;
-    kv_circular_log_init(&self->index_log, storage, base >> self->blk_shift, index_log_block_num, 0, 0, 0, 0);
+    kv_circular_log_init(&self->index_log, storage, base >> self->blk_shift, index_log_block_num, 0, 0, index_buf_len * 2,
+                         index_buf_len / 8);
     uint64_t units_per_block = storage->block_size / KV_VALUE_LOG_UNIT_SIZE;
     uint64_t block_num = index_log_block_num * KV_INDEX_LOG_ENTRY_PER_BLOCK / units_per_block;
-    for (size_t i = 0; i < 2; i++) {
-        self->append_buf[i] = kv_storage_blk_alloc(storage, append_buf_len);
-        for (size_t j = 0; j < append_buf_len * KV_INDEX_LOG_ENTRY_PER_BLOCK; j++) self->append_buf[i][j] = UINT32_MAX;
-    }
 
     self->bucket_log = bucket_log;
-    self->buf_len = append_buf_len;
+    self->index_buf_len = index_buf_len;
+    self->index_buf = kv_storage_blk_alloc(storage, self->index_buf_len);
+    kv_memset(self->index_buf, 0xFF, self->index_buf_len * storage->block_size);
+
     self->compact.index_blk_num = 256;  // TODO: change this
     self->compact.index_buf = kv_storage_blk_alloc(storage, self->compact.index_blk_num);
     self->compact.val_buf_len = self->compact.index_blk_num * KV_INDEX_LOG_ENTRY_PER_BLOCK / units_per_block;
@@ -75,43 +75,49 @@ void kv_value_log_init(struct kv_value_log *self, struct kv_storage *storage, st
                          self->compact.val_buf_len * 2, 256);
 }
 
-void kv_value_log_fini(struct kv_value_log *self) { kv_circular_log_fini(&self->log); }
+void kv_value_log_fini(struct kv_value_log *self) {
+    kv_storage_free(self->index_buf);
+    kv_storage_free(self->compact.val_buf);
+    kv_circular_log_fini(&self->log);
+}
 
 // --- index log write ---
 #define OFFSET_TO_BLOCK(offset) ((offset) >> (KV_INDEX_LOG_ENTRY_BIT + KV_VALUE_LOG_UNIT_SHIFT))
 #define OFFSET_TO_INDEX(offset) (((offset) >> KV_VALUE_LOG_UNIT_SHIFT) & KV_INDEX_LOG_ENTRY_MASK)
 
-#define BUF(self) ((self)->append_buf[(self)->append_buf_i])
-#define PREFETCH_BUF(self) ((self)->append_buf[!(self)->append_buf_i])
-
-static void dump_cb(bool success, void *arg) {
-    struct kv_value_log *self = arg;
-    struct kv_circular_log *index_log = &self->index_log;
+struct index_dump_ctx {
+    struct kv_value_log *self;
+    uint32_t *index_buf;
+    uint64_t offset;
+};
+static void index_dump_cb(bool success, void *arg) {
+    struct index_dump_ctx *ctx = arg;
+    struct kv_circular_log *index_log = &ctx->self->index_log;
     if (success) {
-        self->index_log_dump_running = false;
-        index_log->tail = (index_log->tail + self->buf_len) % index_log->size;
-        kv_memset(PREFETCH_BUF(self), 0xFF, self->buf_len * KV_INDEX_LOG_ENTRY_PER_BLOCK * sizeof(uint32_t));
+        kv_storage_free(ctx->index_buf);
+        kv_free(ctx);
     } else {
-        fprintf(stderr, "kv_index_log dump fail!");
-        kv_circular_log_write(index_log, index_log->tail, PREFETCH_BUF(self), self->buf_len, dump_cb, self);
+        fprintf(stderr, "kv_index_log dump fail, retrying ...\n");
+        kv_circular_log_write(index_log, ctx->offset, ctx->index_buf, ctx->self->index_buf_len, index_dump_cb, ctx);
     }
 }
 
 static void index_log_write(struct kv_value_log *self, uint64_t offset, uint32_t bucket_index) {
     struct kv_circular_log *index_log = &self->index_log;
     uint64_t blk_i = (index_log->size - index_log->tail + OFFSET_TO_BLOCK(offset)) % index_log->size;
-    if (self->index_log_dump_running) blk_i--;
-    assert(blk_i < 2 * self->buf_len);
+    assert(blk_i < 2 * self->index_buf_len);
     uint64_t i = OFFSET_TO_INDEX(offset);
-    if (blk_i < self->buf_len) {
-        BUF(self)[blk_i * KV_INDEX_LOG_ENTRY_PER_BLOCK + i] = bucket_index;
-    } else {
-        assert(!self->index_log_dump_running);  // TODO: may wait for dump task finish.
-        self->index_log_dump_running = true;
-        self->append_buf_i = !self->append_buf_i;
-        kv_circular_log_write(index_log, index_log->tail, PREFETCH_BUF(self), self->buf_len, dump_cb, self);
-        BUF(self)[(blk_i - 1) * KV_INDEX_LOG_ENTRY_PER_BLOCK + i] = bucket_index;
+    if (blk_i >= self->index_buf_len) {
+        struct index_dump_ctx *ctx = kv_malloc(sizeof(struct index_dump_ctx));
+        ctx->self = self;
+        ctx->index_buf = self->index_buf;
+        ctx->offset = index_log->tail;
+        kv_circular_log_append(index_log, ctx->index_buf, self->index_buf_len, index_dump_cb, ctx);
+        self->index_buf = kv_storage_blk_alloc(index_log->storage, self->index_buf_len);
+        kv_memset(self->index_buf, 0xFF, self->index_buf_len * index_log->storage->block_size);
+        blk_i -= self->index_buf_len;
     }
+    self->index_buf[blk_i * KV_INDEX_LOG_ENTRY_PER_BLOCK + i] = bucket_index;
 }
 // --- compact ---
 #define COMPACT_CON_IO 32
@@ -137,16 +143,23 @@ struct compact_write_ctx {
 };
 static void compact_write(bool success, void *arg) {
     struct compact_write_ctx *ctx = arg;
+    struct kv_value_log *self = ctx->self;
     assert(success);
     if (--ctx->iocnt == 0) {
         struct bucket_entry *x, *tmp;
+        struct kv_bucket_lock_entry *unlock_set = NULL, *lock_entry;
         HASH_ITER(hh, ctx->map, x, tmp) {
-            //kv_bucket_unlock(ctx->self->bucket_log, x->index);
+            HASH_FIND_INT(self->compact.index_set, &x->index, lock_entry);
+            assert(lock_entry);
+            HASH_DEL(self->compact.index_set, lock_entry);
+            HASH_ADD_INT(unlock_set, index, lock_entry);
+
             kv_bucket_get_meta(ctx->self->bucket_log, x->index)->bucket_offset = x->offset;
             HASH_DEL(ctx->map, x);
             kv_storage_free(x->buckets);
             kv_free(x);
         }
+        kv_bucket_unlock(self->bucket_log, &unlock_set);
         for (; ctx->index_head < ctx->index_tail; ++ctx->index_head) {
             ctx->self->compact.index_buf[ctx->index_head] = UINT32_MAX;
         }
@@ -265,14 +278,6 @@ struct read_bucket_ctx {
     struct bucket_entry *bucket;
 };
 
-static void compact_read_bucket_cb(bool success, void *arg);
-
-static void compact_lock_cb(void *arg) {
-    struct kv_value_log *self = ((struct read_bucket_ctx *)arg)->self;
-    struct bucket_entry *bucket = ((struct read_bucket_ctx *)arg)->bucket;
-    kv_bucket_log_read(self->bucket_log, bucket->index, bucket->buckets, compact_read_bucket_cb, arg);
-}
-
 static void compact_read_bucket_cb(bool success, void *arg) {
     struct read_bucket_ctx *ctx = arg;
     struct kv_value_log *self = ctx->self;
@@ -297,7 +302,13 @@ static void compact_read_bucket_cb(bool success, void *arg) {
         next_offset:;
         }
         if (STAILQ_EMPTY(&ctx->bucket->offsets)) {
-            //kv_bucket_unlock(self->bucket_log, ctx->bucket->index);
+            struct kv_bucket_lock_entry *unlock_set = NULL, *lock_entry;
+            HASH_FIND_INT(self->compact.index_set, &ctx->bucket->index, lock_entry);
+            assert(lock_entry);
+            HASH_DEL(self->compact.index_set, lock_entry);
+            HASH_ADD_INT(unlock_set, index, lock_entry);
+            kv_bucket_unlock(self->bucket_log, &unlock_set);
+
             kv_storage_free(buckets);
             HASH_DEL(*map, ctx->bucket);
             kv_storage_free(ctx->bucket->buckets);
@@ -317,7 +328,7 @@ static void compact_read_bucket_cb(bool success, void *arg) {
         ctx->bucket = *bucket;
         struct kv_bucket_meta *meta = kv_bucket_get_meta(self->bucket_log, ctx->bucket->index);
         ctx->bucket->buckets = kv_storage_blk_alloc(self->bucket_log->log.storage, meta->chain_length);
-        //kv_bucket_lock(self->bucket_log, ctx->bucket->index, compact_lock_cb, arg);
+        kv_bucket_log_read(self->bucket_log, ctx->bucket->index, ctx->bucket->buckets, compact_read_bucket_cb, arg);
         *bucket = (*bucket)->hh.next;
     } else {
         // sync all tasks
@@ -328,11 +339,24 @@ static void compact_read_bucket_cb(bool success, void *arg) {
         kv_free(ctx);
     }
 }
+static void compact_lock_cb(void *arg) {
+    struct kv_value_log *self = arg;
+    self->compact.map_tail = self->compact.bucket_map;
+    self->compact.tail = 0;
+    self->compact.head = 0;
+    self->compact.state.io_cnt = COMPACT_CON_IO;
+    for (size_t i = 0; i < COMPACT_CON_IO; i++) {
+        struct read_bucket_ctx *ctx = kv_malloc(sizeof(struct read_bucket_ctx));  // free!!
+        ctx->self = self;
+        ctx->bucket = NULL;
+        compact_read_bucket_cb(true, ctx);
+    }
+}
 
 static void compact_read_index_cb(bool success, void *arg) {
     struct kv_value_log *self = arg;
     assert(success);
-    --self->compact.state.io_cnt;
+    assert(self->compact.index_set == NULL);
     struct bucket_entry **map = (struct bucket_entry **)&self->compact.bucket_map;
     uint64_t offset_base = self->index_log.head << (KV_INDEX_LOG_ENTRY_BIT + KV_VALUE_LOG_UNIT_SHIFT);
     for (size_t i = 0; i < self->compact.index_blk_num * KV_INDEX_LOG_ENTRY_PER_BLOCK; i++) {
@@ -344,6 +368,7 @@ static void compact_read_index_cb(bool success, void *arg) {
                 entry->index = self->compact.index_buf[i];
                 STAILQ_INIT(&entry->offsets);
                 HASH_ADD_INT(*map, index, entry);
+                kv_bucket_lock_add_index(&self->compact.index_set, entry->index);
             }
             struct offset_list_entry *list_entry = kv_malloc(sizeof(struct offset_list_entry));
             list_entry->offset = (offset_base + (i << KV_VALUE_LOG_UNIT_SHIFT)) % (self->log.size << self->blk_shift);
@@ -351,34 +376,9 @@ static void compact_read_index_cb(bool success, void *arg) {
             STAILQ_INSERT_TAIL(&entry->offsets, list_entry, next);
         }
     }
-    self->compact.map_tail = self->compact.bucket_map;
-    self->compact.tail = 0;
-    self->compact.head = 0;
-    self->compact.state.io_cnt += COMPACT_CON_IO;
-    for (size_t i = 0; i < COMPACT_CON_IO; i++) {
-        struct read_bucket_ctx *ctx = kv_malloc(sizeof(struct read_bucket_ctx));  // free!!
-        ctx->self = self;
-        ctx->bucket = NULL;
-        compact_read_bucket_cb(true, ctx);
-    }
+    kv_bucket_lock(self->bucket_log, self->compact.index_set, compact_lock_cb, self);
 }
 
-// static void compact_read_value_cb(bool success, void *arg) {
-//     struct kv_value_log *self = arg;
-//     assert(success);
-//     uint64_t index = (self->compact.val_buf_head - self->compact.val_buf) >> self->blk_shift;
-//     if (index == self->compact.val_buf_len) {
-//         // sync all tasks
-//         if (--self->compact.state.io_cnt == 0) value_compact(self);
-//     } else {
-//         uint64_t offset = (self->log.head + index) % self->log.size;
-//         uint64_t remaining_len = self->compact.val_buf_len - index;
-//         uint64_t n = remaining_len < COMPACT_READ_LEN ? remaining_len : COMPACT_READ_LEN;
-//         kv_circular_log_read(&self->log, offset, self->compact.val_buf_head, n, compact_read_value_cb, self);
-//         self->compact.val_buf_head += n << self->blk_shift;
-//     }
-// }
-// value log prefetch
 // index log prefetch?
 
 /**
@@ -392,16 +392,12 @@ static void compact_read_index_cb(bool success, void *arg) {
 **/
 static void compact(struct kv_value_log *self) {
     if (self->compact.state.running || !self->bucket_log ||
-        kv_circular_log_empty_space(&self->log) << self->blk_shift >= self->compact.val_buf_len << 7)
+        kv_circular_log_empty_space(&self->log) >= self->compact.val_buf_len << 2)
         return;
     self->compact.state.running = true;
     assert(self->compact.state.io_cnt == 0);
-    self->compact.state.io_cnt++;
     kv_circular_log_read(&self->index_log, self->index_log.head, self->compact.index_buf, self->compact.index_blk_num,
                          compact_read_index_cb, self);
-    // self->compact.state.io_cnt += COMPACT_CON_IO;
-    // self->compact.val_buf_head = self->compact.val_buf;
-    // for (size_t i = 0; i < COMPACT_CON_IO; i++) compact_read_value_cb(true, self);
 }
 
 //--- write ---
@@ -409,5 +405,5 @@ void kv_value_log_write(struct kv_value_log *self, int32_t bucket_index, uint8_t
                         kv_circular_log_io_cb cb, void *cb_arg) {
     index_log_write(self, kv_value_log_offset(self), bucket_index);
     kv_circular_log_append(&self->log, value, align(self, value_length), cb, cb_arg);
-    //compact(self);
+    // compact(self);
 }

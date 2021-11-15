@@ -69,6 +69,6 @@ static inline void kv_bucket_log_write(struct kv_bucket_log *self, struct kv_buc
 }
 
 void kv_bucket_lock_add_index(struct kv_bucket_lock_entry **set, uint32_t index);
-void kv_bucket_lock(struct kv_bucket_log *self,struct kv_bucket_lock_entry **set, kv_task_cb cb, void *cb_arg);
+void kv_bucket_lock(struct kv_bucket_log *self,struct kv_bucket_lock_entry *set, kv_task_cb cb, void *cb_arg);
 void kv_bucket_unlock(struct kv_bucket_log *self, struct kv_bucket_lock_entry **set);
 #endif
