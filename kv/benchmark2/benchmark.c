@@ -1,4 +1,5 @@
 
+#include <assert.h>
 #include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,6 +11,7 @@
 #include "city.h"
 #include "timing.h"
 #define ALIGN(a, b) (((a) + (b)-1) / (b))
+#define VERIFY_VALUE
 struct {
     uint64_t num_items, read_num_items;
     uint32_t value_size;
@@ -97,7 +99,7 @@ static void delete_test(bool success, void* arg) {
         return;
     }
     io->key.hash = index_to_key(--total_io);
-    io->index=total_io;
+    io->index = total_io;
     kv_data_store_delete(&data_store, io->key.buf, 8, delete_test, arg);
 }
 
@@ -112,6 +114,12 @@ static void start_delete(void* arg) {
 static void get_test(bool success, void* arg) {
     struct io_buffer_t* io = arg;
     if (!success) fprintf(stderr, "get fail. key hash: %lu\n", io->key.hash);
+#ifdef VERIFY_VALUE
+    if (io->index != UINT32_MAX) {
+        assert(index_to_key(atoll(io->value)) == io->key.hash);
+    }
+    io->index = 0;
+#endif
     if (!total_io) {
         if (--concurrent_io == 0) {
             gettimeofday(&tv_end, NULL);
@@ -131,6 +139,7 @@ static void start_get(void* arg) {
     total_io = opt.read_num_items;
     gettimeofday(&tv_start, NULL);
     for (concurrent_io = 0; concurrent_io != opt.concurrent_io_num; ++concurrent_io) {
+        io_buffer[concurrent_io].index = UINT32_MAX;
         get_test(true, io_buffer + concurrent_io);
     }
 }
@@ -171,7 +180,7 @@ static void start(bool success, void* arg) {
 static void init(void* arg) {
     kv_storage_init(&storage, 0);
     uint32_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET;
-    uint64_t value_log_block_num = opt.value_size * opt.num_items * 1.016 / storage.block_size;
+    uint64_t value_log_block_num = opt.value_size * opt.num_items * 2.5 / storage.block_size;
     gettimeofday(&tv_start, NULL);
     kv_data_store_init(&data_store, &storage, 0, bucket_num, value_log_block_num, opt.compact_buf_len, start, NULL);
 }

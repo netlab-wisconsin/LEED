@@ -11,14 +11,14 @@
 #define KV_VALUE_LOG_UNIT_SIZE (1U << KV_VALUE_LOG_UNIT_SHIFT)
 #define KV_VALUE_LOG_UNIT_MASK (KV_VALUE_LOG_UNIT_SIZE - 1)
 struct kv_value_log_compact {
-    uint8_t *val_buf, *val_buf_head;
+    // uint8_t *val_buf, *val_buf_head;
     uint32_t *index_buf;
     struct iovec *iov;
     uint32_t iovcnt;
     void *bucket_map, *map_tail;
     uint64_t val_buf_len;
     uint64_t head,tail;
-    uint64_t index_blk_num;
+    // uint64_t index_blk_num;
     uint32_t lock_cnt;
     struct {
         uint32_t err : 1;
@@ -33,11 +33,8 @@ struct kv_value_log {
     struct kv_circular_log index_log;
     struct kv_bucket_log *bucket_log;
     uint64_t head, blk_mask, blk_shift;
-    // uint32_t *append_buf[2], buf_len;
-    // uint8_t append_buf_i;
-    // bool index_log_dump_running;
     uint32_t *index_buf,index_buf_len;
-    struct kv_value_log_compact compact;
+    uint64_t compact_head;
 };
 
 static inline uint64_t kv_value_log_offset(struct kv_value_log *self) { return self->log.tail << self->blk_shift; }
