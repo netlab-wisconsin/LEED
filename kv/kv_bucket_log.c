@@ -143,7 +143,7 @@ static void compact_lock_cb(void *arg) {
 }
 
 static void compact(struct kv_bucket_log *self) {
-    if (kv_circular_log_empty_space(&self->log) >= self->compact_len * COMPACT_CIO_NUM * 2) return;
+    if (kv_circular_log_empty_space(&self->log) >= self->compact_len * COMPACT_CIO_NUM * 4) return;
     if ((self->log.size - self->log.head + self->compact_head) % self->log.size > self->compact_len * COMPACT_CIO_NUM) return;
     struct compact_ctx *ctx = kv_malloc(sizeof(struct compact_ctx));
     ctx->self = self;
@@ -234,7 +234,7 @@ void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, 
                         uint32_t log_num_buckets, uint32_t compact_buf_len, kv_circular_log_io_cb cb, void *cb_arg) {
     assert(storage->block_size == sizeof(struct kv_bucket));
     kv_memset(self, 0, sizeof(struct kv_bucket_log));
-    kv_circular_log_init(&self->log, storage, base, size, 0, 0, compact_buf_len * COMPACT_CIO_NUM * 4, compact_buf_len/2);
+    kv_circular_log_init(&self->log, storage, base, size, 0, 0, compact_buf_len * COMPACT_CIO_NUM * 4, 256);
     self->size = size << 1;
     self->bucket_num = 1U << log_num_buckets;
     self->compact_len = compact_buf_len;

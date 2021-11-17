@@ -10,23 +10,6 @@
 #define KV_VALUE_LOG_UNIT_SHIFT (8)
 #define KV_VALUE_LOG_UNIT_SIZE (1U << KV_VALUE_LOG_UNIT_SHIFT)
 #define KV_VALUE_LOG_UNIT_MASK (KV_VALUE_LOG_UNIT_SIZE - 1)
-struct kv_value_log_compact {
-    // uint8_t *val_buf, *val_buf_head;
-    uint32_t *index_buf;
-    struct iovec *iov;
-    uint32_t iovcnt;
-    void *bucket_map, *map_tail;
-    uint64_t val_buf_len;
-    uint64_t head,tail;
-    // uint64_t index_blk_num;
-    uint32_t lock_cnt;
-    struct {
-        uint32_t err : 1;
-        uint32_t running : 1;
-        uint32_t io_cnt : 30;
-    } state;
-    struct kv_bucket_lock_entry *index_set;
-};
 
 struct kv_value_log {
     struct kv_circular_log log;
@@ -47,7 +30,7 @@ void kv_value_log_fini(struct kv_value_log *self);
 // To avoid unnecessary copy, value buffer size is at least value_length + block_size.
 void kv_value_log_write(struct kv_value_log *self, int32_t bucket_index, uint8_t *value, uint32_t value_length,
                         kv_circular_log_io_cb cb, void *cb_arg);
-// TODO: write vector
+                        
 void kv_value_log_read(struct kv_value_log *self, uint64_t offset, uint8_t *value, uint32_t value_length,
                        kv_circular_log_io_cb cb, void *cb_arg);
 #endif

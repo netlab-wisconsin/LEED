@@ -24,8 +24,8 @@ struct read_ctx {
 static void read_cb(bool success, void *cb_arg) {
     struct read_ctx *ctx = (struct read_ctx *)cb_arg;
     kv_memcpy(ctx->value, ctx->buf + ctx->buf_offset, ctx->len_in_buf);
+    if (ctx->cb) ctx->cb(success, ctx->cb_arg);
     kv_storage_free(ctx->buf);
-    if (ctx->cb) ctx->cb(success, cb_arg);
     kv_free(ctx);
 }
 
@@ -40,8 +40,13 @@ void kv_value_log_read(struct kv_value_log *self, uint64_t offset, uint8_t *valu
         ctx->buf_offset = offset & self->blk_mask;
         ctx->len_in_buf = self->log.storage->block_size - ctx->buf_offset;
         ctx->buf = kv_storage_blk_alloc(self->log.storage, 1);
-        struct iovec iov[2] = {{ctx->buf, 1}, {value + ctx->len_in_buf, align(self, value_length - ctx->len_in_buf)}};
-        kv_circular_log_readv(&self->log, offset >> self->blk_shift, iov, 2, read_cb, ctx);
+        if (value_length > ctx->len_in_buf) {
+            struct iovec iov[2] = {{ctx->buf, 1}, {value + ctx->len_in_buf, align(self, value_length - ctx->len_in_buf)}};
+            kv_circular_log_readv(&self->log, offset >> self->blk_shift, iov, 2, read_cb, ctx);
+        }else{
+            ctx->len_in_buf=value_length;
+            kv_circular_log_read(&self->log, offset >> self->blk_shift, ctx->buf, 1, read_cb, ctx);
+        }
     } else
         kv_circular_log_read(&self->log, offset >> self->blk_shift, value, align(self, value_length), cb, cb_arg);
 }
@@ -85,7 +90,8 @@ static void index_log_write(struct kv_value_log *self, uint64_t offset, uint32_t
     self->index_buf[blk_i * KV_INDEX_LOG_ENTRY_PER_BLOCK + i] = bucket_index;
 }
 // --- compact ---
-#define COMPACT_CON_IO 16U
+#define COMPACT_CON_IO 2U
+#define COMPACT_CON_READ 32U
 #define COMPACT_WRITE_LEN 256U
 
 struct offset_list_entry {
@@ -157,10 +163,11 @@ static void append_val_iov(struct kv_value_log *self, struct iovec *iov, uint32_
     if (tail) {
         uint8_t *dst = last_buf(self, iov, *cnt) + tail;
         uint64_t n = (1 << self->blk_shift) - tail;
+        //dst and src may overlap
         if (len <= n) {
-            kv_memcpy(dst, src, len);
+            kv_memmove(dst, src, len);
         } else {
-            kv_memcpy(dst, src, n);
+            kv_memmove(dst, src, n);
             iov[*cnt].iov_len = align(self, len - n);
             iov[(*cnt)++].iov_base = src + n;
         }
@@ -171,7 +178,7 @@ static void append_val_iov(struct kv_value_log *self, struct iovec *iov, uint32_
 }
 // value log compression have 2 restrictions:
 // value offset must be dword aligned
-// the spacing between 2 value is at least KV_VALUE_LOG_UNIT_SIZE
+// each KV_VALUE_LOG_UNIT only have one value offset point to it. 
 static void value_compact(struct compact_ctx *ctx) {
     struct kv_value_log *self = ctx->self;
 
@@ -260,7 +267,7 @@ static void compact_read_bucket_cb(bool success, void *arg) {
                         x->item = item;
                         goto next_offset;
                     }
-            // offset not finds
+            // offset not found
             STAILQ_REMOVE(&read_ctx->bucket->offsets, x, offset_list_entry, next);
             kv_free(x);
         next_offset:;
@@ -293,8 +300,8 @@ static void compact_read_bucket_cb(bool success, void *arg) {
 static void compact_lock_cb(void *arg) {
     struct compact_ctx *ctx = arg;
     ctx->map_tail = ctx->map;
-    ctx->iocnt = COMPACT_CON_IO;
-    for (size_t i = 0; i < COMPACT_CON_IO; i++) {
+    ctx->iocnt = COMPACT_CON_READ;
+    for (size_t i = 0; i < COMPACT_CON_READ; i++) {
         struct read_bucket_ctx *read_ctx = kv_malloc(sizeof(struct read_bucket_ctx));  // free!!
         read_ctx->ctx = ctx;
         read_ctx->bucket = NULL;
@@ -303,13 +310,12 @@ static void compact_lock_cb(void *arg) {
 }
 
 /**
-    read index log
-    covert index_buf to map<index, list<offset>>
-    concurrent lock -> read bucket log -> find item -> unlock if value is invalid
-    sync (256 buckets)
-    compact
-    concurrent write value log (update index log at the same time)
-    write bucket log
+    fetch index log covert index_buf to map<index, list<offset>>
+    lock all buckets
+    read bucket log -> find item -> unlock if value is invalid
+    sync & compact
+    write value log (update index log at the same time), write bucket log
+    move value log head pointer
 **/
 static void compact(struct kv_value_log *self) {
     if (!self->bucket_log || kv_circular_log_empty_space(&self->log) >= COMPACT_WRITE_LEN * COMPACT_CON_IO * 4) return;
@@ -344,7 +350,6 @@ static void compact(struct kv_value_log *self) {
             }
         self->compact_head = (self->compact_head + 1) % self->index_log.size;
     }
-    // ctx->compact_len = (self->index_log.size - ctx->compact_head + self->compact_head) % self->index_log.size;
     kv_bucket_lock(self->bucket_log, ctx->index_set, compact_lock_cb, ctx);
 }
 

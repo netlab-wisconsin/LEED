@@ -5,6 +5,7 @@
 //TODO: using SPDK
 
 #define kv_memcpy(dst,src,n) memcpy(dst,src,n)
+#define kv_memmove(dst,src,n) memmove(dst,src,n)
 #define kv_memcmp8(dst,src,n) memcmp(dst,src,n)
 #define kv_memset(s,c,n) memset(s,c,n)
 #define kv_malloc(size) malloc(size)

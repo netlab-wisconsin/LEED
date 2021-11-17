@@ -21,7 +21,7 @@ struct {
 
 } opt = {.num_items = 1024,
          .read_num_items = 512,
-         .compact_buf_len = 256,
+         .compact_buf_len = 512,
          .value_size = 1024,
          .concurrent_io_num = 32,
          .json_config_file = "config.json"};
@@ -115,7 +115,7 @@ static void get_test(bool success, void* arg) {
     struct io_buffer_t* io = arg;
     if (!success) fprintf(stderr, "get fail. key hash: %lu\n", io->key.hash);
 #ifdef VERIFY_VALUE
-    if (io->index != UINT32_MAX) {
+    else if (io->index != UINT32_MAX) {
         assert(index_to_key(atoll(io->value)) == io->key.hash);
     }
     io->index = 0;
@@ -158,6 +158,7 @@ static void fill_db(bool success, void* arg) {
     }
     io->key.hash = index_to_key(--total_io);
     sprintf(io->value, "%lu", total_io);
+    memcpy(io->value + 20, io->key.buf, 8);
     kv_data_store_set(&data_store, io->key.buf, 8, io->value, opt.value_size, fill_db, arg);
 }
 
@@ -180,7 +181,7 @@ static void start(bool success, void* arg) {
 static void init(void* arg) {
     kv_storage_init(&storage, 0);
     uint32_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET;
-    uint64_t value_log_block_num = opt.value_size * opt.num_items * 2.5 / storage.block_size;
+    uint64_t value_log_block_num = opt.value_size * opt.num_items * 1.5 / storage.block_size;
     gettimeofday(&tv_start, NULL);
     kv_data_store_init(&data_store, &storage, 0, bucket_num, value_log_block_num, opt.compact_buf_len, start, NULL);
 }
