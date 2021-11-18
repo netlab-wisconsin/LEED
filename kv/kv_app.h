@@ -13,7 +13,7 @@ struct kv_app_task {
     kv_app_func func;
     void *arg;
 };
-struct kv_app_t kv_app(void);
+const struct kv_app_t * kv_app(void);
 int kv_app_start(const char *json_config_file, uint32_t task_num, struct kv_app_task *tasks);
 static inline int kv_app_start_single_task(const char *json_config_file, kv_app_func func, void *arg){
     struct kv_app_task task = {func, arg};

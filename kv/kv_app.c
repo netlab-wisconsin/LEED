@@ -8,8 +8,8 @@
 #include "spdk/thread.h"
 
 static struct kv_app_t g_app;
-struct kv_app_t kv_app(void) {
-    return g_app;
+const struct kv_app_t * kv_app(void) {
+    return &g_app;
 }
 
 void kv_app_send_msg(const void *thread, kv_app_func func, void *arg) {
