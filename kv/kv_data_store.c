@@ -9,33 +9,24 @@
 
 // --- init & fini ---
 
-#define kv_data_store_bucket_index(self, key) (*(uint32_t *)(key)&self->buckets_mask)
+#define kv_data_store_bucket_index(self, key) (*(uint32_t *)(key) & ((self)->bucket_log.bucket_num - 1))
 static inline bool compare_keys(const uint8_t *key1, size_t key1_len, const uint8_t *key2, size_t key2_len) {
     return key1_len == key2_len && !kv_memcmp8(key1, key2, key1_len);
 }
 
 void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets,
                         uint64_t value_log_block_num, uint32_t compact_buf_len, kv_data_store_cb cb, void *cb_arg) {
-    kv_memset(self, 0, sizeof(struct kv_data_store));
     num_buckets = num_buckets > compact_buf_len << 4 ? num_buckets : compact_buf_len << 4;
-    size_t log_num_buckets = 0;
-    while (((size_t)1 << log_num_buckets) < num_buckets) log_num_buckets++;
-    assert(log_num_buckets <= 32);
-
-    self->buckets_mask = (1U << log_num_buckets) - 1;
-    num_buckets = 1U << (log_num_buckets + 1);
-    if (num_buckets + value_log_block_num > storage->num_blocks) {
-        fprintf(stderr, "kv_data_store_init: Not enough space.\n");
-        if (cb) cb(false, cb_arg);
-        return;
-    }
-
-    kv_bucket_log_init(&self->bucket_log, storage, base, num_buckets, log_num_buckets, compact_buf_len, cb, cb_arg);
-    kv_value_log_init(&self->value_log, storage, &self->bucket_log, (base + num_buckets) * storage->block_size,
+    kv_bucket_log_init(&self->bucket_log, storage, base, num_buckets, compact_buf_len, cb, cb_arg);
+    kv_value_log_init(&self->value_log, storage, &self->bucket_log, (base + self->bucket_log.log.size) * storage->block_size,
                       value_log_block_num * storage->block_size, compact_buf_len);
-    self->extra_bucket_num = num_buckets - self->bucket_log.bucket_num;
-    printf("bucket log size: %lf GB\n", ((double)num_buckets) * storage->block_size / (1 << 30));
-    printf("value log size: %lf GB\n", ((double)value_log_block_num) * storage->block_size / (1 << 30));
+    uint64_t value_log_size = self->value_log.log.size + self->value_log.index_log.size;
+    if (self->bucket_log.log.size + value_log_size > storage->num_blocks) {
+        fprintf(stderr, "kv_data_store_init: Not enough space.\n");
+        exit(-1);
+    }
+    printf("bucket log size: %lf GB\n", ((double)self->bucket_log.log.size) * storage->block_size / (1 << 30));
+    printf("value log size: %lf GB\n", ((double)value_log_size) * storage->block_size / (1 << 30));
 }
 
 void kv_data_store_fini(struct kv_data_store *self) {
@@ -126,8 +117,6 @@ static void find_item(struct kv_data_store *self, uint32_t bucket_index, uint8_t
 static bool alloc_extra_bucket(struct kv_data_store *self, struct kv_bucket *buckets) {
     uint8_t length = buckets->chain_length;
     if (length == 0x7F) return false;
-    if (self->allocated_bucket_num == self->extra_bucket_num) return false;  // almost impossible
-    self->allocated_bucket_num++;
     buckets[length].index = buckets->index;
     buckets[length].chain_index = length;
     length++;
@@ -136,7 +125,6 @@ static bool alloc_extra_bucket(struct kv_data_store *self, struct kv_bucket *buc
 }
 
 static void free_extra_bucket(struct kv_data_store *self, struct kv_bucket *buckets) {
-    self->allocated_bucket_num--;
     uint8_t chain_length = buckets->chain_length - 1;
     for (struct kv_bucket *bucket = buckets; bucket - buckets < chain_length; ++bucket) {
         bucket->chain_length = chain_length;
@@ -327,7 +315,7 @@ struct delete_ctx {
     kv_data_store_cb cb;
     void *cb_arg;
     uint32_t bucket_index;
-    struct kv_bucket_lock_entry * index_set;
+    struct kv_bucket_lock_entry *index_set;
     struct kv_bucket *buckets;
     uint32_t tail;
 };

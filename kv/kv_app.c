@@ -19,19 +19,14 @@ void *kv_app_get_thread(void) { return spdk_get_thread(); }
 
 static void app_start(void *arg) {
     struct kv_app_task *tasks = arg;
-    g_app.threads[0] = spdk_get_thread();
-    struct spdk_cpuset tmp_cpumask;
-    uint32_t i, j = 1, current_core = spdk_env_get_current_core();
-    SPDK_ENV_FOREACH_CORE(i) {
-        if (i != current_core) {
-            spdk_cpuset_zero(&tmp_cpumask);
-            spdk_cpuset_set_cpu(&tmp_cpumask, i, true);
-            g_app.threads[j++] = spdk_thread_create(NULL, &tmp_cpumask);
-        }
-    }
-    for (i = 0; i < g_app.task_num; ++i)
+    g_app.threads[0] = spdk_get_thread();    
+    for (uint32_t i = 0; i < g_app.task_num; ++i){
+        if(i==0) g_app.threads[i] = spdk_get_thread();
+        else g_app.threads[i] = spdk_thread_create(NULL,NULL);
         if (tasks[i].func) kv_app_send_msg(g_app.threads[i], tasks[i].func, tasks[i].arg);
+    }
 }
+
 int kv_app_start(const char *json_config_file, uint32_t task_num, struct kv_app_task *tasks) {
     assert(task_num >= 1 && task_num < sizeof(uint64_t));
     struct spdk_app_opts opts;

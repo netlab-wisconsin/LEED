@@ -38,6 +38,6 @@ C_SRCS := ../kv_app.c ../kv_storage.c ../kv_log.c ../kv_table.c ../kv_table_conc
 
 SPDK_LIB_LIST = $(ALL_MODULES_LIST)
 SPDK_LIB_LIST += $(EVENT_BDEV_SUBSYSTEM)
-SPDK_LIB_LIST += bdev_rpc bdev accel event thread util conf trace log jsonrpc json rpc sock notify
+SPDK_LIB_LIST += $(KV_BDEV_MODULES)
 
 include $(SPDK_ROOT_DIR)/mk/spdk.app.mk
