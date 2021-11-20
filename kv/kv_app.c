@@ -8,9 +8,7 @@
 #include "spdk/thread.h"
 
 static struct kv_app_t g_app;
-const struct kv_app_t * kv_app(void) {
-    return &g_app;
-}
+const struct kv_app_t *kv_app(void) { return &g_app; }
 
 void kv_app_send_msg(const void *thread, kv_app_func func, void *arg) {
     spdk_thread_send_msg((const struct spdk_thread *)thread, func, arg);
@@ -19,12 +17,20 @@ void *kv_app_get_thread(void) { return spdk_get_thread(); }
 
 static void app_start(void *arg) {
     struct kv_app_task *tasks = arg;
-    g_app.threads[0] = spdk_get_thread();    
-    for (uint32_t i = 0; i < g_app.task_num; ++i){
-        if(i==0) g_app.threads[i] = spdk_get_thread();
-        else g_app.threads[i] = spdk_thread_create(NULL,NULL);
-        if (tasks[i].func) kv_app_send_msg(g_app.threads[i], tasks[i].func, tasks[i].arg);
+    g_app.threads[0] = spdk_get_thread();
+    struct spdk_cpuset *tmp_cpumask = spdk_cpuset_alloc();
+    uint32_t i, j = 1, current_core = spdk_env_get_current_core();
+    SPDK_ENV_FOREACH_CORE(i) {
+        if (i != current_core) {
+            spdk_cpuset_zero(tmp_cpumask);
+            spdk_cpuset_set_cpu(tmp_cpumask, i, true);
+            g_app.threads[j++] = spdk_thread_create(NULL, tmp_cpumask);
+            if (j == g_app.task_num) break;
+        }
     }
+    spdk_cpuset_free(tmp_cpumask);
+    for (i = 0; i < g_app.task_num; ++i)
+        if (tasks[i].func) kv_app_send_msg(g_app.threads[i], tasks[i].func, tasks[i].arg);
 }
 
 int kv_app_start(const char *json_config_file, uint32_t task_num, struct kv_app_task *tasks) {
