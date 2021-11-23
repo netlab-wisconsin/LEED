@@ -90,8 +90,8 @@ static void index_log_write(struct kv_value_log *self, uint64_t offset, uint32_t
     self->index_buf[blk_i * KV_INDEX_LOG_ENTRY_PER_BLOCK + i] = bucket_index;
 }
 // --- compact ---
-#define COMPACT_CON_IO 2U
-#define COMPACT_CON_READ 32U
+#define COMPACT_CON_IO 4U
+#define COMPACT_CON_READ 64U
 #define COMPACT_WRITE_LEN 256U
 
 struct offset_list_entry {

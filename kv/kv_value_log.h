@@ -15,7 +15,7 @@ struct kv_value_log {
     struct kv_circular_log log;
     struct kv_circular_log index_log;
     struct kv_bucket_log *bucket_log;
-    uint64_t head, blk_mask, blk_shift;
+    uint64_t blk_mask, blk_shift;
     uint32_t *index_buf,index_buf_len;
     uint64_t compact_head;
 };

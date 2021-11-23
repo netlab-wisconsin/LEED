@@ -98,6 +98,7 @@ static void io_fini(bool success, void *arg) {
     struct io_buffer_t *io = arg;
     if (!success) {
         fprintf(stderr, "%s fail. key index: %lu\n", op_str[(int)state], io->index);
+        exit(-1);
     }
     kv_app_send_msg(kv_app()->threads[opt.ssd_num], test, arg);
 }
@@ -128,21 +129,21 @@ static void test_fini(void) {
             for (size_t i = 0; i < opt.concurrent_io_num; i++)
                 io_buffer[i].value = kv_storage_malloc(&workers[0].storage, opt.value_size + workers[0].storage.block_size);
             state = FILL;
-            total_io = opt.num_items;
+            total_io = opt.num_items * opt.ssd_num;
             break;
         case FILL:
-            printf("Write rate: %f\n", ((double)opt.num_items / timeval_diff(&tv_start, &tv_end)));
+            printf("Write rate: %f\n", ((double)opt.num_items * opt.ssd_num / timeval_diff(&tv_start, &tv_end)));
             puts("db created successfully.");
             state = READ;
-            total_io = opt.read_num_items;
+            total_io = opt.read_num_items * opt.ssd_num;
             break;
         case READ:
-            printf("Query rate: %f\n", ((double)opt.read_num_items / timeval_diff(&tv_start, &tv_end)));
+            printf("Query rate: %f\n", ((double)opt.read_num_items * opt.ssd_num / timeval_diff(&tv_start, &tv_end)));
             state = CLEAR;
-            total_io = opt.num_items;
+            total_io = opt.num_items * opt.ssd_num;
             break;
         case CLEAR:
-            printf("Clear rate: %f\n", ((double)opt.num_items / timeval_diff(&tv_start, &tv_end)));
+            printf("Clear rate: %f\n", ((double)opt.num_items * opt.ssd_num / timeval_diff(&tv_start, &tv_end)));
             stop();
             return;
     }
@@ -167,7 +168,7 @@ static void test(void *arg) {
             break;
         case READ:
             --total_io;
-            io->index = random() % opt.num_items;
+            io->index = random() % (opt.num_items * opt.ssd_num);
             break;
         case CLEAR:
             io->index = --total_io;
@@ -192,7 +193,7 @@ static void worker_init(void *arg) {
     struct worker *self = arg;
     kv_storage_init(&self->storage, self - workers);
     uint32_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET;
-    uint64_t value_log_block_num = opt.value_size * opt.num_items * 1.05 / self->storage.block_size;
+    uint64_t value_log_block_num = opt.value_size * opt.num_items * 1.4 / self->storage.block_size;
     kv_data_store_init(&self->data_store, &self->storage, 0, bucket_num, value_log_block_num, 512, send_init_done_msg, NULL);
 }
 
