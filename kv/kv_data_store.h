@@ -7,6 +7,8 @@
 struct kv_data_store {
     struct kv_bucket_log bucket_log;
     struct kv_value_log value_log;
+    uint32_t q_size,q_max;
+    void *q;
 };
 
 typedef kv_storage_io_cb kv_data_store_cb;
