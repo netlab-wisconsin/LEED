@@ -12,6 +12,7 @@
 #include "spdk/env.h"
 #include "spdk/thread.h"
 
+#define TIMEOUT_IN_MS (500U)
 const int BUFFER_SIZE = 1024;
 
 #define TEST_NZ(x)                                      \
@@ -40,9 +41,10 @@ struct connection {
 };
 
 struct kv_rdma {
-    struct rdma_cm_id *listener;
+    struct rdma_cm_id *cm_id;
     struct rdma_event_channel *ec;
     struct context *ctx;
+    bool is_server;
 };
 void *kv_rdma_alloc(void) {
     struct kv_rdma *self = kv_malloc(sizeof(struct kv_rdma));
@@ -97,9 +99,7 @@ static int register_memory(struct connection *conn) {
     TEST_Z(conn->recv_mr = ibv_reg_mr(conn->pd, conn->recv_region, BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE));
     return 0;
 }
-
-static int on_connect_request(struct kv_rdma *self, struct rdma_cm_event *event) {
-    printf("received connection request.\n");
+static int create_connetion(struct kv_rdma *self, struct rdma_cm_event *event) {
     // --- build context ---
     if (self->ctx == NULL) {
         self->ctx = (struct context *)malloc(sizeof(struct context));
@@ -124,7 +124,6 @@ static int on_connect_request(struct kv_rdma *self, struct rdma_cm_event *event)
     qp_attr.cap.max_recv_sge = 1;
     TEST_NZ(rdma_create_qp(event->id, self->ctx->pd, &qp_attr));
 
-    struct rdma_conn_param cm_params;
     struct connection *conn;
     event->id->context = conn = (struct connection *)malloc(sizeof(struct connection));
     conn->qp = event->id->qp;
@@ -132,18 +131,40 @@ static int on_connect_request(struct kv_rdma *self, struct rdma_cm_event *event)
 
     TEST_NZ(register_memory(conn));
     TEST_NZ(post_receives(conn));
-
-    memset(&cm_params, 0, sizeof(cm_params));
-    TEST_NZ(rdma_accept(event->id, &cm_params));
-
     return 0;
 }
-static int on_connection(void *context) {
+
+static int on_connect_request(struct kv_rdma *self, struct rdma_cm_event *event) {
+    printf("received connection request.\n");
+    TEST_NZ(create_connetion(self, event));
+    struct rdma_conn_param cm_params;
+    memset(&cm_params, 0, sizeof(cm_params));
+    TEST_NZ(rdma_accept(event->id, &cm_params));
+    return 0;
+}
+
+static int on_addr_resolved(struct kv_rdma *self, struct rdma_cm_event *event) {
+    printf("address resolved.\n");
+    TEST_NZ(create_connetion(self, event));
+    TEST_NZ(rdma_resolve_route(event->id, TIMEOUT_IN_MS));
+    return 0;
+}
+
+int on_route_resolved(struct rdma_cm_id *id) {
+    printf("route resolved.\n");
+    struct rdma_conn_param cm_params;
+    memset(&cm_params, 0, sizeof(cm_params));
+    TEST_NZ(rdma_connect(id, &cm_params));
+    return 0;
+}
+
+static int on_connection(struct kv_rdma *self, void *context) {
     struct connection *conn = (struct connection *)context;
     struct ibv_send_wr wr, *bad_wr = NULL;
     struct ibv_sge sge;
 
-    snprintf(conn->send_region, BUFFER_SIZE, "message from passive/server side with pid %d", getpid());
+    static const char *client_or_server[] = {"active/client", "passive/server"};
+    snprintf(conn->send_region, BUFFER_SIZE, "message from %s side with pid %d", client_or_server[self->is_server], getpid());
 
     printf("connected. posting send...\n");
 
@@ -182,6 +203,7 @@ static int on_disconnect(struct rdma_cm_id *id) {
 
     return 0;
 }
+
 static int kv_rdma_cm_poller(void *_self) {
     struct rdma_cm_event *event = NULL;
     struct kv_rdma *self = _self;
@@ -191,11 +213,20 @@ static int kv_rdma_cm_poller(void *_self) {
         memcpy(&event_copy, event, sizeof(*event));
         rdma_ack_cm_event(event);
         switch (event_copy.event) {
+            case RDMA_CM_EVENT_ADDR_RESOLVED:
+                assert(!self->is_server);
+                TEST_NZ(on_addr_resolved(self, &event_copy));
+                break;
+            case RDMA_CM_EVENT_ROUTE_RESOLVED:
+                assert(!self->is_server);
+                TEST_NZ(on_route_resolved(event_copy.id));
+                break;
             case RDMA_CM_EVENT_CONNECT_REQUEST:
+                assert(self->is_server);
                 TEST_NZ(on_connect_request(self, &event_copy));
                 break;
             case RDMA_CM_EVENT_ESTABLISHED:
-                on_connection(event_copy.id->context);
+                on_connection(self, event_copy.id->context);
                 break;
             case RDMA_CM_EVENT_DISCONNECTED:
                 on_disconnect(event_copy.id);
@@ -209,17 +240,38 @@ static int kv_rdma_cm_poller(void *_self) {
 
 int kv_rdma_listen(void *_self, char *addr_str, char *port_str) {
     struct kv_rdma *self = _self;
+    self->is_server = true;
     struct addrinfo *addr;
     TEST_NZ(getaddrinfo(addr_str, port_str, NULL, &addr));
     TEST_Z(self->ec = rdma_create_event_channel());
     int flag = fcntl(self->ec->fd, F_GETFL);
     TEST_NZ(fcntl(self->ec->fd, F_SETFL, flag | O_NONBLOCK));
-    TEST_NZ(rdma_create_id(self->ec, &self->listener, NULL, RDMA_PS_TCP));
-    TEST_NZ(rdma_bind_addr(self->listener, addr->ai_addr));
-    TEST_NZ(rdma_listen(self->listener, 10)); /* backlog=10 is arbitrary */
+    TEST_NZ(rdma_create_id(self->ec, &self->cm_id, NULL, RDMA_PS_TCP));
+    TEST_NZ(rdma_bind_addr(self->cm_id, addr->ai_addr));
+    TEST_NZ(rdma_listen(self->cm_id, 10)); /* backlog=10 is arbitrary */
     freeaddrinfo(addr);
     self->ctx = NULL;
     printf("kv rdma listening on %s %s.\n", addr_str, port_str);
     spdk_poller_register(kv_rdma_cm_poller, self, 1);
     return 0;
+}
+
+int kv_rdma_connect(void *_self, char *addr_str, char *port_str) {
+    struct kv_rdma *self = _self;
+    self->is_server = false;
+    struct addrinfo *addr;
+    TEST_NZ(getaddrinfo(addr_str, port_str, NULL, &addr));
+    TEST_Z(self->ec = rdma_create_event_channel());
+    int flag = fcntl(self->ec->fd, F_GETFL);
+    TEST_NZ(fcntl(self->ec->fd, F_SETFL, flag | O_NONBLOCK));
+    TEST_NZ(rdma_create_id(self->ec, &self->cm_id, NULL, RDMA_PS_TCP));
+    TEST_NZ(rdma_resolve_addr(&self->cm_id, NULL, addr->ai_addr, TIMEOUT_IN_MS));
+    freeaddrinfo(addr);
+    self->ctx = NULL;
+    spdk_poller_register(kv_rdma_cm_poller, self, 1);
+    return 0;
+}
+
+int kv_rdma_disconnect(struct rdma_cm_id *id){
+    rdma_disconnect(id);
 }
