@@ -1,6 +1,4 @@
 #
-#  BSD LICENSE
-#
 #  Copyright (c) Intel Corporation.
 #  All rights reserved.
 #
@@ -31,27 +29,15 @@
 #  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../..)
+SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
+include $(SPDK_ROOT_DIR)/mk/spdk.modules.mk
 
-DIRS-y = test_storage
-DIRS-y += test_kv_log
-DIRS-y += test_kv_table
-DIRS-y += benchmark
-DIRS-y += test_kv_value_log
-DIRS-y += test_kv_circular_log
-DIRS-y += test_kv_data_store
-DIRS-y += benchmark2
-DIRS-y += benchmark3
-DIRS-y += test_kv_rdma
-DIRS-y += test_kv_app
+APP = test_kv_app
+C_SRCS := ../kv_app.c kv_app_test.c
 
-.PHONY: all clean $(DIRS-y)
+SPDK_LIB_LIST = $(ALL_MODULES_LIST)
+SPDK_LIB_LIST += $(EVENT_BDEV_SUBSYSTEM)
+SPDK_LIB_LIST += $(KV_BDEV_MODULES)
 
-all: $(DIRS-y)
-	@:
-
-clean: $(DIRS-y)
-	@:
-
-include $(SPDK_ROOT_DIR)/mk/spdk.subdirs.mk
+include $(SPDK_ROOT_DIR)/mk/spdk.app.mk
