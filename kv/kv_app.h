@@ -4,10 +4,11 @@
 #include <stdint.h>
 #include <unistd.h>
 typedef void (*kv_app_func)(void *ctx);
+#define MAX_TASKS_NUM 63
 struct kv_app_t {
     uint32_t task_num;
     uint64_t running_thread;
-    void **threads;
+    void *threads[MAX_TASKS_NUM];
 };
 struct kv_app_task {
     kv_app_func func;
@@ -20,6 +21,7 @@ static inline int kv_app_start_single_task(const char *json_config_file, kv_app_
     return kv_app_start(json_config_file, 1, &task);
 }
 void kv_app_stop(int rc);
+void kv_app_send(uint32_t index, kv_app_func func, void *arg);
 void kv_app_send_msg(const void * thread, kv_app_func func, void *arg);
 void * kv_app_get_thread(void);
 #endif

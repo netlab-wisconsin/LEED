@@ -8,7 +8,7 @@ static void msg_sender(void *arg) {
         kv_app_stop(0);
     } else {
         uint64_t next = (self - msg_num + 1) % TASK_NUM;
-        kv_app_send_msg(kv_app()->threads[next], msg_sender, msg_num + next);
+        kv_app_send(next, msg_sender, msg_num + next);
     }
 }
 
