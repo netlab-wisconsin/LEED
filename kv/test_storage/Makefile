@@ -34,6 +34,7 @@ include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 include $(SPDK_ROOT_DIR)/mk/spdk.modules.mk
 
 APP = test_storage
+SYS_LIBS += -lconcurrentqueue
 C_SRCS := ../kv_app.c ../kv_storage.c storage_test.c
 
 SPDK_LIB_LIST = $(ALL_MODULES_LIST)

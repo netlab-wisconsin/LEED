@@ -34,6 +34,7 @@ include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 include $(SPDK_ROOT_DIR)/mk/spdk.modules.mk
 
 APP = kv_benchmark
+SYS_LIBS += -lconcurrentqueue
 C_SRCS := ../kv_app.c ../kv_storage.c ../kv_log.c ../kv_table.c ../kv_table_concurrent.c city.c timing.c benchmark.c
 
 SPDK_LIB_LIST = $(ALL_MODULES_LIST)

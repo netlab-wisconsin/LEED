@@ -44,7 +44,7 @@ DIRS-y += test_kv_data_store
 DIRS-y += benchmark2
 DIRS-y += benchmark3
 DIRS-y += test_kv_rdma
-DIRS-y += test_kv_app
+DIRS-y = test_kv_app
 
 .PHONY: all clean $(DIRS-y)
 
