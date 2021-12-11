@@ -89,7 +89,7 @@ static void worker_stop(void *arg) {
 static void stop(void) {
     for (size_t i = 0; i < opt.concurrent_io_num; i++) kv_storage_free(io_buffer[i].value);
     free(io_buffer);
-    for (size_t i = 0; i < opt.ssd_num; i++) kv_app_send_msg(kv_app()->threads[i], worker_stop, workers + i);
+    for (size_t i = 0; i < opt.ssd_num; i++) kv_app_send(i, worker_stop, workers + i);
     kv_app_stop(0);
 }
 
@@ -100,7 +100,7 @@ static void io_fini(bool success, void *arg) {
         fprintf(stderr, "%s fail. key index: %lu\n", op_str[(int)state], io->index);
         exit(-1);
     }
-    kv_app_send_msg(kv_app()->threads[opt.ssd_num], test, arg);
+    kv_app_send(opt.ssd_num, test, arg);
 }
 
 static void io_start(void *arg) {
@@ -178,7 +178,7 @@ static void test(void *arg) {
     }
     io->key.hash = index_to_key(io->index);
     io->worker_id = io->key.hash.second % opt.ssd_num;
-    kv_app_send_msg(kv_app()->threads[io->worker_id], io_start, arg);
+    kv_app_send(io->worker_id, io_start, arg);
 }
 
 static void send_init_done_msg(bool success, void *arg) {
@@ -186,7 +186,7 @@ static void send_init_done_msg(bool success, void *arg) {
         fprintf(stderr, "init fail!\n");
         exit(-1);
     }
-    kv_app_send_msg(kv_app()->threads[opt.ssd_num], test, arg);
+    kv_app_send(opt.ssd_num, test, arg);
 }
 
 static void worker_init(void *arg) {
