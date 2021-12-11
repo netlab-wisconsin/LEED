@@ -1,2 +1,0 @@
-/usr/local/lib/libconcurrentqueue.so
-/usr/local/include/concurrentqueue.h
