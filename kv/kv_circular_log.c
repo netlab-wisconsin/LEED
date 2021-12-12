@@ -13,6 +13,7 @@ void kv_circular_log_init(struct kv_circular_log *self, struct kv_storage *stora
     self->size = size;
     self->head = head;
     self->tail = tail;
+    self->thread_index = kv_app_get_thread_index();
     kv_memset(&self->fetch, 0, sizeof(self->fetch));
     self->fetch.size = fetch_buf_size + 1;
     self->fetch.fetch_len = fetch_len;
@@ -201,7 +202,7 @@ void kv_circular_log_iov(struct kv_circular_log *self, uint64_t offset, struct i
             if (kv_circular_log_empty_space(self) < n) {
                 fprintf(stderr, "kv_circular_log_append: No more space!\n");
                 ctx->io_cnt = 1;
-                kv_app_send_msg(kv_app_get_thread(), iov_fail_cb, ctx);
+                kv_app_send(self->thread_index, iov_fail_cb, ctx);
                 return;
             }
             copy_to_fetch_buf(self, blocks, iovcnt);

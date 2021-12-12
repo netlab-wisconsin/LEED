@@ -39,7 +39,7 @@ static inline void lock_flip(struct kv_bucket_log *self, struct kv_bucket_lock_e
 void kv_bucket_lock(struct kv_bucket_log *self, struct kv_bucket_lock_entry *set, kv_task_cb cb, void *cb_arg) {
     if (lockable(self, set)) {
         lock_flip(self, set);
-        if (cb) kv_app_send_msg(kv_app_get_thread(), cb, cb_arg);
+        if (cb) kv_app_send(self->log.thread_index, cb, cb_arg);
     } else {
         struct bucket_lock_q_entry *q_entry = kv_malloc(sizeof(struct bucket_lock_q_entry));
         q_entry->cb = cb;
@@ -60,7 +60,7 @@ void kv_bucket_unlock(struct kv_bucket_log *self, struct kv_bucket_lock_entry **
         }
         if (q_entry) {
             lock_flip(self, q_entry->index_set);
-            if (q_entry->cb) kv_app_send_msg(kv_app_get_thread(), q_entry->cb, q_entry->cb_arg);
+            if (q_entry->cb) kv_app_send(self->log.thread_index, q_entry->cb, q_entry->cb_arg);
             TAILQ_REMOVE(queue, q_entry, entry);
             kv_free(q_entry);
         }

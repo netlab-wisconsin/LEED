@@ -13,11 +13,22 @@ pthread_mutex_t g_lock;
 static struct kv_app_t g_app;
 
 struct thread_data {
+    struct spdk_thread *thread;
     MoodycamelCQHandle cq;
     struct spdk_poller *poller;
 } g_threads[MAX_TASKS_NUM];
 
 const struct kv_app_t *kv_app(void) { return &g_app; }
+
+void kv_app_send_msg(uint32_t index, kv_app_func func, void *arg) { spdk_thread_send_msg(g_threads[index].thread, func, arg); }
+
+uint32_t kv_app_get_thread_index(void) {
+    const struct spdk_thread *thread = spdk_get_thread();
+    uint32_t index;
+    for (index = 0; g_threads[index].thread != thread; ++index)
+        ;
+    return index;
+}
 
 void kv_app_send(uint32_t index, kv_app_func func, void *arg) {
     struct kv_app_task *msg = kv_malloc(sizeof(struct kv_app_task));
@@ -39,30 +50,27 @@ static int msg_poller(void *arg) {
     return 0;
 }
 
-void kv_app_send_msg(const void *thread, kv_app_func func, void *arg) {
-    spdk_thread_send_msg((const struct spdk_thread *)thread, func, arg);
-}
-void *kv_app_get_thread(void) { return spdk_get_thread(); }
-
 static void app_start(void *arg) {
     struct kv_app_task *tasks = arg;
     for (uint32_t i = 0; i < g_app.task_num; ++i)
         if (tasks[i].func) kv_app_send(i, tasks[i].func, tasks[i].arg);
 }
+static inline void thread_init(uint32_t index) {
+    g_threads[index].thread = spdk_get_thread();
+    moodycamel_cq_create(&g_threads[index].cq);
+    g_threads[index].poller = spdk_poller_register(msg_poller, g_threads + index, 0);
+}
+
 static void register_func(void *arg) {
     struct spdk_thread *thread = spdk_get_thread();
     puts(spdk_thread_get_name(thread));
     uint32_t index;
     if (sscanf(spdk_thread_get_name(thread), "reactor_%u", &index) == 1) {
-        g_app.threads[index] = thread;
-        moodycamel_cq_create(&g_threads[index].cq);
-        g_threads[index].poller = spdk_poller_register(msg_poller, g_threads + index, 0);
+        thread_init(index);
     }
 }
 static void send_msg_to_all(void *arg) {
-    g_app.threads[0] = spdk_get_thread();
-    moodycamel_cq_create(&g_threads[0].cq);
-    g_threads[0].poller = spdk_poller_register(msg_poller, g_threads, 0);
+    thread_init(0);
     spdk_for_each_thread(register_func, arg, app_start);
 }
 
@@ -86,10 +94,7 @@ int kv_app_start(const char *json_config_file, uint32_t task_num, struct kv_app_
 }
 
 void kv_app_stop(int rc) {
-    const struct spdk_thread *thread = spdk_get_thread();
-    uint32_t index;
-    for (index = 0; g_app.threads[index] != thread; ++index)
-        ;
+    uint32_t index = kv_app_get_thread_index();
     spdk_poller_unregister(&g_threads[index].poller);
     pthread_mutex_lock(&g_lock);
     if (g_app.running_thread) {

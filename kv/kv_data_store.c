@@ -23,7 +23,7 @@ static void *enqueue(struct kv_data_store *self, uint32_t op, kv_task_cb fn, voi
     *entry = (struct queue_entry){self, op, fn, ctx, cb, cb_arg};
     if (self->q_size + op <= self->q_max) {
         self->q_size += op;
-        kv_app_send_msg(kv_app_get_thread(), fn, ctx);
+        kv_app_send(self->bucket_log.log.thread_index, fn, ctx);
     } else {
         STAILQ_INSERT_TAIL((struct queue_head *)self->q, entry, entry);
     }
@@ -37,7 +37,7 @@ static void dequeue(bool success, void *arg) {
         struct queue_entry *first = STAILQ_FIRST((struct queue_head *)self->q);
         if (first->op + self->q_size <= self->q_max) {
             self->q_size += first->op;
-            kv_app_send_msg(kv_app_get_thread(), first->fn, first->ctx);
+            kv_app_send(self->bucket_log.log.thread_index, first->fn, first->ctx);
             STAILQ_REMOVE_HEAD((struct queue_head *)self->q, entry);
         } else
             break;

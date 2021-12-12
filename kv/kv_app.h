@@ -8,7 +8,6 @@ typedef void (*kv_app_func)(void *ctx);
 struct kv_app_t {
     uint32_t task_num;
     uint64_t running_thread;
-    void *threads[MAX_TASKS_NUM];
 };
 struct kv_app_task {
     kv_app_func func;
@@ -22,6 +21,6 @@ static inline int kv_app_start_single_task(const char *json_config_file, kv_app_
 }
 void kv_app_stop(int rc);
 void kv_app_send(uint32_t index, kv_app_func func, void *arg);
-void kv_app_send_msg(const void * thread, kv_app_func func, void *arg);
-void * kv_app_get_thread(void);
+void kv_app_send_msg(uint32_t index, kv_app_func func, void *arg);
+uint32_t kv_app_get_thread_index(void);
 #endif

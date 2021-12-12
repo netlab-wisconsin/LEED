@@ -12,6 +12,7 @@ struct kv_circular_log_fetch {
 
 struct kv_circular_log {
     struct kv_storage *storage;
+    uint32_t thread_index;
     uint64_t base, size;
     uint64_t head, tail;
     struct kv_circular_log_fetch fetch;
