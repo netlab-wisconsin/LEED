@@ -13,12 +13,14 @@ struct {
     uint64_t num_items, read_num_items;
     uint32_t value_size;
     uint32_t ssd_num;
+    uint32_t producer_num;
     uint32_t concurrent_io_num;
     char json_config_file[1024];
 
 } opt = {.num_items = 1024,
          .read_num_items = 512,
          .ssd_num = 2,
+         .producer_num = 1,
          .value_size = 1024,
          .concurrent_io_num = 32,
          .json_config_file = "config.json"};
@@ -29,7 +31,7 @@ static void help(void) {
 }
 static void get_options(int argc, char **argv) {
     int ch;
-    while ((ch = getopt(argc, argv, "hn:r:v:d:c:i:")) != -1) switch (ch) {
+    while ((ch = getopt(argc, argv, "hn:r:v:d:c:i:p:")) != -1) switch (ch) {
             case 'h':
                 help();
                 break;
@@ -51,6 +53,9 @@ static void get_options(int argc, char **argv) {
             case 'i':
                 opt.concurrent_io_num = atol(optarg);
                 break;
+            case 'p':
+                opt.producer_num = atol(optarg);
+                break;
             default:
                 help();
                 exit(-1);
@@ -60,7 +65,12 @@ static inline uint128 index_to_key(uint64_t index) { return CityHash128((char *)
 struct worker {
     struct kv_storage storage;
     struct kv_data_store data_store;
-};
+} * workers;
+
+struct producer {
+    uint64_t start_io, end_io;
+    uint64_t iocnt;
+} * producers;
 struct io_buffer_t {
     union {
         uint128 hash;
@@ -69,12 +79,11 @@ struct io_buffer_t {
     uint8_t *value;
     uint32_t value_length;
     uint32_t worker_id;
+    uint32_t producer_id;
     uint64_t index;
 };
 struct io_buffer_t *io_buffer;
 
-struct worker *workers;
-uint64_t total_io = 0, iocnt = 0;
 static struct timeval tv_start, tv_end;
 enum { INIT, FILL, READ, CLEAR } state = INIT;
 char const *op_str[] = {"INIT", "FILL", "READ", "CLEAR"};
@@ -85,12 +94,13 @@ static void worker_stop(void *arg) {
     kv_storage_fini(&self->storage);
     kv_app_stop(0);
 }
+static void producer_stop(void *arg) { kv_app_stop(0); }
 
 static void stop(void) {
     for (size_t i = 0; i < opt.concurrent_io_num; i++) kv_storage_free(io_buffer[i].value);
     free(io_buffer);
     for (size_t i = 0; i < opt.ssd_num; i++) kv_app_send(i, worker_stop, workers + i);
-    kv_app_stop(0);
+    for (size_t i = 0; i < opt.producer_num; i++) kv_app_send(opt.ssd_num + i, producer_stop, NULL);
 }
 
 static void test(void *arg);
@@ -100,7 +110,7 @@ static void io_fini(bool success, void *arg) {
         fprintf(stderr, "%s fail. key index: %lu\n", op_str[(int)state], io->index);
         exit(-1);
     }
-    kv_app_send(opt.ssd_num, test, arg);
+    kv_app_send(opt.ssd_num + io->producer_id, test, arg);
 }
 
 static void io_start(void *arg) {
@@ -120,8 +130,12 @@ static void io_start(void *arg) {
             assert(false);
     }
 }
-static void test_fini(void) {
+static void test_fini(void *arg) {  // always running on producer 0
+    uint64_t total_io = 0;
+    static uint32_t producer_cnt = 1;
+    if (--producer_cnt) return;
     gettimeofday(&tv_end, NULL);
+    producer_cnt = opt.producer_num;
     switch (state) {
         case INIT:
             printf("database initialized in %lf s.\n", timeval_diff(&tv_start, &tv_end));
@@ -148,34 +162,45 @@ static void test_fini(void) {
             return;
     }
     gettimeofday(&tv_start, NULL);
-    for (iocnt = 0; iocnt != opt.concurrent_io_num; ++iocnt) test(io_buffer + iocnt);
+    uint64_t io_per_producer = total_io / opt.producer_num;
+    for (size_t i = 0; i < opt.producer_num; i++) {
+        producers[i].iocnt = opt.concurrent_io_num / opt.producer_num;
+        producers[i].start_io = i * io_per_producer;
+        producers[i].end_io = (i + 1) * io_per_producer;
+        for (size_t j = i * producers[i].iocnt; j < (i + 1) * producers[i].iocnt; j++) {
+            io_buffer[j].producer_id = i;
+            kv_app_send(opt.ssd_num + i, test, io_buffer + j);
+        }
+    }
 }
 
 static void test(void *arg) {
     struct io_buffer_t *io = arg;
-    if (total_io == 0) {
-        if (--iocnt == 0) {
-            test_fini();
+    struct producer *p = io ? producers + io->producer_id : producers;
+
+    if (p->start_io == p->end_io) {
+        if (--p->iocnt == 0) {
+            kv_app_send(opt.ssd_num, test_fini, NULL);
         }
         return;
     }
     switch (state) {
         case FILL:
-            io->index = --total_io;
+            io->index = p->start_io;
             io->value_length = opt.value_size;
             sprintf(io->value, "%lu", io->index);
             memcpy(io->value + 20, io->key.buf, 16);
             break;
         case READ:
-            --total_io;
             io->index = random() % (opt.num_items * opt.ssd_num);
             break;
         case CLEAR:
-            io->index = --total_io;
+            io->index = p->start_io;
             break;
         case INIT:
             assert(false);
     }
+    p->start_io++;
     io->key.hash = index_to_key(io->index);
     io->worker_id = io->key.hash.second % opt.ssd_num;
     kv_app_send(io->worker_id, io_start, arg);
@@ -204,16 +229,20 @@ int main(int argc, char **argv) {
     printf("DEBUG (low performance)\n");
 #endif
     get_options(argc, argv);
-    struct kv_app_task *task = calloc(opt.ssd_num + 1, sizeof(struct kv_app_task));
+    struct kv_app_task *task = calloc(opt.ssd_num + opt.producer_num, sizeof(struct kv_app_task));
     workers = calloc(opt.ssd_num, sizeof(struct worker));
     for (size_t i = 0; i < opt.ssd_num; i++) {
         task[i].func = worker_init;
         task[i].arg = workers + i;
     }
-    task[opt.ssd_num] = (struct kv_app_task){NULL, NULL};
-    iocnt = opt.ssd_num;
+    producers = calloc(opt.producer_num, sizeof(struct producer));
+    for (size_t i = 0; i < opt.producer_num; i++) {
+        task[opt.ssd_num + i] = (struct kv_app_task){NULL, NULL};
+    }
+    *producers = (struct producer){0, 0, opt.ssd_num};
     gettimeofday(&tv_start, NULL);
-    kv_app_start(opt.json_config_file, opt.ssd_num + 1, task);
+    kv_app_start(opt.json_config_file, opt.ssd_num + opt.producer_num, task);
+    free(producers);
     free(workers);
     free(task);
     return 0;
