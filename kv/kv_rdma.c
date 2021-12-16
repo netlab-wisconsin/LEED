@@ -167,8 +167,8 @@ static inline int on_disconnect(struct rdma_cm_id *cm_id) {
     if (conn->self->is_server) {
         kv_free(conn->requests);
         kv_rdma_free_mr(conn->mr);
-    }
-    if (conn->cb.disconnect) conn->cb.disconnect(conn->cb_arg);
+    } else if (conn->cb.disconnect)
+        conn->cb.disconnect(conn->cb_arg);
     kv_free(conn);
     return 0;
 }
