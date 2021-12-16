@@ -94,7 +94,7 @@ static int create_connetion(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
         self->ctx = cm_id->verbs;
         TEST_Z(self->pd = ibv_alloc_pd(self->ctx));
         TEST_Z(self->cq = ibv_create_cq(self->ctx, 3 * MAX_BUF_NUM /* max_conn_num */, NULL, NULL, 0));
-        TEST_NZ(ibv_req_notify_cq(self->cq, 0));  //?
+        // TEST_NZ(ibv_req_notify_cq(self->cq, 0));  //?
         spdk_poller_register(cq_poller, self, 0);
     }
     // assume only have one context
@@ -125,14 +125,14 @@ void kv_rdma_setup_conn_ctx(connection_handle h, uint32_t con_req_num, uint32_t 
     conn->cb.handler = handler;
     conn->cb_arg = arg;
     conn->con_req_num = con_req_num;
-    conn->max_msg_sz = max_msg_sz;
+    conn->max_msg_sz = max_msg_sz + HEADER_SIZE;
     assert(conn->mr == NULL);
-    uint8_t *buf = spdk_dma_malloc(con_req_num * max_msg_sz, 4, NULL);
-    conn->mr = ibv_reg_mr(conn->self->pd, buf, con_req_num * max_msg_sz, IBV_ACCESS_LOCAL_WRITE);
+    uint8_t *buf = spdk_dma_malloc(con_req_num * conn->max_msg_sz, 4, NULL);
+    conn->mr = ibv_reg_mr(conn->self->pd, buf, con_req_num * conn->max_msg_sz, IBV_ACCESS_LOCAL_WRITE);
     conn->requests = kv_calloc(con_req_num, sizeof(struct request_ctx));
 
     struct ibv_recv_wr wr, *bad_wr = NULL;
-    struct ibv_sge sge = {(uint64_t)buf, max_msg_sz, conn->mr->lkey};
+    struct ibv_sge sge = {(uint64_t)buf, conn->max_msg_sz, conn->mr->lkey};
     wr.next = NULL;
     wr.sg_list = &sge;
     wr.num_sge = 1;
@@ -140,8 +140,8 @@ void kv_rdma_setup_conn_ctx(connection_handle h, uint32_t con_req_num, uint32_t 
         conn->requests[i].conn = conn;
         conn->requests[i].buf = (uint8_t *)sge.addr;
         wr.wr_id = (uint64_t)(conn->requests + i);
-        ibv_post_recv(conn->qp, &wr, &bad_wr);
-        sge.addr += max_msg_sz;
+        assert(!ibv_post_recv(conn->qp, &wr, &bad_wr));
+        sge.addr += conn->max_msg_sz;
     }
 }
 
@@ -263,7 +263,7 @@ void kv_rmda_send_req(connection_handle h, kv_rmda_mr req, uint32_t req_sz, kv_r
 
     *(uint64_t *)ctx->req->addr = (uint64_t)ctx->resp->addr;
 
-    struct ibv_sge sge[2] = {{(uintptr_t)ctx->req->addr, req_sz, ctx->req->lkey},
+    struct ibv_sge sge[2] = {{(uintptr_t)ctx->req->addr, req_sz + HEADER_SIZE, ctx->req->lkey},
                              {(uintptr_t)ctx->resp->addr, resp_sz, ctx->resp->lkey}};
     struct ibv_send_wr s_wr, *s_bad_wr = NULL;
     memset(&s_wr, 0, sizeof(s_wr));
@@ -292,7 +292,7 @@ static inline void on_write_resp_done(struct ibv_wc *wc) {
     assert(ctx->conn->self->is_server);
     struct ibv_sge sge = {(uint64_t)ctx->buf, ctx->conn->max_msg_sz, ctx->conn->mr->lkey};
     struct ibv_recv_wr wr = {(uint64_t)ctx, NULL, &sge, 1}, *bad_wr = NULL;
-    ibv_post_recv(ctx->conn->qp, &wr, &bad_wr);
+    assert(!ibv_post_recv(ctx->conn->qp, &wr, &bad_wr));
 }
 
 void kv_rdma_make_resp(void *req, uint8_t *resp, uint32_t resp_sz) {
@@ -306,7 +306,7 @@ void kv_rdma_make_resp(void *req, uint8_t *resp, uint32_t resp_sz) {
     wr.send_flags = IBV_SEND_SIGNALED;
     wr.wr.rdma.remote_addr = *(uint64_t *)ctx->buf;
     wr.wr.rdma.rkey = ctx->resp_rkey;
-    ibv_post_send(ctx->conn->qp, &wr, &bad_wr);
+    assert(!ibv_post_send(ctx->conn->qp, &wr, &bad_wr));
 }
 
 static inline void on_recv_req(struct ibv_wc *wc) {
@@ -332,7 +332,7 @@ static int cq_poller(void *arg) {
                 puts("cq_poller: status is not IBV_WC_SUCCESS.");
                 exit(-1);
             }
-            if (wc[i].opcode & IBV_WC_RECV || wc[i].opcode & IBV_WC_RECV_RDMA_WITH_IMM) {
+            if (wc[i].opcode & IBV_WC_RECV) {
                 // printf("received message: %s\n", conn->recv_region);
                 on_recv_req(wc + i);
 
