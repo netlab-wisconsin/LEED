@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <unistd.h>
 typedef void (*kv_app_func)(void *ctx);
+typedef int (*kv_app_poller_func)(void *ctx);
 #define MAX_TASKS_NUM 63
 struct kv_app_t {
     uint32_t task_num;
@@ -23,4 +24,7 @@ void kv_app_stop(int rc);
 void kv_app_send(uint32_t index, kv_app_func func, void *arg);
 void kv_app_send_msg(uint32_t index, kv_app_func func, void *arg);
 uint32_t kv_app_get_thread_index(void);
+
+void * kv_app_poller_register(kv_app_poller_func func, void *arg, uint64_t period_microseconds);
+void kv_app_poller_unregister(void ** poller);
 #endif

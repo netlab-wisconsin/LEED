@@ -15,7 +15,8 @@ static void connect_cb(connection_handle h, void *cb_arg) {
 }
 
 static void rdma_start(void *arg) {
-    void *rdma = kv_rdma_alloc();
+    kv_rdma_handle rdma;
+    kv_rdma_init(&rdma);
     kv_rdma_listen(rdma, "0.0.0.0", "9000", connect_cb, NULL);
 }
 int main(int argc, char **argv) { kv_app_start_single_task(argv[1], rdma_start, NULL); }

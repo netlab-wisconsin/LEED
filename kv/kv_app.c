@@ -74,6 +74,11 @@ static void send_msg_to_all(void *arg) {
     spdk_for_each_thread(register_func, arg, app_start);
 }
 
+void *kv_app_poller_register(kv_app_poller_func func, void *arg, uint64_t period_microseconds) {
+    return spdk_poller_register(func, arg, period_microseconds);
+}
+void kv_app_poller_unregister(void **poller) { spdk_poller_unregister((struct spdk_poller **)poller); }
+
 int kv_app_start(const char *json_config_file, uint32_t task_num, struct kv_app_task *tasks) {
     assert(task_num >= 1 && task_num < MAX_TASKS_NUM);
     struct spdk_app_opts opts;
