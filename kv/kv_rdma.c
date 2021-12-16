@@ -263,21 +263,21 @@ void kv_rmda_send_req(connection_handle h, kv_rmda_mr req, uint32_t req_sz, kv_r
 
     *(uint64_t *)ctx->req->addr = (uint64_t)ctx->resp->addr;
 
-    struct ibv_sge sge[2] = {{(uintptr_t)ctx->req->addr, req_sz + HEADER_SIZE, ctx->req->lkey},
-                             {(uintptr_t)ctx->resp->addr, resp_sz, ctx->resp->lkey}};
+    struct ibv_sge sge = {(uintptr_t)ctx->req->addr, req_sz + HEADER_SIZE, ctx->req->lkey};
+                            //  {(uintptr_t)ctx->resp->addr, resp_sz, ctx->resp->lkey}};
     struct ibv_send_wr s_wr, *s_bad_wr = NULL;
     memset(&s_wr, 0, sizeof(s_wr));
     s_wr.wr_id = (uintptr_t)ctx;
     s_wr.opcode = IBV_WR_SEND_WITH_IMM;
     s_wr.imm_data = ctx->resp->rkey;
-    s_wr.sg_list = sge;
+    s_wr.sg_list = &sge;
     s_wr.num_sge = 1;
     s_wr.send_flags = IBV_SEND_SIGNALED;
 
     if (ibv_post_send(conn->qp, &s_wr, &s_bad_wr)) {
         goto fail;
     }
-    struct ibv_recv_wr r_wr = {(uintptr_t)ctx, NULL, sge + 1, 1}, *r_bad_wr = NULL;
+    struct ibv_recv_wr r_wr = {(uintptr_t)ctx, NULL, NULL, 0}, *r_bad_wr = NULL;
     if (ibv_post_recv(conn->qp, &r_wr, &r_bad_wr)) {
         goto fail;
     }
@@ -287,26 +287,28 @@ fail:
     kv_free(ctx);
 }
 
-static inline void on_write_resp_done(struct ibv_wc *wc) {
-    struct request_ctx *ctx = (struct request_ctx *)wc->wr_id;
-    assert(ctx->conn->self->is_server);
-    struct ibv_sge sge = {(uint64_t)ctx->buf, ctx->conn->max_msg_sz, ctx->conn->mr->lkey};
-    struct ibv_recv_wr wr = {(uint64_t)ctx, NULL, &sge, 1}, *bad_wr = NULL;
-    assert(!ibv_post_recv(ctx->conn->qp, &wr, &bad_wr));
-}
-
 void kv_rdma_make_resp(void *req, uint8_t *resp, uint32_t resp_sz) {
     struct request_ctx *ctx = req;
     struct ibv_sge sge = {(uintptr_t)resp, resp_sz, ctx->conn->mr->lkey};
     struct ibv_send_wr wr, *bad_wr = NULL;
     wr.wr_id = (uintptr_t)ctx;
-    wr.opcode = IBV_WR_RDMA_WRITE;
+    wr.next = NULL;
+    wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+    wr.imm_data = 0; // not used
     wr.sg_list = &sge;
     wr.num_sge = 1;
     wr.send_flags = IBV_SEND_SIGNALED;
     wr.wr.rdma.remote_addr = *(uint64_t *)ctx->buf;
     wr.wr.rdma.rkey = ctx->resp_rkey;
     assert(!ibv_post_send(ctx->conn->qp, &wr, &bad_wr));
+}
+
+static inline void on_write_resp_done(struct ibv_wc *wc) {
+    struct request_ctx *ctx = (struct request_ctx *)wc->wr_id;
+    assert(ctx->conn->self->is_server);
+    struct ibv_sge sge = {(uint64_t)ctx->buf, ctx->conn->max_msg_sz, ctx->conn->mr->lkey};
+    struct ibv_recv_wr wr = {(uint64_t)ctx, NULL, &sge, 1}, *bad_wr = NULL;
+    assert(!ibv_post_recv(ctx->conn->qp, &wr, &bad_wr));
 }
 
 static inline void on_recv_req(struct ibv_wc *wc) {
@@ -318,6 +320,13 @@ static inline void on_recv_req(struct ibv_wc *wc) {
     ctx->conn->cb.handler(ctx, ctx->buf + HEADER_SIZE, wc->byte_len - HEADER_SIZE, ctx->conn->cb_arg);
 }
 
+static inline void on_recv_resp(struct ibv_wc *wc) {
+    struct request_ctx *ctx = (struct request_ctx *)wc->wr_id;
+    assert(!ctx->conn->self->is_server);
+    assert(wc->wc_flags & IBV_WC_WITH_IMM);
+    ctx->cb(ctx->conn,wc->status == IBV_WC_SUCCESS, ctx->req, ctx->resp,ctx->cb_arg);
+}
+
 #define MAX_ENTRIES_PER_POLL 32
 static int cq_poller(void *arg) {
     struct kv_rdma *self = arg;
@@ -327,19 +336,27 @@ static int cq_poller(void *arg) {
         if (rc <= 0) return rc;
         for (int i = 0; i < rc; i++) {
             // struct request_ctx *ctx = (struct request_ctx *)wc[i].wr_id;
-
             if (wc[i].status != IBV_WC_SUCCESS) {
                 puts("cq_poller: status is not IBV_WC_SUCCESS.");
                 exit(-1);
             }
-            if (wc[i].opcode & IBV_WC_RECV) {
-                // printf("received message: %s\n", conn->recv_region);
+            switch (wc[i].opcode)
+            {
+            case IBV_WC_RECV:
                 on_recv_req(wc + i);
-
-            } else if (wc[i].opcode & IBV_WC_SEND) {
-                printf("send completed successfully.\n");
-            } else if (wc[i].opcode & IBV_WC_RDMA_WRITE) {
+                break;
+            case IBV_WC_RECV_RDMA_WITH_IMM:
+                on_recv_resp(wc + i);
+                break;
+            case IBV_WC_RDMA_WRITE:
                 on_write_resp_done(wc + i);
+                break;            
+            case IBV_WC_SEND:
+                printf("send completed successfully.\n");
+                break;
+            default:
+                fprintf(stderr,"kv_rdma: unknown event %u \n.",wc[i].opcode);
+                break;
             }
         }
     }
