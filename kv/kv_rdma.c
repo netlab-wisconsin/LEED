@@ -14,8 +14,7 @@
 
 #define HEADER_SIZE (sizeof(uint64_t))
 #define TIMEOUT_IN_MS (500U)
-#define MAX_BUF_NUM 64
-const int BUFFER_SIZE = 1024;
+#define MAX_BUF_NUM 256
 
 #define TEST_NZ(x)                                      \
     do {                                                \
@@ -228,8 +227,11 @@ void kv_rmda_send_req(connection_handle h, kv_rmda_mr req, uint32_t req_sz, kv_r
 
     *(uint64_t *)ctx->req->addr = (uint64_t)ctx->resp->addr;
 
+    struct ibv_recv_wr r_wr = {(uintptr_t)ctx, NULL, NULL, 0}, *r_bad_wr = NULL;
+    if (ibv_post_recv(conn->qp, &r_wr, &r_bad_wr)) {
+        goto fail;
+    }
     struct ibv_sge sge = {(uintptr_t)ctx->req->addr, req_sz + HEADER_SIZE, ctx->req->lkey};
-    //  {(uintptr_t)ctx->resp->addr, resp_sz, ctx->resp->lkey}};
     struct ibv_send_wr s_wr, *s_bad_wr = NULL;
     memset(&s_wr, 0, sizeof(s_wr));
     s_wr.wr_id = (uintptr_t)ctx;
@@ -238,14 +240,10 @@ void kv_rmda_send_req(connection_handle h, kv_rmda_mr req, uint32_t req_sz, kv_r
     s_wr.sg_list = &sge;
     s_wr.num_sge = 1;
     s_wr.send_flags = IBV_SEND_SIGNALED;
-
     if (ibv_post_send(conn->qp, &s_wr, &s_bad_wr)) {
         goto fail;
     }
-    struct ibv_recv_wr r_wr = {(uintptr_t)ctx, NULL, NULL, 0}, *r_bad_wr = NULL;
-    if (ibv_post_recv(conn->qp, &r_wr, &r_bad_wr)) {
-        goto fail;
-    }
+
     return;
 fail:
     if (ctx->cb) ctx->cb(h, false, req, resp, ctx->cb_arg);
@@ -366,7 +364,7 @@ static int rdma_cq_poller(void *arg) {
                     on_write_resp_done(wc + i);
                     break;
                 case IBV_WC_SEND:
-                    printf("send completed successfully.\n");
+                    // printf("send completed successfully.\n");
                     break;
                 default:
                     fprintf(stderr, "kv_rdma: unknown event %u \n.", wc[i].opcode);

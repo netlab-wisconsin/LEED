@@ -1,32 +1,252 @@
 #include <assert.h>
+#include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/time.h>
 
+#include "../benchmark2/city.h"
+#include "../benchmark2/timing.h"
 #include "../kv_app.h"
 #include "../kv_rdma.h"
+
+struct {
+    uint64_t num_items, read_num_items;
+    uint32_t value_size;
+    uint32_t client_num;
+    uint32_t producer_num;
+    uint32_t concurrent_io_num;
+    char json_config_file[1024];
+    char server_ip[32];
+} opt = {.num_items = 1024,
+         .read_num_items = 512,
+         .client_num = 2,
+         .producer_num = 1,
+         .value_size = 1024,
+         .concurrent_io_num = 32,
+         .json_config_file = "config.json",
+         .server_ip="192.168.1.13"};
+static void help(void) {
+    // TODO: HELP TEXT
+    printf("Some helpful text.\n");
+    return;
+}
+static void get_options(int argc, char **argv) {
+    int ch;
+    while ((ch = getopt(argc, argv, "hn:r:v:d:c:i:p:s:")) != -1) switch (ch) {
+            case 'h':
+                help();
+                break;
+            case 'n':
+                opt.num_items = atoll(optarg);
+                break;
+            case 'r':
+                opt.read_num_items = atoll(optarg);
+                break;
+            case 'v':
+                opt.value_size = atol(optarg);
+                break;
+            case 'd':
+                opt.client_num = atol(optarg);
+                break;
+            case 'c':
+                strcpy(opt.json_config_file, optarg);
+                break;
+            case 'i':
+                opt.concurrent_io_num = atol(optarg);
+                break;
+            case 'p':
+                opt.producer_num = atol(optarg);
+                break;
+            case 's':
+                 strcpy(opt.server_ip, optarg);
+                break;
+            default:
+                help();
+                exit(-1);
+        }
+}
+
+static inline uint128 index_to_key(uint64_t index) { return CityHash128((char *)&index, sizeof(uint64_t)); }
+#define EXTRA_BUF 32
+struct io_buffer_t {
+    kv_rmda_mr req, resp;
+    uint32_t req_sz, resp_sz;
+    uint32_t client_id;
+    uint32_t producer_id;
+    uint64_t index;
+} * io_buffers;
+
+struct client_t {
+    char port[8];
+    kv_rdma_handle rdma;
+    connection_handle h;
+} * clients;
+
+struct producer_t {
+    uint64_t start_io, end_io;
+    uint64_t iocnt;
+} * producers;
+
+static struct timeval tv_start, tv_end;
+enum { INIT, FILL, READ, CLEAR } state = INIT;
+
+
 static void disconnect_cb(void *arg){
     kv_rdma_fini(arg);
     kv_app_stop(0);
 }
 
-static void on_req_fini(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_mr resp, void *cb_arg) {
-    assert(success);
-    puts(kv_rdma_get_resp_buf(resp));
-    kv_rdma_free_mr(req);
-    kv_rdma_free_mr(resp);
-    kv_rdma_disconnect(h,disconnect_cb,cb_arg);
+static void client_stop(void *arg) {
+    struct client_t *client = arg;
+    kv_rdma_disconnect(client->h,disconnect_cb,client->rdma);
+    kv_app_stop(0);
 }
-static void connect_cb(connection_handle h, void *cb_arg) {
-    if (!h) exit(-1);
-    kv_rmda_mr req = kv_rdma_alloc_req(cb_arg, 1024);
-    kv_rmda_mr resp = kv_rdma_alloc_resp(cb_arg, 1024);
-    uint8_t *req_buf = kv_rdma_get_req_buf(req);
-    sprintf(req_buf, "client request\n");
-    kv_rmda_send_req(h, req, 32, resp, 1024, on_req_fini, cb_arg);
+static void producer_stop(void *arg) { kv_app_stop(0); }
+
+static void stop(void) {
+    for (size_t i = 0; i < opt.concurrent_io_num; i++){
+         kv_rdma_free_mr(io_buffers[i].req);
+         kv_rdma_free_mr(io_buffers[i].resp);
+    }
+    for (size_t i = 0; i < opt.client_num; i++) kv_app_send(i, client_stop, clients + i);
+    for (size_t i = 0; i < opt.producer_num; i++) kv_app_send(opt.client_num + i, producer_stop, NULL);
 }
-static void rdma_start(void *arg) {
-    kv_rdma_handle rdma;
-    kv_rdma_init(&rdma);
-    kv_rdma_connect(rdma, "192.168.1.13", "9000", connect_cb, rdma);
+
+static void test(void *arg);
+static void io_fini(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_mr resp, void *arg) {
+    struct io_buffer_t *io = arg;
+    if (!success) {
+        fprintf(stderr, "io fail. \n");
+        exit(-1);
+    }
+    kv_app_send(opt.client_num + io->producer_id, test, arg);
 }
-int main(int argc, char **argv) { kv_app_start_single_task(argv[1], rdma_start, NULL); }
+static void io_start(void *arg) {
+    struct io_buffer_t *io = arg;
+    struct client_t *client = clients + io->client_id;
+    kv_rmda_send_req(client->h, io->req, io->req_sz, io->resp, io->resp_sz, io_fini, arg);
+}
+
+static void test_fini(void *arg) {  // always running on producer 0
+    uint64_t total_io = 0;
+    static uint32_t producer_cnt = 1;
+    if (--producer_cnt) return;
+    gettimeofday(&tv_end, NULL);
+    producer_cnt = opt.producer_num;
+    switch (state) {
+        case INIT:
+            printf("rdma client initialized in %lf s.\n", timeval_diff(&tv_start, &tv_end));
+            for (size_t i = 0; i < opt.concurrent_io_num; i++) {
+                io_buffers[i].req = kv_rdma_alloc_req(clients->rdma, opt.value_size + EXTRA_BUF);
+                io_buffers[i].resp = kv_rdma_alloc_resp(clients->rdma, opt.value_size + EXTRA_BUF);
+            }
+            state = FILL;
+            total_io = opt.num_items * opt.client_num;
+            break;
+        case FILL:
+            printf("Write rate: %f\n", ((double)opt.num_items * opt.client_num / timeval_diff(&tv_start, &tv_end)));
+            puts("db created successfully.");
+        //     state = READ;
+        //     total_io = opt.read_num_items * opt.client_num;
+        //     break;
+        // case READ:
+        //     printf("Query rate: %f\n", ((double)opt.read_num_items * opt.client_num / timeval_diff(&tv_start, &tv_end)));
+        //     state = CLEAR;
+        //     total_io = opt.num_items * opt.client_num;
+        //     break;
+        // case CLEAR:
+        //     printf("Clear rate: %f\n", ((double)opt.num_items * opt.client_num / timeval_diff(&tv_start, &tv_end)));
+            stop();
+            return;
+    }
+    gettimeofday(&tv_start, NULL);
+    uint64_t io_per_producer = total_io / opt.producer_num;
+    for (size_t i = 0; i < opt.producer_num; i++) {
+        producers[i].iocnt = opt.concurrent_io_num / opt.producer_num;
+        producers[i].start_io = i * io_per_producer;
+        producers[i].end_io = (i + 1) * io_per_producer;
+        for (size_t j = i * producers[i].iocnt; j < (i + 1) * producers[i].iocnt; j++) {
+            io_buffers[j].producer_id = i;
+            kv_app_send(opt.client_num + i, test, io_buffers + j);
+        }
+    }
+}
+
+static void test(void *arg) {
+    struct io_buffer_t *io = arg;
+    struct producer_t *p = io ? producers + io->producer_id : producers;
+
+    if (p->start_io == p->end_io) {
+        if (--p->iocnt == 0) {
+            kv_app_send(opt.client_num, test_fini, NULL);
+        }
+        return;
+    }
+
+    io->req_sz=32;
+    io->resp_sz=1024;
+    // switch (state) {
+    //     case FILL:
+    //         io->index = p->start_io;
+    //         io->value_length = opt.value_size;
+    //         sprintf(io->value, "%lu", io->index);
+    //         memcpy(io->value + 20, io->key.buf, 16);
+    //         break;
+    //     case READ:
+    //         io->index = random() % (opt.num_items * opt.ssd_num);
+    //         break;
+    //     case CLEAR:
+    //         io->index = p->start_io;
+    //         break;
+    //     case INIT:
+    //         assert(false);
+    // }
+    p->start_io++;
+    uint128 hash = index_to_key(io->index);
+    io->client_id = hash.second % opt.client_num;
+    kv_app_send(io->client_id, io_start, arg);
+}
+
+static void send_init_done_msg(connection_handle h, void *arg) {
+    if (!h) {
+        fprintf(stderr, "connect fail!\n");
+        exit(-1);
+    }
+    struct client_t *client = arg;
+    client->h = h;
+    kv_app_send(opt.client_num, test, NULL);
+}
+static void client_init(void *arg) {
+    struct client_t *client = arg;
+    kv_rdma_init(&client->rdma);
+    kv_rdma_connect(client->rdma, opt.server_ip, client->port, send_init_done_msg, client);
+}
+
+int main(int argc, char **argv) {
+#ifdef NDEBUG
+    printf("NDEBUG\n");
+#else
+    printf("DEBUG (low performance)\n");
+#endif
+    get_options(argc, argv);
+    struct kv_app_task *task = calloc(opt.client_num + opt.producer_num, sizeof(struct kv_app_task));
+    io_buffers = calloc(opt.concurrent_io_num, sizeof(struct io_buffer_t));
+    clients = calloc(opt.client_num, sizeof(struct client_t));
+    for (size_t i = 0; i < opt.client_num; i++) {
+        sprintf(clients[i].port, "%lu", 9000 + i);
+        task[i].func = client_init;
+        task[i].arg = clients + i;
+    }
+    producers = calloc(opt.producer_num, sizeof(struct producer_t));
+    for (size_t i = 0; i < opt.producer_num; i++) {
+        task[opt.client_num + i] = (struct kv_app_task){NULL, NULL};
+    }
+    *producers = (struct producer_t){0, 0, opt.client_num};
+    gettimeofday(&tv_start, NULL);
+    kv_app_start(opt.json_config_file, opt.client_num + opt.producer_num, task);
+    free(clients);
+    free(producers);
+    free(io_buffers);
+    free(task);
+}
