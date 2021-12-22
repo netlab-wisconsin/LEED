@@ -196,6 +196,7 @@ static void test(void *arg) {
             msg->type = KV_MSG_SET;
             *(uint128 *)KV_MSG_KEY(msg) = index_to_key(p->start_io);
             msg->key_len = 16;
+            msg->value_offset=msg->key_len;
             msg->value_len = opt.value_size;
             io->req_sz = KV_MSG_SIZE(msg);
             break;
@@ -203,6 +204,7 @@ static void test(void *arg) {
             msg->type = KV_MSG_GET;
             *(uint128 *)KV_MSG_KEY(msg) = index_to_key(random() % opt.num_items);
             msg->key_len = 16;
+            msg->value_offset=msg->key_len;
             msg->value_len = 0;
             io->req_sz = KV_MSG_SIZE(msg);
             break;
@@ -210,12 +212,15 @@ static void test(void *arg) {
             msg->type = KV_MSG_DEL;
             *(uint128 *)KV_MSG_KEY(msg) = index_to_key(p->start_io);
             msg->key_len = 16;
+            msg->value_offset=msg->key_len;
             msg->value_len = 0;
             io->req_sz = KV_MSG_SIZE(msg);
             break;
         case TEST:
             msg->type = KV_MSG_TEST;
-            msg->key_len = 0;
+            *(uint128 *)KV_MSG_KEY(msg) = (uint128){0,0};
+            msg->key_len = 16;
+            msg->value_offset=msg->key_len;
             msg->value_len = opt.value_size;
             io->req_sz = EXTRA_BUF;
             break;

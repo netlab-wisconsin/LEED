@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/queue.h>
 #include <unistd.h>
 
 #include "kv_app.h"
@@ -35,6 +36,8 @@ struct rdma_connection {
         kv_rdma_disconnect_cb disconnect;
     } cb;
     void *cb_arg;
+    // client connection data
+    STAILQ_HEAD(, request_ctx) request_ctxs;
     // server connection data
     uint32_t con_req_num;
     uint32_t max_msg_sz;
@@ -57,6 +60,7 @@ struct request_ctx {
     kv_rdma_req_cb cb;
     void *cb_arg;
     struct ibv_mr *req, *resp;
+    STAILQ_ENTRY(request_ctx) next;
     // server data
     uint32_t resp_rkey;
     uint8_t *buf;
@@ -208,6 +212,7 @@ int kv_rdma_connect(kv_rdma_handle h, char *addr_str, char *port_str, kv_rdma_co
     struct kv_rdma *self = h;
     self->is_server = false;
     struct rdma_connection *conn = kv_malloc(sizeof(struct rdma_connection));
+    STAILQ_INIT(&conn->request_ctxs);
     *conn = (struct rdma_connection){self, NULL, NULL, .cb.connect = cb, .cb_arg = cb_arg};
     struct addrinfo *addr;
     TEST_NZ(getaddrinfo(addr_str, port_str, NULL, &addr));
@@ -226,7 +231,7 @@ void kv_rmda_send_req(connection_handle h, kv_rmda_mr req, uint32_t req_sz, kv_r
 
     *(uint64_t *)ctx->req->addr = (uint64_t)ctx->resp->addr;
 
-    struct ibv_recv_wr r_wr = {(uintptr_t)ctx, NULL, NULL, 0}, *r_bad_wr = NULL;
+    struct ibv_recv_wr r_wr = {(uintptr_t)conn, NULL, NULL, 0}, *r_bad_wr = NULL;
     if (ibv_post_recv(conn->qp, &r_wr, &r_bad_wr)) {
         goto fail;
     }
@@ -242,7 +247,7 @@ void kv_rmda_send_req(connection_handle h, kv_rmda_mr req, uint32_t req_sz, kv_r
     if (ibv_post_send(conn->qp, &s_wr, &s_bad_wr)) {
         goto fail;
     }
-
+    STAILQ_INSERT_TAIL(&conn->request_ctxs, ctx, next);
     return;
 fail:
     if (ctx->cb) ctx->cb(h, false, req, resp, ctx->cb_arg);
@@ -306,7 +311,7 @@ void kv_rdma_make_resp(void *req, uint8_t *resp, uint32_t resp_sz) {
     wr.wr_id = (uintptr_t)ctx;
     wr.next = NULL;
     wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-    wr.imm_data = 0;  // not used
+    wr.imm_data = ctx->resp_rkey;
     wr.sg_list = &sge;
     wr.num_sge = 1;
     wr.send_flags = IBV_SEND_SIGNALED;
@@ -334,9 +339,26 @@ static inline void on_recv_req(struct ibv_wc *wc) {
 }
 
 static inline void on_recv_resp(struct ibv_wc *wc) {
-    struct request_ctx *ctx = (struct request_ctx *)wc->wr_id;
+    struct rdma_connection *conn = (struct rdma_connection *)wc->wr_id;
+
+    // using wc->imm_data(rkey) to find corresponding request_ctx
+    struct request_ctx *ctx = STAILQ_FIRST(&conn->request_ctxs), *tmp = ctx;
+    assert(ctx);
+    if (ctx->resp->rkey == wc->imm_data)
+        STAILQ_REMOVE_HEAD(&conn->request_ctxs, next);
+    else
+        while (true) {
+            assert((ctx = STAILQ_NEXT(tmp, next)));
+            if (ctx->resp->rkey == wc->imm_data) {
+                STAILQ_REMOVE_AFTER(&conn->request_ctxs, tmp, next);
+                break;
+            }
+            tmp = ctx;
+        }
+
     assert(!ctx->conn->self->is_server);
     assert(wc->wc_flags & IBV_WC_WITH_IMM);
+    // assert(ctx->resp->rkey == wc->imm_data);
     ctx->cb(ctx->conn, wc->status == IBV_WC_SUCCESS, ctx->req, ctx->resp, ctx->cb_arg);
 }
 

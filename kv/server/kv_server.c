@@ -72,7 +72,7 @@ struct io_ctx {
 
 static void send_response(void *arg) {
     struct io_ctx *io = arg;
-    kv_rdma_make_resp(io->req, (uint8_t *)io->msg, sizeof(struct kv_msg) + io->msg->key_len + io->msg->value_len);
+    kv_rdma_make_resp(io->req, (uint8_t *)io->msg, KV_MSG_SIZE(io->msg));
     free(io);
 }
 
@@ -89,6 +89,7 @@ static void io_start(void *arg) {
         case KV_MSG_SET:
             kv_data_store_set(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, KV_MSG_VALUE(io->msg),
                               io->msg->value_len, io_fini, arg);
+            io->msg->value_len = 0;
             break;
         case KV_MSG_GET:
             kv_data_store_get(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, KV_MSG_VALUE(io->msg),
