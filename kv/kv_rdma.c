@@ -21,7 +21,7 @@
     do {                                                \
         if ((x)) {                                      \
             fprintf(stderr, "error: " #x " failed.\n"); \
-            return -1;                                  \
+            exit(-1);                                   \
         }                                               \
     } while (0)
 #define TEST_Z(x) TEST_NZ(!(x))
@@ -258,7 +258,7 @@ void kv_rdma_disconnect(connection_handle h, kv_rdma_disconnect_cb cb, void *cb_
     struct rdma_connection *conn = h;
     conn->cb.disconnect = cb;
     conn->cb_arg = cb_arg;
-    assert(!rdma_disconnect(conn->cm_id));
+    TEST_NZ(rdma_disconnect(conn->cm_id));
 }
 
 // --- server ---
@@ -299,7 +299,7 @@ void kv_rdma_setup_conn_ctx(connection_handle h, uint32_t con_req_num, uint32_t 
         conn->requests[i].conn = conn;
         conn->requests[i].buf = (uint8_t *)sge.addr;
         wr.wr_id = (uint64_t)(conn->requests + i);
-        assert(!ibv_post_recv(conn->qp, &wr, &bad_wr));
+        TEST_NZ(ibv_post_recv(conn->qp, &wr, &bad_wr));
         sge.addr += conn->max_msg_sz;
     }
 }
@@ -317,7 +317,7 @@ void kv_rdma_make_resp(void *req, uint8_t *resp, uint32_t resp_sz) {
     wr.send_flags = IBV_SEND_SIGNALED;
     wr.wr.rdma.remote_addr = *(uint64_t *)ctx->buf;
     wr.wr.rdma.rkey = ctx->resp_rkey;
-    assert(!ibv_post_send(ctx->conn->qp, &wr, &bad_wr));
+    TEST_NZ(ibv_post_send(ctx->conn->qp, &wr, &bad_wr));
 }
 
 // --- cq_poller ---
@@ -326,7 +326,7 @@ static inline void on_write_resp_done(struct ibv_wc *wc) {
     assert(ctx->conn->self->is_server);
     struct ibv_sge sge = {(uint64_t)ctx->buf, ctx->conn->max_msg_sz, ctx->conn->mr->lkey};
     struct ibv_recv_wr wr = {(uint64_t)ctx, NULL, &sge, 1}, *bad_wr = NULL;
-    assert(!ibv_post_recv(ctx->conn->qp, &wr, &bad_wr));
+    TEST_NZ(ibv_post_recv(ctx->conn->qp, &wr, &bad_wr));
 }
 
 static inline void on_recv_req(struct ibv_wc *wc) {
@@ -344,11 +344,11 @@ static inline void on_recv_resp(struct ibv_wc *wc) {
     // using wc->imm_data(rkey) to find corresponding request_ctx
     struct client_req_ctx *ctx = STAILQ_FIRST(&conn->request_ctxs), *tmp = ctx;
     assert(ctx);
-    if (ctx->resp->rkey == wc->imm_data)
+    if (ctx->resp->rkey == wc->imm_data) //likely
         STAILQ_REMOVE_HEAD(&conn->request_ctxs, next);
     else
         while (true) {
-            assert((ctx = STAILQ_NEXT(tmp, next)));
+            TEST_Z((ctx = STAILQ_NEXT(tmp, next)));
             if (ctx->resp->rkey == wc->imm_data) {
                 STAILQ_REMOVE_AFTER(&conn->request_ctxs, tmp, next);
                 break;
@@ -358,7 +358,6 @@ static inline void on_recv_resp(struct ibv_wc *wc) {
 
     assert(!ctx->conn->self->is_server);
     assert(wc->wc_flags & IBV_WC_WITH_IMM);
-    // assert(ctx->resp->rkey == wc->imm_data);
     ctx->cb(ctx->conn, wc->status == IBV_WC_SUCCESS, ctx->req, ctx->resp, ctx->cb_arg);
 }
 

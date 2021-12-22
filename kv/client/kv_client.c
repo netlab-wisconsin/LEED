@@ -82,7 +82,7 @@ struct io_buffer_t {
 } * io_buffers;
 
 struct client_t {
-    char port[8];
+    char port[16];
     kv_rdma_handle rdma;
     connection_handle h;
 } * clients;

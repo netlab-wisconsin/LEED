@@ -60,7 +60,7 @@ struct worker_t {
 
 struct server_t {
     kv_rdma_handle rdma;
-    char port[8];
+    char port[16];
 } * servers;
 
 struct io_ctx {
