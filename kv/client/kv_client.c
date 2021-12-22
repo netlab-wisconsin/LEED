@@ -8,8 +8,8 @@
 #include "../benchmark2/city.h"
 #include "../benchmark2/timing.h"
 #include "../kv_app.h"
+#include "../kv_msg.h"
 #include "../kv_rdma.h"
-
 struct {
     uint64_t num_items, read_num_items;
     uint32_t value_size;
@@ -18,6 +18,7 @@ struct {
     uint32_t concurrent_io_num;
     char json_config_file[1024];
     char server_ip[32];
+    bool test_rdma;
 } opt = {.num_items = 1024,
          .read_num_items = 512,
          .client_num = 2,
@@ -25,7 +26,8 @@ struct {
          .value_size = 1024,
          .concurrent_io_num = 32,
          .json_config_file = "config.json",
-         .server_ip="192.168.1.13"};
+         .server_ip = "192.168.1.13",
+         .test_rdma = false};
 static void help(void) {
     // TODO: HELP TEXT
     printf("Some helpful text.\n");
@@ -33,9 +35,12 @@ static void help(void) {
 }
 static void get_options(int argc, char **argv) {
     int ch;
-    while ((ch = getopt(argc, argv, "hn:r:v:d:c:i:p:s:")) != -1) switch (ch) {
+    while ((ch = getopt(argc, argv, "htn:r:v:d:c:i:p:s:")) != -1) switch (ch) {
             case 'h':
                 help();
+                break;
+            case 't':
+                opt.test_rdma = true;
                 break;
             case 'n':
                 opt.num_items = atoll(optarg);
@@ -59,7 +64,7 @@ static void get_options(int argc, char **argv) {
                 opt.producer_num = atol(optarg);
                 break;
             case 's':
-                 strcpy(opt.server_ip, optarg);
+                strcpy(opt.server_ip, optarg);
                 break;
             default:
                 help();
@@ -71,10 +76,9 @@ static inline uint128 index_to_key(uint64_t index) { return CityHash128((char *)
 #define EXTRA_BUF 32
 struct io_buffer_t {
     kv_rmda_mr req, resp;
-    uint32_t req_sz, resp_sz;
+    uint32_t req_sz;
     uint32_t client_id;
     uint32_t producer_id;
-    uint64_t index;
 } * io_buffers;
 
 struct client_t {
@@ -89,25 +93,24 @@ struct producer_t {
 } * producers;
 
 static struct timeval tv_start, tv_end;
-enum { INIT, FILL, READ, CLEAR } state = INIT;
+enum { INIT, FILL, READ, CLEAR, TEST } state = INIT;
 
-
-static void disconnect_cb(void *arg){
+static void disconnect_cb(void *arg) {
     kv_rdma_fini(arg);
     kv_app_stop(0);
 }
 
 static void client_stop(void *arg) {
     struct client_t *client = arg;
-    kv_rdma_disconnect(client->h,disconnect_cb,client->rdma);
+    kv_rdma_disconnect(client->h, disconnect_cb, client->rdma);
     kv_app_stop(0);
 }
 static void producer_stop(void *arg) { kv_app_stop(0); }
 
 static void stop(void) {
-    for (size_t i = 0; i < opt.concurrent_io_num; i++){
-         kv_rdma_free_mr(io_buffers[i].req);
-         kv_rdma_free_mr(io_buffers[i].resp);
+    for (size_t i = 0; i < opt.concurrent_io_num; i++) {
+        kv_rdma_free_mr(io_buffers[i].req);
+        kv_rdma_free_mr(io_buffers[i].resp);
     }
     for (size_t i = 0; i < opt.client_num; i++) kv_app_send(i, client_stop, clients + i);
     for (size_t i = 0; i < opt.producer_num; i++) kv_app_send(opt.client_num + i, producer_stop, NULL);
@@ -125,7 +128,7 @@ static void io_fini(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_m
 static void io_start(void *arg) {
     struct io_buffer_t *io = arg;
     struct client_t *client = clients + io->client_id;
-    kv_rmda_send_req(client->h, io->req, io->req_sz, io->resp, io->resp_sz, io_fini, arg);
+    kv_rmda_send_req(client->h, io->req, io->req_sz, io->resp, io_fini, arg);
 }
 
 static void test_fini(void *arg) {  // always running on producer 0
@@ -141,22 +144,26 @@ static void test_fini(void *arg) {  // always running on producer 0
                 io_buffers[i].req = kv_rdma_alloc_req(clients->rdma, opt.value_size + EXTRA_BUF);
                 io_buffers[i].resp = kv_rdma_alloc_resp(clients->rdma, opt.value_size + EXTRA_BUF);
             }
-            state = FILL;
-            total_io = opt.num_items * opt.client_num;
+            total_io = opt.num_items;
+            state = opt.test_rdma ? TEST : FILL;
             break;
         case FILL:
-            printf("Write rate: %f\n", ((double)opt.num_items * opt.client_num / timeval_diff(&tv_start, &tv_end)));
+            printf("Write rate: %f\n", ((double)opt.num_items / timeval_diff(&tv_start, &tv_end)));
             puts("db created successfully.");
-        //     state = READ;
-        //     total_io = opt.read_num_items * opt.client_num;
-        //     break;
-        // case READ:
-        //     printf("Query rate: %f\n", ((double)opt.read_num_items * opt.client_num / timeval_diff(&tv_start, &tv_end)));
-        //     state = CLEAR;
-        //     total_io = opt.num_items * opt.client_num;
-        //     break;
-        // case CLEAR:
-        //     printf("Clear rate: %f\n", ((double)opt.num_items * opt.client_num / timeval_diff(&tv_start, &tv_end)));
+            state = READ;
+            total_io = opt.read_num_items;
+            break;
+        case READ:
+            printf("Query rate: %f\n", ((double)opt.read_num_items / timeval_diff(&tv_start, &tv_end)));
+            state = CLEAR;
+            total_io = opt.num_items;
+            break;
+        case CLEAR:
+            printf("Clear rate: %f\n", ((double)opt.num_items / timeval_diff(&tv_start, &tv_end)));
+            stop();
+            return;
+        case TEST:
+            printf("Request rate: %f\n", ((double)opt.num_items / timeval_diff(&tv_start, &tv_end)));
             stop();
             return;
     }
@@ -183,28 +190,40 @@ static void test(void *arg) {
         }
         return;
     }
-
-    io->req_sz=32;
-    io->resp_sz=1024;
-    // switch (state) {
-    //     case FILL:
-    //         io->index = p->start_io;
-    //         io->value_length = opt.value_size;
-    //         sprintf(io->value, "%lu", io->index);
-    //         memcpy(io->value + 20, io->key.buf, 16);
-    //         break;
-    //     case READ:
-    //         io->index = random() % (opt.num_items * opt.ssd_num);
-    //         break;
-    //     case CLEAR:
-    //         io->index = p->start_io;
-    //         break;
-    //     case INIT:
-    //         assert(false);
-    // }
+    struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(io->req);
+    switch (state) {
+        case FILL:
+            msg->type = KV_MSG_SET;
+            *(uint128 *)KV_MSG_KEY(msg) = index_to_key(p->start_io);
+            msg->key_len = 16;
+            msg->value_len = opt.value_size;
+            io->req_sz = KV_MSG_SIZE(msg);
+            break;
+        case READ:
+            msg->type = KV_MSG_GET;
+            *(uint128 *)KV_MSG_KEY(msg) = index_to_key(random() % opt.num_items);
+            msg->key_len = 16;
+            msg->value_len = 0;
+            io->req_sz = KV_MSG_SIZE(msg);
+            break;
+        case CLEAR:
+            msg->type = KV_MSG_DEL;
+            *(uint128 *)KV_MSG_KEY(msg) = index_to_key(p->start_io);
+            msg->key_len = 16;
+            msg->value_len = 0;
+            io->req_sz = KV_MSG_SIZE(msg);
+            break;
+        case TEST:
+            msg->type = KV_MSG_TEST;
+            msg->key_len = 0;
+            msg->value_len = opt.value_size;
+            io->req_sz = EXTRA_BUF;
+            break;
+        case INIT:
+            assert(false);
+    }
     p->start_io++;
-    uint128 hash = index_to_key(io->index);
-    io->client_id = hash.second % opt.client_num;
+    io->client_id = random() % opt.client_num;
     kv_app_send(io->client_id, io_start, arg);
 }
 

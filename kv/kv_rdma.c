@@ -218,8 +218,7 @@ int kv_rdma_connect(kv_rdma_handle h, char *addr_str, char *port_str, kv_rdma_co
     return 0;
 }
 
-void kv_rmda_send_req(connection_handle h, kv_rmda_mr req, uint32_t req_sz, kv_rmda_mr resp, uint32_t resp_sz,
-                      kv_rdma_req_cb cb, void *cb_arg) {
+void kv_rmda_send_req(connection_handle h, kv_rmda_mr req, uint32_t req_sz, kv_rmda_mr resp, kv_rdma_req_cb cb, void *cb_arg) {
     struct rdma_connection *conn = h;
     assert(conn->self->is_server == false);
     struct request_ctx *ctx = kv_malloc(sizeof(struct request_ctx));
