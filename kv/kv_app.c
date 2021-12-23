@@ -11,8 +11,8 @@
 
 pthread_mutex_t g_lock;
 static struct kv_app_t g_app;
-
-struct thread_data {
+static struct spdk_mempool *g_event_mempool;
+static struct thread_data {
     struct spdk_thread *thread;
     MoodycamelCQHandle cq;
     struct spdk_poller *poller;
@@ -31,7 +31,7 @@ uint32_t kv_app_get_thread_index(void) {
 }
 
 void kv_app_send(uint32_t index, kv_app_func func, void *arg) {
-    struct kv_app_task *msg = kv_malloc(sizeof(struct kv_app_task));
+    struct kv_app_task *msg = spdk_mempool_get(g_event_mempool);  // kv_malloc(sizeof(struct kv_app_task));
     *msg = (struct kv_app_task){func, arg};
     moodycamel_cq_enqueue(g_threads[index].cq, msg);
 }
@@ -44,7 +44,8 @@ static int msg_poller(void *arg) {
     while ((size = moodycamel_cq_try_dequeue_bulk(data->cq, (MoodycamelValue *)msg, MAX_POLL_SZ))) {
         for (size_t i = 0; i < size; i++) {
             if (msg[i]->func) msg[i]->func(msg[i]->arg);
-            kv_free(msg[i]);
+            // kv_free(msg[i]);
+            spdk_mempool_put(g_event_mempool, msg[i]);
         }
     }
     return 0;
@@ -70,6 +71,10 @@ static void register_func(void *arg) {
     }
 }
 static void send_msg_to_all(void *arg) {
+    char mempool_name[64];
+    snprintf(mempool_name, sizeof(mempool_name), "kv_app_evtpool_%d", getpid());
+    g_event_mempool = spdk_mempool_create(mempool_name, 262144 - 1, /* Power of 2 minus 1 is optimal for memory consumption */
+                                          sizeof(struct kv_app_task), SPDK_MEMPOOL_DEFAULT_CACHE_SIZE, SPDK_ENV_SOCKET_ID_ANY);
     thread_init(0);
     spdk_for_each_thread(register_func, arg, app_start);
 }
