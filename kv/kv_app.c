@@ -15,6 +15,7 @@ static struct spdk_mempool *g_event_mempool;
 static struct thread_data {
     struct spdk_thread *thread;
     MoodycamelCQHandle cq;
+    MoodycamelToken c_token, p_tokens[MAX_TASKS_NUM];
     struct spdk_poller *poller;
 } g_threads[MAX_TASKS_NUM];
 
@@ -31,9 +32,10 @@ uint32_t kv_app_get_thread_index(void) {
 }
 
 void kv_app_send(uint32_t index, kv_app_func func, void *arg) {
-    struct kv_app_task *msg = spdk_mempool_get(g_event_mempool);  // kv_malloc(sizeof(struct kv_app_task));
+    uint32_t local_index = kv_app_get_thread_index();
+    struct kv_app_task *msg = spdk_mempool_get(g_event_mempool);
     *msg = (struct kv_app_task){func, arg};
-    moodycamel_cq_enqueue(g_threads[index].cq, msg);
+    moodycamel_cq_enqueue_with_token(g_threads[index].cq, g_threads[index].p_tokens[local_index], msg);
 }
 
 #define MAX_POLL_SZ 16
@@ -41,7 +43,7 @@ static int msg_poller(void *arg) {
     struct thread_data *data = arg;
     struct kv_app_task *msg[MAX_POLL_SZ];
     size_t size;
-    while ((size = moodycamel_cq_try_dequeue_bulk(data->cq, (MoodycamelValue *)msg, MAX_POLL_SZ))) {
+    while ((size = moodycamel_cq_try_dequeue_bulk_with_token(data->cq, data->c_token, (MoodycamelValue *)msg, MAX_POLL_SZ))) {
         for (size_t i = 0; i < size; i++) {
             if (msg[i]->func) msg[i]->func(msg[i]->arg);
             // kv_free(msg[i]);
@@ -59,6 +61,8 @@ static void app_start(void *arg) {
 static inline void thread_init(uint32_t index) {
     g_threads[index].thread = spdk_get_thread();
     moodycamel_cq_create(&g_threads[index].cq);
+    for (size_t i = 0; i < g_app.task_num; i++) moodycamel_prod_token(g_threads[index].cq, &g_threads[index].p_tokens[i]);
+    moodycamel_cons_token(g_threads[index].cq, &g_threads[index].c_token);
     g_threads[index].poller = spdk_poller_register(msg_poller, g_threads + index, 0);
 }
 
@@ -98,7 +102,11 @@ int kv_app_start(const char *json_config_file, uint32_t task_num, struct kv_app_
     pthread_mutex_init(&g_lock, NULL);
     int rc = 0;
     if ((rc = spdk_app_start(&opts, send_msg_to_all, tasks))) SPDK_ERRLOG("ERROR starting application\n");
-    for (size_t i = 0; i < task_num; i++) moodycamel_cq_destroy(g_threads[i].cq);
+    for (size_t i = 0; i < task_num; i++) {
+        moodycamel_cons_token_destroy(g_threads[i].c_token);
+        for (size_t j = 0; j < g_app.task_num; j++) moodycamel_prod_token_destroy(g_threads[i].p_tokens[j]);
+        moodycamel_cq_destroy(g_threads[i].cq);
+    }
     spdk_app_fini();
     return rc;
 }
