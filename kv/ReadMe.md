@@ -1,6 +1,10 @@
 # spdk kv
 
 ### TODO List
+
++ using mempool in data-path
+
+#### DataStore
 + ~~bucket log compact~~
 
     + ~~bucket log bit map~~ 
@@ -14,6 +18,21 @@
 
     + ~~index log~~
     + index log update buffer
+
++ don't copy during value log read
++ write small value to bucket log
++ set: write bucket/value at the same time
++ bucket cache for value compression
++ dynamic queue length
+
+#### RDMA
++ RDMA_READ
++ shared recieve queue
+
+#### replication
++ Control-plane
+
+    + ectd
 
 ### spdk bugs
 
