@@ -154,7 +154,14 @@ static inline int on_connect_request(struct kv_rdma *self, struct rdma_cm_id *cm
     TEST_NZ(rdma_accept(cm_id, &cm_params));
     return 0;
 }
-
+static inline int on_connect_error(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
+    if (!self->is_server) {
+        struct rdma_connection *conn = cm_id->context;
+        if (conn->cb.connect) conn->cb.connect(NULL, conn->cb_arg);
+        kv_free(conn);
+    }
+    return 0;
+}
 static inline int on_established(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
     if (!self->is_server) {
         struct rdma_connection *conn = cm_id->context;
@@ -189,6 +196,10 @@ static int rdma_cm_poller(void *_self) {
                 break;
             case RDMA_CM_EVENT_ROUTE_RESOLVED:
                 on_route_resolved(self, cm_id);
+                break;
+            case RDMA_CM_EVENT_UNREACHABLE:
+            case RDMA_CM_EVENT_REJECTED:
+                on_connect_error(self, cm_id);
                 break;
             case RDMA_CM_EVENT_CONNECT_REQUEST:
                 on_connect_request(self, cm_id);
@@ -322,6 +333,9 @@ void kv_rdma_make_resp(void *req, uint8_t *resp, uint32_t resp_sz) {
 
 // --- cq_poller ---
 static inline void on_write_resp_done(struct ibv_wc *wc) {
+    if (wc->status != IBV_WC_SUCCESS) {
+        fprintf(stderr, "on_write_resp_done: status is %d\n", wc->status);
+    }
     struct server_req_ctx *ctx = (struct server_req_ctx *)wc->wr_id;
     assert(ctx->conn->self->is_server);
     struct ibv_sge sge = {(uint64_t)ctx->buf, ctx->conn->max_msg_sz, ctx->conn->mr->lkey};
@@ -330,6 +344,12 @@ static inline void on_write_resp_done(struct ibv_wc *wc) {
 }
 
 static inline void on_recv_req(struct ibv_wc *wc) {
+    if (wc->status != IBV_WC_SUCCESS) {
+        fprintf(stderr, "on_recv_req: status is %d\n", wc->status);
+        wc->status = IBV_WC_SUCCESS;
+        on_write_resp_done(wc);
+        return;
+    }
     struct server_req_ctx *ctx = (struct server_req_ctx *)wc->wr_id;
     assert(ctx->conn->self->is_server);
     assert(wc->byte_len > HEADER_SIZE);
@@ -344,7 +364,7 @@ static inline void on_recv_resp(struct ibv_wc *wc) {
     // using wc->imm_data(rkey) to find corresponding request_ctx
     struct client_req_ctx *ctx = STAILQ_FIRST(&conn->request_ctxs), *tmp = ctx;
     assert(ctx);
-    if (ctx->resp->rkey == wc->imm_data) //likely
+    if (ctx->resp->rkey == wc->imm_data)  // likely
         STAILQ_REMOVE_HEAD(&conn->request_ctxs, next);
     else
         while (true) {
@@ -361,7 +381,13 @@ static inline void on_recv_resp(struct ibv_wc *wc) {
     ctx->cb(ctx->conn, wc->status == IBV_WC_SUCCESS, ctx->req, ctx->resp, ctx->cb_arg);
 }
 
-#define MAX_ENTRIES_PER_POLL 32
+static inline void on_send_req(struct ibv_wc *wc) {
+    if (wc->status != IBV_WC_SUCCESS) {
+        fprintf(stderr, "on_send_req: status is %d\n", wc->status);
+    }
+}
+
+#define MAX_ENTRIES_PER_POLL 128
 static int rdma_cq_poller(void *arg) {
     struct kv_rdma *self = arg;
     struct ibv_wc wc[MAX_ENTRIES_PER_POLL];
@@ -369,10 +395,6 @@ static int rdma_cq_poller(void *arg) {
         int rc = ibv_poll_cq(self->cq, MAX_ENTRIES_PER_POLL, wc);
         if (rc <= 0) return rc;
         for (int i = 0; i < rc; i++) {
-            if (wc[i].status != IBV_WC_SUCCESS) {
-                puts("cq_poller: status is not IBV_WC_SUCCESS.");
-                exit(-1);
-            }
             switch (wc[i].opcode) {
                 case IBV_WC_RECV:
                     on_recv_req(wc + i);
@@ -384,7 +406,7 @@ static int rdma_cq_poller(void *arg) {
                     on_write_resp_done(wc + i);
                     break;
                 case IBV_WC_SEND:
-                    // printf("send completed successfully.\n");
+                    on_send_req(wc + i);
                     break;
                 default:
                     fprintf(stderr, "kv_rdma: unknown event %u \n.", wc[i].opcode);

@@ -18,10 +18,11 @@ struct {
     uint32_t concurrent_io_num;
     char json_config_file[1024];
     char server_ip[32];
+    char server_ports[32][16];
     bool test_rdma;
 } opt = {.num_items = 1024,
          .read_num_items = 512,
-         .client_num = 2,
+         .client_num = 0,
          .producer_num = 1,
          .value_size = 1024,
          .concurrent_io_num = 32,
@@ -35,7 +36,7 @@ static void help(void) {
 }
 static void get_options(int argc, char **argv) {
     int ch;
-    while ((ch = getopt(argc, argv, "htn:r:v:d:c:i:p:s:")) != -1) switch (ch) {
+    while ((ch = getopt(argc, argv, "htn:r:v:P:c:i:p:s:")) != -1) switch (ch) {
             case 'h':
                 help();
                 break;
@@ -51,8 +52,8 @@ static void get_options(int argc, char **argv) {
             case 'v':
                 opt.value_size = atol(optarg);
                 break;
-            case 'd':
-                opt.client_num = atol(optarg);
+            case 'p':
+                strcpy(opt.server_ports[opt.client_num++], optarg);
                 break;
             case 'c':
                 strcpy(opt.json_config_file, optarg);
@@ -60,7 +61,7 @@ static void get_options(int argc, char **argv) {
             case 'i':
                 opt.concurrent_io_num = atol(optarg);
                 break;
-            case 'p':
+            case 'P':
                 opt.producer_num = atol(optarg);
                 break;
             case 's':
@@ -82,7 +83,8 @@ struct io_buffer_t {
 } * io_buffers;
 
 struct client_t {
-    char port[16];
+    char *ip;
+    char *port;
     kv_rdma_handle rdma;
     connection_handle h;
 } * clients;
@@ -196,7 +198,7 @@ static void test(void *arg) {
             msg->type = KV_MSG_SET;
             *(uint128 *)KV_MSG_KEY(msg) = index_to_key(p->start_io);
             msg->key_len = 16;
-            msg->value_offset=msg->key_len;
+            msg->value_offset = msg->key_len;
             msg->value_len = opt.value_size;
             io->req_sz = KV_MSG_SIZE(msg);
             break;
@@ -204,7 +206,7 @@ static void test(void *arg) {
             msg->type = KV_MSG_GET;
             *(uint128 *)KV_MSG_KEY(msg) = index_to_key(random() % opt.num_items);
             msg->key_len = 16;
-            msg->value_offset=msg->key_len;
+            msg->value_offset = msg->key_len;
             msg->value_len = 0;
             io->req_sz = KV_MSG_SIZE(msg);
             break;
@@ -212,15 +214,15 @@ static void test(void *arg) {
             msg->type = KV_MSG_DEL;
             *(uint128 *)KV_MSG_KEY(msg) = index_to_key(p->start_io);
             msg->key_len = 16;
-            msg->value_offset=msg->key_len;
+            msg->value_offset = msg->key_len;
             msg->value_len = 0;
             io->req_sz = KV_MSG_SIZE(msg);
             break;
         case TEST:
             msg->type = KV_MSG_TEST;
-            *(uint128 *)KV_MSG_KEY(msg) = (uint128){0,0};
+            *(uint128 *)KV_MSG_KEY(msg) = (uint128){0, 0};
             msg->key_len = 16;
-            msg->value_offset=msg->key_len;
+            msg->value_offset = msg->key_len;
             msg->value_len = opt.value_size;
             io->req_sz = EXTRA_BUF;
             break;
@@ -258,7 +260,8 @@ int main(int argc, char **argv) {
     io_buffers = calloc(opt.concurrent_io_num, sizeof(struct io_buffer_t));
     clients = calloc(opt.client_num, sizeof(struct client_t));
     for (size_t i = 0; i < opt.client_num; i++) {
-        sprintf(clients[i].port, "%lu", 9000 + i);
+        clients[i].ip = opt.server_ip;
+        clients[i].port = opt.server_ports[i];
         task[i].func = client_init;
         task[i].arg = clients + i;
     }
