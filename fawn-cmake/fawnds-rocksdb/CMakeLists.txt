@@ -1,12 +1,12 @@
 # Add executable called "helloDemo" that is built from the source files
 # "demo.cxx" and "demo_b.cxx". The extensions are automatically found.
-add_executable (fawnds fawnds.cc hash_functions.cc fawnds_flash.cc fawnds_bench.cc)
+add_executable (fawnds_rocks fawnds.cc hash_functions.cc fawnds_flash.cc fawnds_bench.cc)
 
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
-target_link_libraries(fawnds Threads::Threads OpenSSL::SSL utils rocksdb -lz -lsnappy zstd -lbz2 -ldl)
+target_link_libraries(fawnds_rocks Threads::Threads OpenSSL::SSL utils rocksdb -lz -lsnappy zstd -lbz2 -ldl -llz4)
 
-add_library (fawnds_flash fawnds_flash.cc)
-target_include_directories (fawnds_flash PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+add_library (fawnds_flash_rocks fawnds_flash.cc)
+target_include_directories (fawnds_flash_rocks PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
