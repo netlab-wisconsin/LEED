@@ -127,6 +127,7 @@ static int create_connetion(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
             wr.sg_list = &sge;
             wr.num_sge = 1;
             for (size_t i = 0; i < self->con_req_num; i++) {
+                self->requests[i].self = self;
                 self->requests[i].buf = (uint8_t *)sge.addr;
                 wr.wr_id = (uint64_t)(self->requests + i);
                 TEST_NZ(ibv_post_srq_recv(self->srq, &wr, &bad_wr));
