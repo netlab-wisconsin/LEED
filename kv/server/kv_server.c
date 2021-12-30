@@ -116,15 +116,11 @@ static void handler(void *req, uint8_t *buf, uint32_t req_sz, void *arg) {
     kv_app_send(ctx->worker_id, io_start, ctx);
 }
 #define EXTRA_BUF 32
-static void connect_cb(connection_handle h, void *cb_arg) {
-    puts("client connected.");
-    kv_rdma_setup_conn_ctx(h, opt.concurrent_io_num, EXTRA_BUF + opt.value_size, handler, cb_arg);
-}
 
 static void rdma_start(void *arg) {
     struct server_t *server = arg;
     kv_rdma_init(&server->rdma);
-    kv_rdma_listen(server->rdma, "0.0.0.0", server->port, connect_cb, server);
+    kv_rdma_listen(server->rdma, "0.0.0.0", server->port, opt.concurrent_io_num, EXTRA_BUF + opt.value_size, handler, server);
 }
 
 static uint32_t io_cnt;
