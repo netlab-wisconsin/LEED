@@ -53,6 +53,7 @@ struct kv_rdma {
     bool is_server;
     uint32_t thread_num;
 
+
     // server data
     struct ibv_srq *srq;
     uint32_t con_req_num;
@@ -156,7 +157,7 @@ static int create_connetion(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
     qp_attr.cap.max_recv_wr = MAX_Q_NUM;
     qp_attr.cap.max_send_sge = 1;
     qp_attr.cap.max_recv_sge = 1;
-    TEST_NZ(rdma_create_qp(cm_id, cm_id->pd, &qp_attr));
+    TEST_NZ(rdma_create_qp(cm_id, self->pd, &qp_attr));
 
     struct rdma_connection *conn = cm_id->context;
     conn->qp = cm_id->qp;
