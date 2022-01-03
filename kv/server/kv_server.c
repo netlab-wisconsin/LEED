@@ -15,9 +15,10 @@ struct {
     uint32_t ssd_num;
     uint32_t server_num;
     uint32_t concurrent_io_num;
+    char port[16];
     char json_config_file[1024];
 
-} opt = {.ssd_num = 2, .server_num = 1, .concurrent_io_num = 32, .json_config_file = "config.json"};
+} opt = {.ssd_num = 2, .server_num = 1, .concurrent_io_num = 32, .port = "9000", .json_config_file = "config.json"};
 static void help(void) {
     // TODO: HELP TEXT
     printf("Some helpful text.\n");
@@ -25,7 +26,7 @@ static void help(void) {
 }
 static void get_options(int argc, char **argv) {
     int ch;
-    while ((ch = getopt(argc, argv, "hn:r:v:d:c:i:s:")) != -1) switch (ch) {
+    while ((ch = getopt(argc, argv, "hn:r:v:d:c:i:s:p:")) != -1) switch (ch) {
             case 'h':
                 help();
                 break;
@@ -47,6 +48,9 @@ static void get_options(int argc, char **argv) {
             case 's':
                 opt.server_num = atol(optarg);
                 break;
+            case 'p':
+                strcpy(opt.port, optarg);
+                break;
             default:
                 help();
                 exit(-1);
@@ -58,16 +62,12 @@ struct worker_t {
     struct kv_data_store data_store;
 } * workers;
 
-struct server_t {
-    kv_rdma_handle rdma;
-    char port[16];
-} * servers;
-
+kv_rdma_handle server;
 struct io_ctx {
     void *req;
     struct kv_msg *msg;
     uint32_t worker_id;
-    uint32_t server_id;
+    uint32_t server_thread;
 };
 
 static void send_response(void *arg) {
@@ -79,7 +79,7 @@ static void send_response(void *arg) {
 static void io_fini(bool success, void *arg) {
     struct io_ctx *io = arg;
     io->msg->type = success ? KV_MSG_OK : KV_MSG_ERR;
-    kv_app_send(opt.ssd_num + io->server_id, send_response, arg);
+    kv_app_send(io->server_thread, send_response, arg);
 }
 
 static void io_start(void *arg) {
@@ -108,9 +108,8 @@ static void io_start(void *arg) {
 }
 
 static void handler(void *req, uint8_t *buf, uint32_t req_sz, void *arg) {
-    struct server_t *server = arg;
     struct io_ctx *ctx = malloc(sizeof(struct io_ctx));
-    *ctx = (struct io_ctx){req, (struct kv_msg *)buf, 0, server - servers};
+    *ctx = (struct io_ctx){req, (struct kv_msg *)buf, 0, kv_app_get_thread_index()};
     uint64_t key_frag = *(uint64_t *)(KV_MSG_KEY(ctx->msg) + 8);
     ctx->worker_id = key_frag % opt.ssd_num;
     kv_app_send(ctx->worker_id, io_start, ctx);
@@ -118,9 +117,8 @@ static void handler(void *req, uint8_t *buf, uint32_t req_sz, void *arg) {
 #define EXTRA_BUF 32
 
 static void rdma_start(void *arg) {
-    struct server_t *server = arg;
-    kv_rdma_init(&server->rdma, opt.server_num);
-    kv_rdma_listen(server->rdma, "0.0.0.0", server->port, opt.concurrent_io_num, EXTRA_BUF + opt.value_size, handler, server);
+    kv_rdma_init(&server, opt.server_num);
+    kv_rdma_listen(server, "0.0.0.0", opt.port, opt.concurrent_io_num, EXTRA_BUF + opt.value_size, handler, NULL);
 }
 
 static uint32_t io_cnt;
@@ -130,7 +128,7 @@ static void worker_init_done(bool success, void *arg) {
         exit(-1);
     }
     if (--io_cnt == 0) {
-        kv_app_send(opt.ssd_num, rdma_start, servers);
+        kv_app_send(opt.ssd_num, rdma_start, NULL);
     }
 }
 
@@ -155,14 +153,11 @@ int main(int argc, char **argv) {
         task[i].func = worker_init;
         task[i].arg = workers + i;
     }
-    servers = calloc(1, sizeof(struct server_t));
-    sprintf(servers->port, "%u", 9000);
     for (size_t i = 0; i < opt.server_num; i++) {
         task[opt.ssd_num + i] = (struct kv_app_task){NULL, NULL};
     }
     io_cnt = opt.ssd_num;
     kv_app_start(opt.json_config_file, opt.ssd_num + opt.server_num, task);
-    free(servers);
     free(workers);
     free(task);
     return 0;

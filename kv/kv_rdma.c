@@ -116,6 +116,7 @@ static int create_connetion(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
         self->srq = NULL;
 
         if (self->is_server) {
+            TEST_Z(self->pd = ibv_alloc_pd(self->ctx));
             struct ibv_srq_init_attr srq_init_attr;
             memset(&srq_init_attr, 0, sizeof(srq_init_attr));
             srq_init_attr.attr.max_wr = MAX_Q_NUM;
@@ -471,6 +472,7 @@ void kv_rdma_fini(kv_rdma_handle h) {
             ibv_destroy_srq(self->srq);
             kv_free(self->requests);
             kv_rdma_free_mr(self->mr);
+            ibv_dealloc_pd(self->pd);
         }
     }
     kv_free(self);
