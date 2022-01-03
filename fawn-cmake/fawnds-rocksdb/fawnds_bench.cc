@@ -307,7 +307,7 @@ void bench(int argc, char** argv) {
 
             }
 
-            int dbi = (int)(i / bucket);
+            int dbi = (int)(val / bucket);
             if(!dbs[dbi]->Insert(key.data(), key.get_actual_size(), value.data(), valuesize)) {
                 perror("Insert failed\n");
             }

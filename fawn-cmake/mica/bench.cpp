@@ -43,24 +43,27 @@ struct Option{
     uint32_t value_size;
     uint8_t extra_buckets_percentage;
     char filename[1024]{};
+    uint8_t writetest;
     Option():num_items(1024),read_num_items(512),value_size(1024),extra_buckets_percentage(20){}
 };
 void help(){
     fprintf(stderr,
-        "./mica [-h] [-n num_items] [-r read_num_items] [-s value_size] [-b extra_buckets_percentage] <-d \"db_file_path\">\n"
-        );
+            "./mica [-h] [-n num_items] [-r read_num_items] [-s value_size] [-b extra_buckets_percentage] <-d \"db_file_path\">\n"
+    );
     fprintf(stderr,
-        "   -h      help (this text)\n"
-        "   -n #    number of items to fill.\n"
-        "   -r #    number of items to randomly query\n"
-        "   -s #    set value size (bytes)\n"
-        "   -b #    percentage of extra buckets (0~100, default: 20)\n"
-        "   -d #    path to database file\n"
-        );
+            "   -h      help (this text)\n"
+            "   -n #    number of items to fill.\n"
+            "   -r #    number of items to randomly query\n"
+            "   -s #    set value size (bytes)\n"
+            "   -b #    percentage of extra buckets (0~100, default: 20)\n"
+            "   -d #    path to database file\n"
+            "   -w #    random write test\\n\""
+            "   -t #    number of items to randomly write\\n\""
+    );
 }
 void get_options(int argc, char** argv,Option *opt){
     int ch;
-    while ((ch = getopt(argc, argv, "hn:r:s:b:d:")) != -1)
+    while ((ch = getopt(argc, argv, "hn:r:s:b:d:w")) != -1)
         switch (ch) {
             case 'h':
                 help();
@@ -80,6 +83,12 @@ void get_options(int argc, char** argv,Option *opt){
             case 'd':
                 strcpy(opt->filename,optarg);
                 break;
+            case 'w':
+                opt->writetest = 1;
+                break;
+            //case 't':
+             //   opt->writetimes = stoul(optarg);
+               // break;
             default:
                 help();
                 exit(-1);
@@ -100,8 +109,10 @@ int main(int argc, char** argv){
     std::vector<uint64_t> keys(opt.read_num_items);
     for(uint64_t i=0;i<opt.read_num_items;++i)
         keys[i]= index_to_key(random()%opt.num_items);
+    
     puts("keys generated.");
     // mehcached_print_buckets(&table);
+    if (!opt.writetest){
     timeval tv_start, tv_end;
     string value;
     gettimeofday(&tv_start, NULL);
@@ -110,6 +121,29 @@ int main(int argc, char** argv){
             fprintf(stderr,"get failed! index: %ld\n",i);
     gettimeofday(&tv_end, NULL);
     printf("Query rate: %f\n", ((double)opt.read_num_items / timeval_diff(&tv_start,&tv_end)));
+    }
+    if (opt.writetest) {
+        puts("begin write test.");
+        //printf("writetimes is %d", opt.read_num_items);
+        
+	string value(opt.value_size, 'a');
+       
+//	std::vector<uint64_t> wkeys(opt.writetimes);
+       
+       	//for (u_int i = 0; i < opt.writetimes; i++) {
+          //  wkeys[i] = index_to_key(random()%opt.num_items);
+        //}
+       
+       	timeval write_tv_start, write_tv_end;
+        gettimeofday(&write_tv_start, nullptr);
+       
+       	for (int i = 0; i < opt.read_num_items; i++) {
+            mehcached_set(&table, keys[i], (uint8_t *)&keys[i],8,(uint8_t *)value.data(), opt.value_size);
+        }
+       
+       	gettimeofday(&write_tv_end, nullptr);
+        printf("Insert Rate: %f inserts per second\n", opt.read_num_items / timeval_diff(&write_tv_start, &write_tv_end));
+    }
     mehcached_table_free(&table);
     return 0;
 }
