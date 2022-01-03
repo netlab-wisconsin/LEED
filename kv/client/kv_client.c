@@ -245,7 +245,7 @@ static void send_init_done_msg(connection_handle h, void *arg) {
 }
 static void client_init(void *arg) {
     struct client_t *client = arg;
-    kv_rdma_init(&client->rdma);
+    kv_rdma_init(&client->rdma,1);
     kv_rdma_connect(client->rdma, opt.server_ip, client->port, send_init_done_msg, client);
 }
 

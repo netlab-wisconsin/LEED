@@ -119,7 +119,7 @@ static void handler(void *req, uint8_t *buf, uint32_t req_sz, void *arg) {
 
 static void rdma_start(void *arg) {
     struct server_t *server = arg;
-    kv_rdma_init(&server->rdma);
+    kv_rdma_init(&server->rdma, opt.server_num);
     kv_rdma_listen(server->rdma, "0.0.0.0", server->port, opt.concurrent_io_num, EXTRA_BUF + opt.value_size, handler, server);
 }
 
@@ -130,9 +130,7 @@ static void worker_init_done(bool success, void *arg) {
         exit(-1);
     }
     if (--io_cnt == 0) {
-        for (size_t i = 0; i < opt.server_num; i++) {
-            kv_app_send(opt.ssd_num + i, rdma_start, servers + i);
-        }
+        kv_app_send(opt.ssd_num, rdma_start, servers);
     }
 }
 
@@ -157,9 +155,9 @@ int main(int argc, char **argv) {
         task[i].func = worker_init;
         task[i].arg = workers + i;
     }
-    servers = calloc(opt.server_num, sizeof(struct server_t));
+    servers = calloc(1, sizeof(struct server_t));
+    sprintf(servers->port, "%u", 9000);
     for (size_t i = 0; i < opt.server_num; i++) {
-        sprintf(servers[i].port, "%lu", 9000 + i);
         task[opt.ssd_num + i] = (struct kv_app_task){NULL, NULL};
     }
     io_cnt = opt.ssd_num;

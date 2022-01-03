@@ -443,7 +443,7 @@ static int rdma_cq_poller(void *arg) {
 }
 
 // --- init & fini ---
-void kv_rdma_init(kv_rdma_handle *h) {
+void kv_rdma_init(kv_rdma_handle *h, uint32_t thread_num) {
     struct kv_rdma *self = kv_malloc(sizeof(struct kv_rdma));
     kv_memset(self, 0, sizeof(struct kv_rdma));
     self->ec = rdma_create_event_channel();
@@ -454,6 +454,7 @@ void kv_rdma_init(kv_rdma_handle *h) {
     int flag = fcntl(self->ec->fd, F_GETFL);
     fcntl(self->ec->fd, F_SETFL, flag | O_NONBLOCK);
     self->cm_poller = kv_app_poller_register(rdma_cm_poller, self, 1);
+    self->thread_num = thread_num;
     *h = self;
 }
 void kv_rdma_fini(kv_rdma_handle h) {
