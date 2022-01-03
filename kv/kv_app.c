@@ -86,6 +86,24 @@ static void send_msg_to_all(void *arg) {
 void *kv_app_poller_register(kv_app_poller_func func, void *arg, uint64_t period_microseconds) {
     return spdk_poller_register(func, arg, period_microseconds);
 }
+struct poller_register_ctx {
+    kv_app_poller_func func;
+    void *arg;
+    uint64_t period_microseconds;
+    void **poller;
+};
+static void poller_register(void *arg) {
+    struct poller_register_ctx *ctx = arg;
+    *ctx->poller = spdk_poller_register(ctx->func, ctx->arg, ctx->period_microseconds);
+    kv_free(arg);
+}
+void kv_app_poller_register_on(uint32_t index, kv_app_poller_func func, void *arg, uint64_t period_microseconds,
+                               void **poller) {
+    struct poller_register_ctx *ctx = kv_malloc(sizeof(*ctx));
+    *ctx = (struct poller_register_ctx){func, arg, period_microseconds, poller};
+    kv_app_send(index, poller_register, ctx);
+}
+
 void kv_app_poller_unregister(void **poller) { spdk_poller_unregister((struct spdk_poller **)poller); }
 
 int kv_app_start(const char *json_config_file, uint32_t task_num, struct kv_app_task *tasks) {

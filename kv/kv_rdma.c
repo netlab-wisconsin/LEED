@@ -2,6 +2,7 @@
 
 #include <fcntl.h>
 #include <netdb.h>
+#include <pthread.h>
 #include <rdma/rdma_cma.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,8 +49,9 @@ struct kv_rdma {
     struct ibv_pd *pd;
     struct ibv_cq *cq;
     struct rdma_event_channel *ec;
-    void *cm_poller, *cq_poller;
+    void *cm_poller, **cq_pollers;
     bool is_server;
+    uint32_t thread_num;
 
     // server data
     struct ibv_srq *srq;
@@ -57,6 +59,7 @@ struct kv_rdma {
     uint32_t max_msg_sz;
     struct ibv_mr *mr;
     struct server_req_ctx *requests;
+    pthread_rwlock_t lock;
     struct rdma_connection *connections;
 };
 struct client_req_ctx {
@@ -106,8 +109,10 @@ static int create_connetion(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
         self->ctx = cm_id->verbs;
         self->pd = cm_id->pd;
         TEST_Z(self->cq = ibv_create_cq(self->ctx, 3 * MAX_Q_NUM /* max_conn_num */, NULL, NULL, 0));
-        // TEST_NZ(ibv_req_notify_cq(self->cq, 0));  //?
-        self->cq_poller = kv_app_poller_register(rdma_cq_poller, self, 0);
+        self->cq_pollers = kv_calloc(self->thread_num, sizeof(void *));
+        uint32_t thread_i = kv_app_get_thread_index();
+        for (size_t i = 0; i < self->thread_num; i++)
+            kv_app_poller_register_on(thread_i + i, rdma_cq_poller, self, 0, self->cq_pollers + i);
         self->srq = NULL;
 
         if (self->is_server) {
@@ -182,7 +187,9 @@ static inline int on_connect_request(struct kv_rdma *self, struct rdma_cm_id *cm
     *conn = (struct rdma_connection){self, cm_id, NULL, .cb.handler = lconn->cb.handler, .cb_arg = lconn->cb_arg};
     cm_id->context = conn;
     TEST_NZ(create_connetion(self, cm_id));
-    HASH_ADD_INT(self->connections, qp->qp_num, conn);  // TODO: rwlock
+    pthread_rwlock_wrlock(&self->lock);
+    HASH_ADD_INT(self->connections, qp->qp_num, conn);
+    pthread_rwlock_unlock(&self->lock);
     struct rdma_conn_param cm_params;
     memset(&cm_params, 0, sizeof(cm_params));
     TEST_NZ(rdma_accept(cm_id, &cm_params));
@@ -206,7 +213,11 @@ static inline int on_established(struct kv_rdma *self, struct rdma_cm_id *cm_id)
 static inline int on_disconnect(struct rdma_cm_id *cm_id) {
     printf("peer disconnected.\n");
     struct rdma_connection *conn = cm_id->context;
-    if (conn->self->is_server) HASH_DEL(conn->self->connections, conn);
+    if (conn->self->is_server) {
+        pthread_rwlock_wrlock(&conn->self->lock);
+        HASH_DEL(conn->self->connections, conn);
+        pthread_rwlock_unlock(&conn->self->lock);
+    }
     rdma_destroy_qp(cm_id);
     rdma_destroy_id(cm_id);
     if (!conn->self->is_server && conn->cb.disconnect) conn->cb.disconnect(conn->cb_arg);
@@ -320,6 +331,7 @@ int kv_rdma_listen(kv_rdma_handle h, char *addr_str, char *port_str, uint32_t co
     freeaddrinfo(addr);
     self->con_req_num = con_req_num;
     self->max_msg_sz = max_msg_sz + HEADER_SIZE;
+    pthread_rwlock_init(&self->lock, NULL);
     printf("kv rdma listening on %s %s.\n", addr_str, port_str);
     return 0;
 }
@@ -363,7 +375,9 @@ static inline void on_recv_req(struct ibv_wc *wc) {
     assert(ctx->self->is_server);
     assert(wc->byte_len > HEADER_SIZE);
     assert(wc->wc_flags & IBV_WC_WITH_IMM);
+    pthread_rwlock_rdlock(&ctx->self->lock);
     HASH_FIND_INT(ctx->self->connections, &wc->qp_num, ctx->conn);
+    pthread_rwlock_unlock(&ctx->self->lock);
     assert(ctx->conn);
     ctx->resp_rkey = wc->imm_data;
     ctx->conn->cb.handler(ctx, ctx->buf + HEADER_SIZE, wc->byte_len - HEADER_SIZE, ctx->conn->cb_arg);
@@ -450,7 +464,8 @@ void kv_rdma_fini(kv_rdma_handle h) {
     if (self->ctx) {
         ibv_destroy_cq(self->cq);
         self->cq = NULL;
-        kv_app_poller_unregister(&self->cq_poller);
+        for (size_t i = 0; i < self->thread_num; i++) kv_app_poller_unregister(self->cq_pollers + i);
+        kv_free(self->cq_pollers);
         if (self->is_server) {
             ibv_destroy_srq(self->srq);
             kv_free(self->requests);

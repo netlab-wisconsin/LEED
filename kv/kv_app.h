@@ -26,5 +26,7 @@ void kv_app_send_msg(uint32_t index, kv_app_func func, void *arg);
 uint32_t kv_app_get_thread_index(void);
 
 void * kv_app_poller_register(kv_app_poller_func func, void *arg, uint64_t period_microseconds);
+void kv_app_poller_register_on(uint32_t index, kv_app_poller_func func, void *arg, uint64_t period_microseconds,
+                               void **poller);
 void kv_app_poller_unregister(void ** poller);
 #endif
