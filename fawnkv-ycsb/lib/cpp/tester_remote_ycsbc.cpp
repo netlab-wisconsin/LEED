@@ -7,6 +7,8 @@
 #include "core/timer.h"
 #include "core/client.h"
 #include "core/core_workload.h"
+#include "db/db_factory.h"
+#include <mutex>
 
 #include "FawnKV.h"
 #include "TFawnKVRemote.h"
@@ -114,26 +116,50 @@ string ParseCommandLine(int argc, char *argv[], utils::Properties &props) {
   return filename;
 }
 
-
+int DelegateClient(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const int num_ops,
+    bool is_loading) {
+  db->Init();
+  ycsbc::Client client(*db, *wl);
+  int oks = 0;
+  for (int i = 0; i < num_ops; ++i) {
+    if (is_loading) {
+      oks += client.DoInsert();
+    } else {
+      oks += client.DoTransaction();
+    }
+  }
+  db->Close();
+  return oks;
+}
 
 int main(int argc, char **argv)
 {
+    int port = 4001;
+    FawnKVClt client("0.0.0.0", 4001, "0.0.0.0", 4002);
+
     utils::Properties props;
     string file_name = ParseCommandLine(argc, argv, props);
+
+    ycsbc::DB *db = ycsbc::DBFactory::CreateDB(props);
+
+    if (!db) {
+        cout << "Unknown database name " << props["dbname"] << endl;
+        exit(0);
+    }
+
     ycsbc::CoreWorkload wl;
     wl.Init(props);
-
+    
     const int num_threads = stoi(props.GetProperty("threadcount", "1"));
 
     // Loads data
     vector<future<int>> actual_ops;
     int total_ops = stoi(props[ycsbc::CoreWorkload::RECORD_COUNT_PROPERTY]);
     for (int i = 0; i < num_threads; ++i) {
-        printf("123\n");
-        // actual_ops.emplace_back(async(launch::async,
-        //     DelegateClient, db, &wl, total_ops / num_threads, true));
+         actual_ops.emplace_back(async(launch::async,
+             DelegateClient, db, &wl, total_ops / num_threads, true));
     }
-    // assert((int)actual_ops.size() == num_threads);
+    assert((int)actual_ops.size() == num_threads);
 
     // int sum = 0;
     // for (auto &n : actual_ops) {
