@@ -34,6 +34,9 @@ void UsageMessage(const char *command) {
   cout << "  -db dbname: specify the name of the DB to use (default: basic)" << endl;
   cout << "  -P propertyfile: load properties from the given file. Multiple files can" << endl;
   cout << "                   be specified, and will be processed in the order specified" << endl;
+  cout << "  -cip clientIP" << endl;
+  cout << "  -feip frontendIP" << endl;
+  cout << "  -feport fePort" << endl;
 }
 
 
@@ -102,6 +105,30 @@ string ParseCommandLine(int argc, char *argv[], utils::Properties &props) {
       }
       input.close();
       argindex++;
+    } else if (strcmp(argv[argindex], "-cip") == 0) {
+      argindex++;
+      if (argindex >= argc) {
+        UsageMessage(argv[0]);
+        exit(0);
+      }
+      props.SetProperty("cip", argv[argindex]);
+      argindex++;
+    } else if (strcmp(argv[argindex], "-feip") == 0) {
+      argindex++;
+      if (argindex >= argc) {
+        UsageMessage(argv[0]);
+        exit(0);
+      }
+      props.SetProperty("feip", argv[argindex]);
+      argindex++;
+    } else if (strcmp(argv[argindex], "-feport") == 0) {
+      argindex++;
+      if (argindex >= argc) {
+        UsageMessage(argv[0]);
+        exit(0);
+      }
+      props.SetProperty("feport", argv[argindex]);
+      argindex++;
     } else {
       cout << "Unknown option '" << argv[argindex] << "'" << endl;
       exit(0);
@@ -133,10 +160,7 @@ int DelegateClient(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const int num_ops,
 }
 
 int main(int argc, char **argv)
-{
-    int port = 4001;
-    FawnKVClt client("0.0.0.0", 4001, "0.0.0.0", 4002);
-
+{   
     utils::Properties props;
     string file_name = ParseCommandLine(argc, argv, props);
 
@@ -161,44 +185,34 @@ int main(int argc, char **argv)
     }
     assert((int)actual_ops.size() == num_threads);
 
-    // int sum = 0;
-    // for (auto &n : actual_ops) {
-    //     assert(n.valid());
-    //     sum += n.get();
-    // }
-    // cerr << "# Loading records:\t" << sum << endl;
+    int sum = 0;
+    for (auto &n : actual_ops) {
+        assert(n.valid());
+        sum += n.get();
+    }
+    cerr << "# Loading records:\t" << sum << endl;
     
-    // extern char *optarg;
-    // extern int optind;
-    // string myIP = "";
-    // int myPort;
-    // int ch;
-    // int port = 4001;
-    // while ((ch = getopt(argc, argv, "c:p:")) != -1) {
-    //     switch (ch) {
-    //     case 'c':
-    //         myIP = optarg;
-	//     break;
-	// case 'p':
-	//     myPort = atoi(optarg);
-	//     break;
-	// default:
-    //         usage();
-    //         exit(-1);
-    //     }
-    // }
+    actual_ops.clear();
+    total_ops = stoi(props[ycsbc::CoreWorkload::OPERATION_COUNT_PROPERTY]);
+    utils::Timer<double> timer;
+    timer.Start();
+    for (int i = 0; i < num_threads; ++i) {
+        actual_ops.emplace_back(async(launch::async,
+            DelegateClient, db, &wl, total_ops / num_threads, false));
+    }
+    assert((int)actual_ops.size() == num_threads);
 
-    // argc -= optind;
-    // argv += optind;
-
-    // if (argc < 1) {
-	// usage();
-	// exit(-1);
-    // } else if (argc == 2) {
-	// port = atoi(argv[1]);
-    // }
-
-    // FawnKVClt client(argv[0], port, myIP, myPort);
+    sum = 0;
+    for (auto &n : actual_ops) {
+        assert(n.valid());
+        sum += n.get();
+    }
+    double duration = timer.End();
+    cerr << "# Transaction throughput (KTPS)" << endl;
+    cerr << props["dbname"] << '\t' << file_name << '\t' << num_threads << '\t';
+    cerr << total_ops / duration / 1000 << endl;
+    
+    FawnKVClt client(props["feip"], stoi(props["feport"]), props["cip"], 4002);
 
     // for (int i = 0; i < 10000; i++) {
 	// printf("putting..");
@@ -206,5 +220,5 @@ int main(int argc, char **argv)
 	// string value = client.get("abc");
 	// printf("%s\n", value.c_str());
     // }
-    // return 0;
+    return 0;
 }
