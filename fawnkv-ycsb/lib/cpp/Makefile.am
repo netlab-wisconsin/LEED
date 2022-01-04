@@ -32,7 +32,7 @@ tester_remote_LDADD = 	 			\
 	$(THRIFT_LIBS)
 
 
-tester_remote_ycsbc_SOURCES = tester_remote_ycsbc.cpp TFawnKVRemote.cpp TFawnKVRemote.h $(top_srcdir)/lib/cpp/core/core_workload.cc $(top_srcdir)/lib/cpp/core/*.h
+tester_remote_ycsbc_SOURCES = tester_remote_ycsbc.cpp TFawnKVRemote.h $(top_srcdir)/lib/cpp/core/core_workload.cc $(top_srcdir)/lib/cpp/core/*.h
 
 tester_remote_ycsbc_CPPFLAGS = -std=c++11 -I$(builddir)/gen-cpp -I$(top_srcdir)/utils/ -I$(top_srcdir)/fawnkv/ -I$(top_builddir)/fawnkv/gen-cpp/ -I$(top_srcdir)/lib/cpp/core/
 
