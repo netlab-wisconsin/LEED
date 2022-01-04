@@ -94,6 +94,7 @@ AC_CONFIG_FILES([ Makefile
 		  lib/java/Makefile
 		  test/Makefile
 		  test/fawnds/Makefile
-		  test/management/Makefile])
+		  test/management/Makefile
+		  lib/cpp/core/Makefile])
 
 AC_OUTPUT
