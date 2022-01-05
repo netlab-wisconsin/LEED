@@ -34,11 +34,9 @@ class BasicDB : public DB {
     std::lock_guard<std::mutex> lock(mutex_);
     cout << "READ " << table << ' ' << key;
     if (fields) {
-      cout << " [ ";
       for (auto f : *fields) {
         cout << f << ' ';
       }
-      cout << ']' << endl;
     } else {
       cout  << " < all fields >" << endl;
     }
@@ -78,7 +76,7 @@ class BasicDB : public DB {
     std::lock_guard<std::mutex> lock(mutex_);
     cout << "INSERT " << table << ' ' << key << " [ ";
     for (auto v : values) {
-      cout << v.first << '=' << v.second << ' ';
+      // cout << v.first << '=' << v.second << ' ';
     }
     cout << ']' << endl;
     return 0;

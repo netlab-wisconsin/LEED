@@ -212,7 +212,7 @@ int main(int argc, char **argv)
     cerr << props["dbname"] << '\t' << file_name << '\t' << num_threads << '\t';
     cerr << total_ops / duration / 1000 << endl;
     
-    FawnKVClt client(props["feip"], stoi(props["feport"]), props["cip"], 4002);
+    //FawnKVClt client(props["feip"], stoi(props["feport"]), props["cip"], 4002);
 
     // for (int i = 0; i < 10000; i++) {
 	// printf("putting..");
