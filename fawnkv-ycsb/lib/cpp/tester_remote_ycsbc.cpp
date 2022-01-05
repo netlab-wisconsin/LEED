@@ -175,7 +175,7 @@ int main(int argc, char **argv)
     wl.Init(props);
     
     const int num_threads = stoi(props.GetProperty("threadcount", "1"));
-
+    cerr << "# Thread Counts:\t" << num_threads << endl;
     // Loads data
     vector<future<int>> actual_ops;
     int total_ops = stoi(props[ycsbc::CoreWorkload::RECORD_COUNT_PROPERTY]);
@@ -184,6 +184,8 @@ int main(int argc, char **argv)
              DelegateClient, db, &wl, total_ops / num_threads, true));
     }
     assert((int)actual_ops.size() == num_threads);
+
+    cerr << "# Thread init complete!\t" << endl;
 
     int sum = 0;
     for (auto &n : actual_ops) {
@@ -211,14 +213,5 @@ int main(int argc, char **argv)
     cerr << "# Transaction throughput (KTPS)" << endl;
     cerr << props["dbname"] << '\t' << file_name << '\t' << num_threads << '\t';
     cerr << total_ops / duration / 1000 << endl;
-    
-    //FawnKVClt client(props["feip"], stoi(props["feport"]), props["cip"], 4002);
-
-    // for (int i = 0; i < 10000; i++) {
-	// printf("putting..");
-	// client.put("abc", "value");
-	// string value = client.get("abc");
-	// printf("%s\n", value.c_str());
-    // }
     return 0;
 }
