@@ -22,6 +22,7 @@ int main(int argc, char **argv)
     string myIP = "";
     int ch;
     int myPort = 0;
+    printf("1");
     while ((ch = getopt(argc, argv, "c:p:")) != -1) {
         switch (ch) {
         case 'c':
@@ -35,7 +36,7 @@ int main(int argc, char **argv)
             exit(-1);
         }
     }
-
+    printf("1");
     argc -= optind;
     argv += optind;
 
@@ -43,7 +44,7 @@ int main(int argc, char **argv)
 	usage();
 	exit(-1);
     }
-
+    printf("myIP is %s myPort is %d",  myIP.c_str(), myPort);
     FawnKVClt client(argv[0], myIP, myPort);
 
     for (int i = 0; i < 10; i++) {

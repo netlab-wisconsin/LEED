@@ -21,7 +21,7 @@ DB* DBFactory::CreateDB(utils::Properties &props) {
     return new BasicDB;
   } else if (props["dbname"] == "fawn") {
     //FawnDB(const std::string& frontendIP, const int32_t port, const std::string& clientIP = "", const int32_t clientPort = 0)
-    return new FawnDB(props["feip"], stoi(props["feport"]), props["cip"], 4002);
+    return new FawnDB(props["feip"], stoi(props["feport"]), props["cip"], stoi(props["cport"]));
   }
 }
 

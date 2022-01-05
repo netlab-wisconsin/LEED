@@ -164,24 +164,30 @@ int main(int argc, char **argv)
     utils::Properties props;
     string file_name = ParseCommandLine(argc, argv, props);
 
-    ycsbc::DB *db = ycsbc::DBFactory::CreateDB(props);
-
-    if (!db) {
-        cout << "Unknown database name " << props["dbname"] << endl;
-        exit(0);
-    }
+   
 
     ycsbc::CoreWorkload wl;
     wl.Init(props);
     
     const int num_threads = stoi(props.GetProperty("threadcount", "1"));
     cerr << "# Thread Counts:\t" << num_threads << endl;
+
+    ycsbc::DB **dbs = new ycsbc::DB *[num_threads];
+    for (int i = 0; i < num_threads; ++i) {
+      props.SetProperty("cport", std::to_string(8000 + i));
+      ycsbc::DB *db = ycsbc::DBFactory::CreateDB(props);
+      if (!db) {
+          cout << "Unknown database name " << props["dbname"] << endl;
+          exit(0);
+      }
+      dbs[i] = db;
+    }
     // Loads data
     vector<future<int>> actual_ops;
     int total_ops = stoi(props[ycsbc::CoreWorkload::RECORD_COUNT_PROPERTY]);
     for (int i = 0; i < num_threads; ++i) {
          actual_ops.emplace_back(async(launch::async,
-             DelegateClient, db, &wl, total_ops / num_threads, true));
+             DelegateClient, dbs[i], &wl, total_ops / num_threads, true));
     }
     assert((int)actual_ops.size() == num_threads);
 
@@ -200,7 +206,7 @@ int main(int argc, char **argv)
     timer.Start();
     for (int i = 0; i < num_threads; ++i) {
         actual_ops.emplace_back(async(launch::async,
-            DelegateClient, db, &wl, total_ops / num_threads, false));
+            DelegateClient, dbs[i], &wl, total_ops / num_threads, false));
     }
     assert((int)actual_ops.size() == num_threads);
 

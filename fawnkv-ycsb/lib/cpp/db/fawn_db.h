@@ -23,8 +23,13 @@ namespace ycsbc {
 
 class FawnDB : public DB {
  public:
-  FawnDB(const std::string& frontendIP, const int32_t port, const std::string& clientIP = "", const int32_t clientPort = 0)
-  : client_(frontendIP, port, clientIP, clientPort) {
+  FawnDB(const std::string& frontendIP, const int32_t port, const std::string& clientIP = "", const int32_t clientPort = 0):
+  client_(frontendIP, port, clientIP, clientPort)
+  {
+  }
+
+  void Init() {
+      cout << "Init a ycsb client" << endl;
   }
 
   int Read(const std::string &table, const std::string &key,
@@ -47,7 +52,23 @@ class FawnDB : public DB {
     return DB::kOK;
   }
 
+  std::vector<std::string> stringSplit(const std::string& str, char delim) {
+    std::vector<std::string> elems;
+    auto lastPos = str.find_first_not_of(delim, 0);
+    auto pos = str.find_first_of(delim, lastPos);
+    while (pos != std::string::npos || lastPos != std::string::npos) {
+        elems.push_back(str.substr(lastPos, pos - lastPos));
+        lastPos = str.find_first_not_of(delim, pos);
+        pos = str.find_first_of(delim, lastPos);
+    }
+    return elems;
+  }
+
  private:
+  std::string frontendIP_;
+  int32_t port_;
+  std::string clientIP_;
+  int32_t clientPort_;
   FawnKVClt client_;
 };
 
