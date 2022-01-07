@@ -20,21 +20,21 @@ package main
 //#define KV_NODE_INFO_DELETE (2)
 //} __attribute__((packed));
 //
-////free *info in handler
-//typedef void (*kv_etcd_node_handler)(struct kv_node_info *info); //create or delete
-//typedef void (*kv_etcd_vid_handler)(uint32_t vid_index, struct kv_vid *vid); //update
-//static struct kv_vid * kv_etcd_get_vid(struct kv_node_info *info,uint32_t index){
-//	return info->vids+index;
+//// free *info in handler
+//typedef void (*kv_etcd_node_handler)(struct kv_node_info *info);              // create or delete
+//typedef void (*kv_etcd_vid_handler)(uint32_t vid_index, struct kv_vid *vid);  // update
+//
+//static inline struct kv_vid *kv_etcd_get_vid(struct kv_node_info *info, uint32_t index) { return info->vids + index; }
+//static inline struct kv_node_info *kv_node_info_alloc(char *rdma_ip, char *rdma_port, uint32_t vid_num) {
+//    struct kv_node_info *info = malloc(sizeof(struct kv_node_info) + vid_num * sizeof(struct kv_vid));
+//    memset(info, 0, 24);
+//    strcpy(info->rdma_ip, rdma_ip);
+//    strcpy(info->rdma_port, rdma_port);
+//    info->vid_num = vid_num;
+//    memset(info->vids, 0xFF, vid_num * sizeof(struct kv_vid));
+//    return info;
 //}
-//static struct kv_node_info * kv_node_info_alloc(uint32_t vid_num){
-//	struct kv_node_info * info = malloc(sizeof(struct kv_node_info) + vid_num * sizeof(struct kv_vid));
-//  info->vid_num = vid_num;
-//  memset(info->vids, 0xFF, vid_num * sizeof(struct kv_vid));
-//  return info;
-//}
-//static void kv_etcd_node_handler_wrapper(kv_etcd_node_handler h, struct kv_node_info *info){
-//	h(info);
-//}
+//static inline void kv_etcd_node_handler_wrapper(kv_etcd_node_handler h, struct kv_node_info *info) { h(info); }
 import "C"
 
 import (
@@ -106,15 +106,11 @@ func sendNodeInfo(Kvs []*mvccpb.KeyValue, msgTypes []int) {
 		nodeID := key[1]
 		if _, ok := nodeMap[nodeID]; !ok {
 			ipPort := strings.Split(nodeID, ":")
-			nodeMap[nodeID] = C.kv_node_info_alloc(C.uint32_t(*vidNum))
+			CIp, CPort := C.CString(ipPort[0]), C.CString(ipPort[1])
+			nodeMap[nodeID] = C.kv_node_info_alloc(CIp, CPort, C.uint32_t(*vidNum))
 			info := nodeMap[nodeID]
 			info.msg_type = C.uint32_t(msgTypes[i])
-			C.memset(unsafe.Pointer(&info.rdma_ip[0]), 0, 24)
-			CIp := C.CString(ipPort[0])
-			C.strcpy(&info.rdma_ip[0], CIp)
 			C.free(unsafe.Pointer(CIp))
-			CPort := C.CString(ipPort[1])
-			C.strcpy(&info.rdma_port[0], CPort)
 			C.free(unsafe.Pointer(CPort))
 		}
 		if info := nodeMap[nodeID]; info.msg_type != C.KV_NODE_INFO_DELETE {
@@ -174,9 +170,7 @@ func kvEtcdFini() {
 func main() {
 	//"127.0.0.1:2379"127.0.0.1
 	var info *C.struct_kv_node_info
-	info = C.kv_node_info_alloc(4)
-	C.strcpy(&info.rdma_ip[0], C.CString("10.0.0.1"))
-	C.strcpy(&info.rdma_port[0], C.CString("9000"))
+	info = C.kv_node_info_alloc(C.CString("10.0.0.1"), C.CString("9000"), 4)
 	kvEtcdInit(C.CString("127.0.0.1"), C.CString("2379"), nil, nil)
 	kvEtcdCreateNode(info, 1)
 	go func() {
