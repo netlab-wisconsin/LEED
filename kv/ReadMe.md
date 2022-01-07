@@ -22,17 +22,28 @@
 + don't copy during value log read
 + write small value to bucket log
 + set: write bucket/value at the same time
-+ bucket cache for value compression
++ bucket cache
 + dynamic queue length
+
 
 #### RDMA
 + RDMA_READ
-+ shared recieve queue
++ ~~shared recieve queue~~
++ ~~multi-thread server~~
++ flow control
 
 #### replication
 + Control-plane
 
     + ectd
+
++ data-distribution
++ node join & leave
++ chain replication
+
+    + set & del
+
+    + read
 
 ### spdk bugs
 
