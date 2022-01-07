@@ -3,7 +3,6 @@ module kv_etcd
 go 1.17
 
 require (
-	github.com/google/uuid v1.1.2
 	go.etcd.io/etcd/client/v3 v3.5.1
 )
 

@@ -21,7 +21,7 @@ package main
 //} __attribute__((packed));
 //
 ////free *info in handler
-//typedef void (*kv_etcd_node_handler)(char * node_id, struct kv_node_info *info); //create or delete
+//typedef void (*kv_etcd_node_handler)(struct kv_node_info *info); //create or delete
 //typedef void (*kv_etcd_vid_handler)(uint32_t vid_index, struct kv_vid *vid); //update
 //static struct kv_vid * kv_etcd_get_vid(struct kv_node_info *info,uint32_t index){
 //	return info->vids+index;
@@ -29,15 +29,14 @@ package main
 //static struct kv_node_info * kv_node_info_alloc(uint32_t vid_num){
 //	return malloc(sizeof(struct kv_node_info) + vid_num * sizeof(struct kv_vid));
 //}
-//static void kv_etcd_node_handler_wrapper(kv_etcd_node_handler h, char * node_id, struct kv_node_info *info){
-//	h(node_id,info);
+//static void kv_etcd_node_handler_wrapper(kv_etcd_node_handler h, struct kv_node_info *info){
+//	h(info);
 //}
 import "C"
 
 import (
 	"context"
 	"fmt"
-	"github.com/google/uuid"
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	"go.etcd.io/etcd/client/v3"
 	"log"
@@ -60,7 +59,7 @@ var (
 )
 
 //export kvEtcdCreateNode
-func kvEtcdCreateNode(CNodeId *C.char, info *C.struct_kv_node_info, ttl C.uint64_t) {
+func kvEtcdCreateNode(info *C.struct_kv_node_info, ttl C.uint64_t) {
 	gr, _ := kv.Get(ctx, "vid_num")
 	if len(gr.Kvs) == 1 {
 		vidNum, _ := strconv.Atoi(string(gr.Kvs[0].Value[:]))
@@ -70,19 +69,12 @@ func kvEtcdCreateNode(CNodeId *C.char, info *C.struct_kv_node_info, ttl C.uint64
 	} else {
 		_, _ = kv.Put(ctx, "vid_num", strconv.Itoa(int(info.vid_num)))
 	}
-	nodeId := uuid.New()
-	key := "node/" + nodeId.String() + "/"
-	if CNodeId != nil {
-		_CNodeId := C.CBytes(nodeId[:])
-		C.memcpy(unsafe.Pointer(CNodeId), _CNodeId, 16)
-		C.free(_CNodeId)
-	}
+	nodeId := C.GoString(&info.rdma_ip[0]) + ":" + C.GoString(&info.rdma_port[0])
+	key := "node/" + nodeId + "/"
 	fmt.Println(key)
 	lease, _ := cli.Grant(ctx, int64(ttl))
 	leaseID = lease.ID
-	Ops := []clientv3.Op{
-		clientv3.OpPut(key+"rdma_ip", C.GoString(&info.rdma_ip[0]), clientv3.WithLease(leaseID)),
-		clientv3.OpPut(key+"rdma_port", C.GoString(&info.rdma_port[0]), clientv3.WithLease(leaseID))}
+	var Ops []clientv3.Op
 	for i := 0; i < int(info.vid_num); i++ {
 		vidKey := fmt.Sprintf("%svid/%d", key, i)
 		vid := unsafe.Pointer(C.kv_etcd_get_vid(info, C.uint32_t(i)))
@@ -96,20 +88,6 @@ func kvEtcdKeepAlive() {
 	_, _ = cli.KeepAliveOnce(ctx, leaseID)
 }
 
-func parseNodeInfo(info *C.struct_kv_node_info, keys []string, value []byte) {
-	CValue := C.CBytes(value)
-	switch keys[0] {
-	case "rdma_ip":
-		C.memcpy(unsafe.Pointer(&info.rdma_ip[0]), CValue, C.size_t(len(value)))
-	case "rdma_port":
-		C.memcpy(unsafe.Pointer(&info.rdma_port[0]), CValue, C.size_t(len(value)))
-	case "vid":
-		i, _ := strconv.Atoi(keys[1])
-		vid := C.kv_etcd_get_vid(info, C.uint32_t(i))
-		C.memcpy(unsafe.Pointer(vid), CValue, 24)
-	}
-	C.free(unsafe.Pointer(CValue))
-}
 func sendNodeInfo(Kvs []*mvccpb.KeyValue, msgTypes []int) {
 	if vidNum == nil {
 		gr, _ := kv.Get(ctx, "vid_num")
@@ -119,25 +97,35 @@ func sendNodeInfo(Kvs []*mvccpb.KeyValue, msgTypes []int) {
 		vidNum = new(int)
 		*vidNum, _ = strconv.Atoi(string(gr.Kvs[0].Value[:]))
 	}
-	nodeMap := make(map[uuid.UUID]*C.struct_kv_node_info)
+	nodeMap := make(map[string]*C.struct_kv_node_info)
 	for i, x := range Kvs {
 		key := strings.Split(string(x.Key[:]), "/")
-		nodeID, _ := uuid.Parse(key[1])
+		nodeID := key[1]
 		if _, ok := nodeMap[nodeID]; !ok {
+			ipPort := strings.Split(nodeID, ":")
 			nodeMap[nodeID] = C.kv_node_info_alloc(C.uint32_t(*vidNum))
 			info := nodeMap[nodeID]
 			info.vid_num = C.uint32_t(*vidNum)
 			info.msg_type = C.uint32_t(msgTypes[i])
+			C.memset(unsafe.Pointer(&info.rdma_ip[0]), 0, 24)
+			CIp := C.CString(ipPort[0])
+			C.strcpy(&info.rdma_ip[0], CIp)
+			C.free(unsafe.Pointer(CIp))
+			CPort := C.CString(ipPort[1])
+			C.strcpy(&info.rdma_port[0], CPort)
+			C.free(unsafe.Pointer(CPort))
 		}
 		if info := nodeMap[nodeID]; info.msg_type != C.KV_NODE_INFO_DELETE {
-			parseNodeInfo(info, key[2:], x.Value)
+			j, _ := strconv.Atoi(key[3])
+			vid := C.kv_etcd_get_vid(info, C.uint32_t(j))
+			CValue := C.CBytes(x.Value)
+			C.memcpy(unsafe.Pointer(vid), CValue, 24)
+			C.free(unsafe.Pointer(CValue))
 		}
 	}
-	for i, info := range nodeMap {
+	for _, info := range nodeMap {
 		if nodeHandler != nil {
-			CNodeId := C.CBytes(i[:])
-			C.kv_etcd_node_handler_wrapper(nodeHandler, (*C.char)(CNodeId), info)
-			C.free(CNodeId)
+			C.kv_etcd_node_handler_wrapper(nodeHandler, info)
 		} else {
 			C.free(unsafe.Pointer(info))
 		}
@@ -189,7 +177,7 @@ func main() {
 	C.strcpy(&info.rdma_port[0], C.CString("9000"))
 	info.vid_num = C.uint32_t(4)
 	kvEtcdInit(C.CString("127.0.0.1"), C.CString("2379"), nil, nil)
-	kvEtcdCreateNode(nil, info, 1)
+	kvEtcdCreateNode(info, 1)
 	go func() {
 		for true {
 			kvEtcdKeepAlive()
