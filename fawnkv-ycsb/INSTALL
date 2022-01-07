@@ -1,0 +1,30 @@
+Steps to build source code
+
+0. On Debian/Ubuntu GNU/Linux install the following (to build source)
+
+autoconf automake autotools-dev pkg-config m4 libtool libtbb2 libtbb-dev libboost-dev libssl-dev libgtest-dev
+
+thrift-0.5.0 or later (install from source)
+            IMPORTANT: You must apply fawn-thrift.patch patch to the thrift source before compiling
+            # cd thrift-0.X.0 && patch -p1 < FAWN-KV/patches/fawn-thrift.patch
+             This is to ensure that our sighandler actually kills the TThreadedServer threads properly.
+            Source: Bottom of: http://www.mail-archive.com/thrift-dev@incubator.apache.org/msg05155.html
+
+             If using TSimpleServer apply this patch
+             http://issues.apache.org/jira/browse/THRIFT-567
+
+thrift may require the following packages to build: bison flex ruby-dev python-dev php5-dev
+You may also need to install a more specific boost package (libboost-thread-dev) for FAWN-KV.
+
+
+1. autoreconf -is
+2. ./configure [--with-ycsb]
+3. make
+
+Configure's --with-ycsb option checks to see if you hava java, javac,
+and ant, which are required to build the java library that the ycsb
+client library needs
+
+On OS X, you may need the following for ./configure
+LDFLAGS="-L/opt/local/lib" CXXFLAGS="-I/opt/local/include" PKG_CONFIG_PATH="/usr/local/lib/pkgconfig/"
+(Change directory location as appropriate, see INSTALL.MACOSX for more details)
