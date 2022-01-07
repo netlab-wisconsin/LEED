@@ -27,7 +27,10 @@ package main
 //	return info->vids+index;
 //}
 //static struct kv_node_info * kv_node_info_alloc(uint32_t vid_num){
-//	return malloc(sizeof(struct kv_node_info) + vid_num * sizeof(struct kv_vid));
+//	struct kv_node_info * info = malloc(sizeof(struct kv_node_info) + vid_num * sizeof(struct kv_vid));
+//  info->vid_num = vid_num;
+//  memset(info->vids, 0xFF, vid_num * sizeof(struct kv_vid));
+//  return info;
 //}
 //static void kv_etcd_node_handler_wrapper(kv_etcd_node_handler h, struct kv_node_info *info){
 //	h(info);
@@ -105,7 +108,6 @@ func sendNodeInfo(Kvs []*mvccpb.KeyValue, msgTypes []int) {
 			ipPort := strings.Split(nodeID, ":")
 			nodeMap[nodeID] = C.kv_node_info_alloc(C.uint32_t(*vidNum))
 			info := nodeMap[nodeID]
-			info.vid_num = C.uint32_t(*vidNum)
 			info.msg_type = C.uint32_t(msgTypes[i])
 			C.memset(unsafe.Pointer(&info.rdma_ip[0]), 0, 24)
 			CIp := C.CString(ipPort[0])
@@ -172,10 +174,9 @@ func kvEtcdFini() {
 func main() {
 	//"127.0.0.1:2379"127.0.0.1
 	var info *C.struct_kv_node_info
-	info = (*C.struct_kv_node_info)(C.malloc(1024))
+	info = C.kv_node_info_alloc(4)
 	C.strcpy(&info.rdma_ip[0], C.CString("10.0.0.1"))
 	C.strcpy(&info.rdma_port[0], C.CString("9000"))
-	info.vid_num = C.uint32_t(4)
 	kvEtcdInit(C.CString("127.0.0.1"), C.CString("2379"), nil, nil)
 	kvEtcdCreateNode(info, 1)
 	go func() {
