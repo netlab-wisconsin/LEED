@@ -4,9 +4,10 @@ package main
 //#include <string.h>
 //#include <stdlib.h>
 //struct kv_vid {
-//    uint32_t ssd_id;
-//    char vid[20];
 //#define KV_VID_EMPTY UINT32_MAX
+//#define KV_VID_LEN (20U)
+//    uint32_t ssd_id;
+//    char vid[KV_VID_LEN];
 //} __attribute__((packed));
 //
 //struct kv_node_info {

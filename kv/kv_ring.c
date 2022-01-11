@@ -34,7 +34,15 @@ struct kv_ring {
     // ssd_status
 } g_ring;
 
-// void kv_ring_dispatch
+static void random_vid(char *vid) {
+    for (size_t i = 0; i < KV_VID_LEN; i++) vid[i] = random() & 0xFF;
+}
+static inline size_t ring_size(struct vid_ring *ring) {
+    struct vid_entry *x;
+    size_t size;
+    CIRCLEQ_FOREACH(x, ring, entry) size++;
+    return size;
+}
 
 static inline uint64_t get_vid_64(uint8_t *vid) { return *(uint64_t *)(vid + 4); }
 static struct vid_entry *find_vid_entry(struct vid_ring *ring, char *vid) {
@@ -47,6 +55,7 @@ static struct vid_entry *find_vid_entry(struct vid_ring *ring, char *vid) {
     }
     return x;
 }
+// void kv_ring_dispatch
 
 static void node_handler(struct kv_node_info *info) {
     struct kv_ring *self = &g_ring;
@@ -102,11 +111,35 @@ void kv_ring_init(char *etcd_ip, char *etcd_port, uint32_t thread_num) {
     kv_rdma_init(&self->h, thread_num);
 }
 
-void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uint32_t ssd_num) {
+struct vid_ring_stat {
+    uint32_t index;
+    size_t size;
+};
+int vid_ring_stat_cmp(const void *_a, const void *_b) {
+    const struct vid_ring_stat *a = _a, *b = _b;
+    if (a->size == b->size) return 0;
+    return a->size < b->size ? -1 : 1;
+}
+
+void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uint32_t vid_per_ssd, uint32_t ssd_num) {
+    assert(ssd_num != 0);
+    assert(vid_per_ssd * ssd_num <= vid_num);
     struct kv_ring *self = &g_ring;
     self->local_ip = local_ip;
     self->local_port = local_port;
     struct kv_node_info *info = kv_node_info_alloc(local_ip, local_port, vid_num);
+    struct vid_ring_stat *stats = kv_calloc(vid_num, sizeof(struct vid_ring_stat));
+    pthread_rwlock_rdlock(&self->lock);
+    for (size_t i = 0; i < vid_num; i++) stats[i] = (struct vid_ring_stat){i, ring_size(self->rings + i)};
+    pthread_rwlock_unlock(&self->lock);
+    qsort(stats, vid_num, sizeof(struct vid_ring_stat), vid_ring_stat_cmp);
+    uint32_t ssd_id = 0;
+    for (size_t i = 0; i < vid_per_ssd * ssd_num; i++) {
+        info->vids[stats[i].index].ssd_id = ssd_id;
+        random_vid(info->vids[stats[i].index].vid);
+        ssd_id = (ssd_id + 1) % ssd_num;
+    }
+    kv_free(stats);
     kvEtcdCreateNode(info, 1);
     free(info);
     kv_app_poller_register(kv_etcd_poller, NULL, 300);
@@ -116,6 +149,6 @@ void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uin
 void kv_ring_fini() {
     struct kv_ring *self = &g_ring;
     kvEtcdFini();
-    //kv_rdma_fini(self->h);
+    // kv_rdma_fini(self->h);
     if (self->rings) kv_free(self->rings);
 }
