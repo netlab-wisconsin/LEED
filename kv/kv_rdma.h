@@ -10,9 +10,10 @@ typedef void (*kv_rdma_req_cb)(connection_handle h, bool success, kv_rmda_mr req
 typedef void (*kv_rdma_connect_cb)(connection_handle h, void *cb_arg);
 typedef void (*kv_rdma_disconnect_cb)(void *cb_arg);
 typedef void (*kv_rdma_req_handler)(void *req, uint8_t *buf, uint32_t req_sz, void *arg);
+typedef void (*kv_rdma_fini_cb)(void *ctx);
 
 void kv_rdma_init(kv_rdma_handle *h, uint32_t thread_num);
-void kv_rdma_fini(kv_rdma_handle);
+void kv_rdma_fini(kv_rdma_handle h, kv_rdma_fini_cb cb, void *cb_arg);
 
 kv_rmda_mr kv_rdma_alloc_req(kv_rdma_handle h, uint32_t size);
 uint8_t *kv_rdma_get_req_buf(kv_rmda_mr mr);

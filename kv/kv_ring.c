@@ -116,6 +116,6 @@ void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uin
 void kv_ring_fini() {
     struct kv_ring *self = &g_ring;
     kvEtcdFini();
-    kv_rdma_fini(self->h);
+    //kv_rdma_fini(self->h);
     if (self->rings) kv_free(self->rings);
 }
