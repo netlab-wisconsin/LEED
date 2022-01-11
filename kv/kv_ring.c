@@ -1,10 +1,11 @@
 #include "kv_ring.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <sys/queue.h>
 
 #include "kv_app.h"
-#include "kv_rdma.h"
+#include "kv_etcd.h"
 #include "memery_operation.h"
 #include "pthread.h"
 #include "uthash.h"
@@ -31,6 +32,7 @@ struct kv_ring {
     pthread_rwlock_t lock;
     struct kv_node *nodes;
     struct vid_ring *rings;
+    pthread_mutex_t rings_lock;
     // ssd_status
 } g_ring;
 
@@ -39,11 +41,12 @@ static void random_vid(char *vid) {
 }
 static inline size_t ring_size(struct vid_ring *ring) {
     struct vid_entry *x;
-    size_t size;
+    size_t size = 0;
     CIRCLEQ_FOREACH(x, ring, entry) size++;
     return size;
 }
 
+static inline uint32_t get_vid_part(uint8_t *vid, uint32_t vid_num) { return *(uint32_t *)vid % vid_num; }
 static inline uint64_t get_vid_64(uint8_t *vid) { return *(uint64_t *)(vid + 4); }
 static struct vid_entry *find_vid_entry(struct vid_ring *ring, char *vid) {
     uint64_t vid64 = get_vid_64(vid);
@@ -53,40 +56,67 @@ static struct vid_entry *find_vid_entry(struct vid_ring *ring, char *vid) {
         if (next == x) break;
         if (get_vid_64(next->vid->vid) - vid64 > get_vid_64(x->vid->vid) - vid64) break;
     }
-    return x;
+    return x == (void *)(ring) ? NULL : x;
 }
-// void kv_ring_dispatch
+static void vid_ring_init(uint32_t vid_num) {
+    struct kv_ring *self = &g_ring;
+    pthread_mutex_lock(&self->rings_lock);
+    if (self->rings == NULL) {
+        self->rings = kv_calloc(vid_num, sizeof(struct vid_ring));
+        for (size_t i = 0; i < vid_num; i++) CIRCLEQ_INIT(self->rings + i);
+    }
+    pthread_mutex_unlock(&self->rings_lock);
+}
+
+void kv_ring_dispatch(char *key, connection_handle *h, uint32_t *ssd_id) {
+    struct kv_ring *self = &g_ring;
+    pthread_rwlock_rdlock(&self->lock);
+    if (self->nodes == NULL) {
+        fprintf(stderr, "no available server!\n");
+        exit(-1);
+    }
+    uint32_t index = get_vid_part(key, self->nodes->info->vid_num);
+    struct vid_entry *entry = find_vid_entry(self->rings + index, key);
+    pthread_rwlock_unlock(&self->lock);
+    if (entry == NULL) {
+        fprintf(stderr, "no available server for this partition!\n");
+        exit(-1);
+    }
+    *h = entry->node->conn;
+    *ssd_id = entry->vid->ssd_id;
+}
 
 static void node_handler(struct kv_node_info *info) {
     struct kv_ring *self = &g_ring;
-    // if (self->node_id&&!kv_memcmp8(node_id,node_id,16))
-    //     return;
-    if (self->rings == NULL) {
-        self->rings = kv_calloc(info->vid_num, sizeof(struct vid_ring));
-        for (size_t i = 0; i < info->vid_num; i++) CIRCLEQ_INIT(self->rings + i);
-    }
+    vid_ring_init(info->vid_num);
+    bool is_local = self->local_ip && strcmp(self->local_ip, info->rdma_ip) && strcmp(self->local_port, info->rdma_port);
     if (info->msg_type == KV_NODE_INFO_DELETE) {
         struct kv_node *node = NULL;
+        pthread_rwlock_wrlock(&self->lock);
         HASH_FIND(hh, self->nodes, info->rdma_ip, 24, node);
         assert(node);
-        pthread_rwlock_wrlock(&self->lock);
         for (size_t i = 0; i < info->vid_num; i++) {  // remove vids from ring
             struct vid_entry *x = NULL, *tmp;
             CIRCLEQ_FOREACH_SAFE(x, self->rings + i, entry, tmp) {
                 if (x->node == node) CIRCLEQ_REMOVE(self->rings + i, x, entry);
             }
         }
-        pthread_rwlock_unlock(&self->lock);
         HASH_DEL(self->nodes, node);
+        pthread_rwlock_unlock(&self->lock);
         kv_free(node);
         free(info);
-        // rdma disconnect
+        if (is_local) {
+            fprintf(stderr, "kv_etcd keepalive timeout!\n");
+            exit(-1);
+        } else {
+            // rdma disconnect
+        }
     } else {
         struct kv_node *node = kv_malloc(sizeof(struct kv_node));
         node->info = info;
-        HASH_ADD(hh, self->nodes, info->rdma_ip, 24, node);  // ip & port as key
         pthread_rwlock_wrlock(&self->lock);
-        for (size_t i = 0; i < info->vid_num; i++) {  // add vids to ring
+        HASH_ADD(hh, self->nodes, info->rdma_ip, 24, node);  // ip & port as key
+        for (size_t i = 0; i < info->vid_num; i++) {         // add vids to ring
             struct vid_entry *entry = kv_malloc(sizeof(struct vid_entry)), *x;
             *entry = (struct vid_entry){info->vids + i, node};
             x = find_vid_entry(self->rings + i, info->vids[i].vid);
@@ -97,16 +127,22 @@ static void node_handler(struct kv_node_info *info) {
             }
         }
         pthread_rwlock_unlock(&self->lock);
-        // rdma connnect
+        if (!is_local) {
+            // rdma connnect
+        }
     }
 }
 
-static int kv_etcd_poller(void *arg) { kvEtcdKeepAlive(); }
+static int kv_etcd_poller(void *arg) {
+    kvEtcdKeepAlive();
+    return 0;
+}
 
 void kv_ring_init(char *etcd_ip, char *etcd_port, uint32_t thread_num) {
     struct kv_ring *self = &g_ring;
     self->nodes = NULL;
     self->rings = NULL;
+    pthread_mutex_init(&self->rings_lock, NULL);
     kvEtcdInit(etcd_ip, etcd_port, node_handler, NULL);
     kv_rdma_init(&self->h, thread_num);
 }
@@ -115,7 +151,7 @@ struct vid_ring_stat {
     uint32_t index;
     size_t size;
 };
-int vid_ring_stat_cmp(const void *_a, const void *_b) {
+static int vid_ring_stat_cmp(const void *_a, const void *_b) {
     const struct vid_ring_stat *a = _a, *b = _b;
     if (a->size == b->size) return 0;
     return a->size < b->size ? -1 : 1;
@@ -124,9 +160,11 @@ int vid_ring_stat_cmp(const void *_a, const void *_b) {
 void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uint32_t vid_per_ssd, uint32_t ssd_num) {
     assert(ssd_num != 0);
     assert(vid_per_ssd * ssd_num <= vid_num);
+    assert(local_ip && local_port);
     struct kv_ring *self = &g_ring;
     self->local_ip = local_ip;
     self->local_port = local_port;
+    vid_ring_init(vid_num);
     struct kv_node_info *info = kv_node_info_alloc(local_ip, local_port, vid_num);
     struct vid_ring_stat *stats = kv_calloc(vid_num, sizeof(struct vid_ring_stat));
     pthread_rwlock_rdlock(&self->lock);
@@ -142,11 +180,11 @@ void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uin
     kv_free(stats);
     kvEtcdCreateNode(info, 1);
     free(info);
-    kv_app_poller_register(kv_etcd_poller, NULL, 300);
+    kv_app_poller_register(kv_etcd_poller, NULL, 300000);
     // kv_rdma_listen
 }
 
-void kv_ring_fini() {
+void kv_ring_fini(void) {
     struct kv_ring *self = &g_ring;
     kvEtcdFini();
     // kv_rdma_fini(self->h);

@@ -472,7 +472,7 @@ void kv_rdma_init(kv_rdma_handle *h, uint32_t thread_num) {
     }
     int flag = fcntl(self->ec->fd, F_GETFL);
     fcntl(self->ec->fd, F_SETFL, flag | O_NONBLOCK);
-    self->cm_poller = kv_app_poller_register(rdma_cm_poller, self, 1);
+    self->cm_poller = kv_app_poller_register(rdma_cm_poller, self, 1000);
     self->thread_num = thread_num;
     self->thread_id = kv_app_get_thread_index();
     *h = self;
