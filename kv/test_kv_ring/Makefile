@@ -1,6 +1,4 @@
 #
-#  BSD LICENSE
-#
 #  Copyright (c) Intel Corporation.
 #  All rights reserved.
 #
@@ -31,30 +29,33 @@
 #  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../..)
+SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
+include $(SPDK_ROOT_DIR)/mk/spdk.modules.mk
 
-DIRS-y = test_storage
-DIRS-y += test_kv_log
-DIRS-y += test_kv_table
-DIRS-y += benchmark
-DIRS-y += test_kv_value_log
-DIRS-y += test_kv_circular_log
-DIRS-y += test_kv_data_store
-DIRS-y += benchmark2
-DIRS-y += benchmark3
-DIRS-y += test_kv_rdma
-DIRS-y += test_kv_app
-DIRS-y += client
-DIRS-y += server
-DIRS-y += test_kv_ring
+APP = test_kv_ring
+C_SRCS := ../kv_rdma.c ../kv_ring.c ../kv_app.c  ../benchmark2/city.c ../benchmark2/timing.c kv_ring_test.c 
 
-.PHONY: all clean $(DIRS-y)
+SYS_LIBS += -libverbs -lrdmacm -lconcurrentqueue -lkv_etcd
+#Attach only if FreeBSD and RDMA is specified with configure
+ifeq ($(OS),FreeBSD)
+# Mellanox - MLX4 HBA Userspace Library
+ifneq ("$(wildcard /usr/lib/libmlx4.*)","")
+SYS_LIBS += -lmlx4
+endif
+# Mellanox - MLX5 HBA Userspace Library
+ifneq ("$(wildcard /usr/lib/libmlx5.*)","")
+SYS_LIBS += -lmlx5
+endif
+# Chelsio HBA Userspace Library
+ifneq ("$(wildcard /usr/lib/libcxgb4.*)","")
+SYS_LIBS += -lcxgb4
+endif
+endif
 
-all: $(DIRS-y)
-	@:
 
-clean: $(DIRS-y)
-	@:
+SPDK_LIB_LIST = $(ALL_MODULES_LIST)
+SPDK_LIB_LIST += $(EVENT_BDEV_SUBSYSTEM)
+SPDK_LIB_LIST += $(KV_BDEV_MODULES)
 
-include $(SPDK_ROOT_DIR)/mk/spdk.subdirs.mk
+include $(SPDK_ROOT_DIR)/mk/spdk.app.mk
