@@ -46,7 +46,7 @@ static inline size_t ring_size(struct vid_ring *ring) {
     return size;
 }
 
-static inline uint32_t get_vid_part(uint8_t *vid, uint32_t vid_num) { return *(uint32_t *)vid % vid_num; }
+static inline uint32_t get_vid_part(uint8_t *vid, uint32_t vid_num) { return *(uint32_t *)(vid + 12) % vid_num; }
 static inline uint64_t get_vid_64(uint8_t *vid) { return *(uint64_t *)(vid + 4); }
 static struct vid_entry *find_vid_entry(struct vid_ring *ring, char *vid) {
     uint64_t vid64 = get_vid_64(vid);

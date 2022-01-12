@@ -233,6 +233,7 @@ static void test(void *arg) {
         case INIT:
             assert(false);
     }
+    msg->ssd_id = *(uint32_t *)(KV_MSG_KEY(msg) + 12) % 4; //just for test
     p->start_io++;
     io->client_id = random() % opt.client_num;
     kv_app_send(random() % opt.thread_num, io_start, arg);
