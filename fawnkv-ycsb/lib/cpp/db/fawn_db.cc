@@ -15,7 +15,6 @@ int FawnDB::Read(const string &table, const string &key,
          const vector<string> *fields,
          vector<KVPair> &result) {
     string data = client_.get(key);
-    cout << "READ " << ' ' << key << endl;
     vector<string> values = stringSplit(data, ';');
     for (auto v: values) {
         vector<string> vs = stringSplit(v, ':');

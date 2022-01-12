@@ -24,7 +24,7 @@ using namespace apache::thrift::transport;
 
 void usage()
 {
-    printf("Usage: ./tester_remote [-c clientIP] frontendIP [fePort]\n");
+    printf("Usage: /tester_remote_ycsbc -threads 15 -db fawn -P workloads/workloada.spec -feip 10.134.11.95 -cip 10.134.11.95 -feport 4001 -load 1\n");
 }
 
 void UsageMessage(const char *command) {
@@ -37,6 +37,7 @@ void UsageMessage(const char *command) {
   cout << "  -cip clientIP" << endl;
   cout << "  -feip frontendIP" << endl;
   cout << "  -feport fePort" << endl;
+  cout << "  -load [1/0] if load database" << endl;
 }
 
 
@@ -129,6 +130,14 @@ string ParseCommandLine(int argc, char *argv[], utils::Properties &props) {
       }
       props.SetProperty("feport", argv[argindex]);
       argindex++;
+    } else if (strcmp(argv[argindex], "-load") == 0) {
+      argindex++;
+      if (argindex >= argc) {
+        UsageMessage(argv[0]);
+        exit(0);
+      }
+      props.SetProperty("load", argv[argindex]);
+      argindex++;
     } else {
       cout << "Unknown option '" << argv[argindex] << "'" << endl;
       exit(0);
@@ -184,21 +193,28 @@ int main(int argc, char **argv)
     }
     // Loads data
     vector<future<int>> actual_ops;
-    int total_ops = stoi(props[ycsbc::CoreWorkload::RECORD_COUNT_PROPERTY]);
-    for (int i = 0; i < num_threads; ++i) {
-         actual_ops.emplace_back(async(launch::async,
-             DelegateClient, dbs[i], &wl, total_ops / num_threads, true));
-    }
-    assert((int)actual_ops.size() == num_threads);
-
-    cerr << "# Thread init complete!\t" << endl;
-
     int sum = 0;
-    for (auto &n : actual_ops) {
-        assert(n.valid());
-        sum += n.get();
+    int total_ops = 0;
+
+    if (stoi(props["load"]) == 1) {
+        total_ops = stoi(props[ycsbc::CoreWorkload::RECORD_COUNT_PROPERTY]);
+        for (int i = 0; i < num_threads; ++i) {
+            actual_ops.emplace_back(async(launch::async,
+                DelegateClient, dbs[i], &wl, total_ops / num_threads, true));
+        }
+        assert((int)actual_ops.size() == num_threads);
+
+        cerr << "# Thread init complete!\t" << endl;
+
+        
+        for (auto &n : actual_ops) {
+            assert(n.valid());
+            sum += n.get();
+        }
+        cerr << "# Loading records:\t" << sum << endl;
+    } else {
+        cerr << "# Not Loading records, just run"<< endl;
     }
-    cerr << "# Loading records:\t" << sum << endl;
     
     actual_ops.clear();
     total_ops = stoi(props[ycsbc::CoreWorkload::OPERATION_COUNT_PROPERTY]);
