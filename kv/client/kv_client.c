@@ -119,7 +119,7 @@ static void stop(void) {
         kv_rdma_free_mr(io_buffers[i].req);
         kv_rdma_free_mr(io_buffers[i].resp);
     }
-    for (size_t i = 0; i < opt.client_num; i++) kv_rdma_disconnect(clients[i].h, disconnect_cb, NULL);
+    for (size_t i = 0; i < opt.client_num; i++) kv_rdma_disconnect(clients[i].h);
 }
 
 static void test(void *arg);
@@ -251,7 +251,7 @@ static void send_init_done_msg(connection_handle h, void *arg) {
 static void rdma_init(void *arg) {
     kv_rdma_init(&rdma, opt.thread_num);
     for (size_t i = 0; i < opt.client_num; i++)
-        kv_rdma_connect(rdma, opt.server_ip, opt.server_port, send_init_done_msg, clients + i);
+        kv_rdma_connect(rdma, opt.server_ip, opt.server_port, send_init_done_msg, clients + i, disconnect_cb, NULL);
 }
 
 int main(int argc, char **argv) {

@@ -92,9 +92,15 @@ void kv_ring_dispatch(char *key, connection_handle *h, uint32_t *ssd_id) {
     *ssd_id = entry->vid->ssd_id;
 }
 static void rdma_disconnect_cb(void *arg) {
+    struct kv_ring *self = &g_ring;
     struct kv_node *node = arg;
-    free(node->info);  // info is allocated by libkv_etcd
-    kv_free(node);
+    if (node->is_disconnecting) {
+        free(node->info);  // info is allocated by libkv_etcd
+        kv_free(node);
+    } else {
+        node->is_connected=false;
+        STAILQ_INSERT_TAIL(&self->conn_q, node, next);
+    }
 }
 static void rdma_connect_cb(connection_handle h, void *arg) {
     struct kv_ring *self = &g_ring;
@@ -119,12 +125,13 @@ static int kv_conn_q_poller(void *arg) {
         assert(!node->is_local);
         if (node->is_disconnecting) {
             if (node->is_connected)
-                kv_rdma_disconnect(node->conn, rdma_disconnect_cb, node);
+                kv_rdma_disconnect(node->conn);
             else
                 rdma_disconnect_cb(node);
         } else {
             assert(!node->is_connected);
-            kv_rdma_connect(self->h, node->info->rdma_ip, node->info->rdma_port, rdma_connect_cb, node);
+            kv_rdma_connect(self->h, node->info->rdma_ip, node->info->rdma_port, rdma_connect_cb, node, rdma_disconnect_cb,
+                            node);
         }
     }
     if (self->ready_cb) {
