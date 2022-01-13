@@ -6,5 +6,6 @@ add_library (concurrentqueue SHARED concurrentqueue.cpp)
 set_target_properties(concurrentqueue PROPERTIES PUBLIC_HEADER concurrentqueue.h)
 install(
         TARGETS concurrentqueue
-        PUBLIC_HEADER          
+        PUBLIC_HEADER DESTINATION include
+        LIBRARY DESTINATION lib
 )

@@ -208,18 +208,19 @@ static int kv_etcd_poller(void *arg) {
     return 0;
 }
 
-void kv_ring_init(char *etcd_ip, char *etcd_port, uint32_t thread_num, kv_ring_cb ready_cb, void *arg) {
+kv_rdma_handle kv_ring_init(char *etcd_ip, char *etcd_port, uint32_t thread_num, kv_ring_cb ready_cb, void *arg) {
     struct kv_ring *self = &g_ring;
     self->ready_cb = ready_cb;
     self->arg = arg;
     self->nodes = NULL;
     self->rings = NULL;
+    STAILQ_INIT(&self->conn_q);
     self->thread_id = kv_app_get_thread_index();
     pthread_mutex_init(&self->rings_lock, NULL);
     kv_rdma_init(&self->h, thread_num);
     kvEtcdInit(etcd_ip, etcd_port, _node_handler, NULL);
-    STAILQ_INIT(&self->conn_q);
     kv_app_poller_register(kv_conn_q_poller, self, 1000000);
+    return self->h;
 }
 
 struct vid_ring_stat {
@@ -263,6 +264,8 @@ void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uin
 void kv_ring_fini(kv_rdma_fini_cb cb, void *cb_arg) {
     struct kv_ring *self = &g_ring;
     kvEtcdFini();
+    //TODO: diconnect all nodes
+    //TODO: kv_conn_q_poller unregister
     kv_rdma_fini(self->h, cb, cb_arg);
     if (self->rings) kv_free(self->rings);
 }

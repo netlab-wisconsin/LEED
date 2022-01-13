@@ -5,7 +5,7 @@ typedef void (*kv_ring_cb)(void *arg);
 void kv_ring_dispatch(char *key, connection_handle *h, uint32_t *ssd_id);
 // client: kv_ring_init(kv_rdma_init)
 // server: kv_ring_init(kv_rdma_init)->kv_ring_server_init(kv_rdma_listen)
-void kv_ring_init(char *etcd_ip, char *etcd_port, uint32_t thread_num, kv_ring_cb ready_cb, void *arg);
+kv_rdma_handle kv_ring_init(char *etcd_ip, char *etcd_port, uint32_t thread_num, kv_ring_cb ready_cb, void *arg);
 void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uint32_t vid_per_ssd, uint32_t ssd_num,
                          uint32_t con_req_num, uint32_t max_msg_sz, kv_rdma_req_handler handler, void *arg);
 void kv_ring_fini(kv_rdma_fini_cb cb, void *cb_arg);

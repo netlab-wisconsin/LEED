@@ -19,14 +19,15 @@ struct {
     char json_config_file[1024];
     char server_ip[32];
     char server_port[16];
-} opt = {.num_items = 1024,
-         .read_num_items = 512,
-         .thread_num = 2,
-         .producer_num = 1,
-         .value_size = 1024,
-         .concurrent_io_num = 32,
-         .json_config_file = "config.json",
-         .server_ip = "192.168.1.13",
+} opt = {
+    .num_items = 1024,
+    .read_num_items = 512,
+    .thread_num = 2,
+    .producer_num = 1,
+    .value_size = 1024,
+    .concurrent_io_num = 32,
+    .json_config_file = "config.json",
+    .server_ip = "192.168.1.13",
 };
 static void help(void) {
     // TODO: HELP TEXT
@@ -98,7 +99,7 @@ static void stop(void) {
         kv_rdma_free_mr(io_buffers[i].req);
         kv_rdma_free_mr(io_buffers[i].resp);
     }
-    kv_ring_fini(ring_fini_cb,NULL);
+    kv_ring_fini(ring_fini_cb, NULL);
 }
 
 static void test(void *arg);
@@ -198,13 +199,13 @@ static void test(void *arg) {
         case INIT:
             assert(false);
     }
-    kv_ring_dispatch(KV_MSG_KEY(msg),&io->h,&msg->ssd_id);
+    kv_ring_dispatch(KV_MSG_KEY(msg), &io->h, &msg->ssd_id);
     p->start_io++;
     kv_app_send(random() % opt.thread_num, io_start, arg);
 }
 
-static void ring_ready_cb(void *arg) {kv_app_send(opt.thread_num, test, NULL);}
-static void ring_init(void *arg) { kv_ring_init(opt.server_ip, opt.server_port, opt.thread_num, ring_ready_cb, NULL); }
+static void ring_ready_cb(void *arg) { kv_app_send(opt.thread_num, test, NULL); }
+static void ring_init(void *arg) { rdma = kv_ring_init(opt.server_ip, opt.server_port, opt.thread_num, ring_ready_cb, NULL); }
 
 int main(int argc, char **argv) {
 #ifdef NDEBUG
