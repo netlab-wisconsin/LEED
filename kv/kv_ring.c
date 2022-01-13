@@ -98,7 +98,7 @@ static void rdma_disconnect_cb(void *arg) {
         free(node->info);  // info is allocated by libkv_etcd
         kv_free(node);
     } else {
-        node->is_connected=false;
+        node->is_connected = false;
         STAILQ_INSERT_TAIL(&self->conn_q, node, next);
     }
 }
@@ -260,9 +260,9 @@ void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uin
     kv_app_poller_register(kv_etcd_poller, NULL, 300000);
 }
 
-void kv_ring_fini(void) {
+void kv_ring_fini(kv_rdma_fini_cb cb, void *cb_arg) {
     struct kv_ring *self = &g_ring;
     kvEtcdFini();
-    // kv_rdma_fini(self->h);
+    kv_rdma_fini(self->h, cb, cb_arg);
     if (self->rings) kv_free(self->rings);
 }
