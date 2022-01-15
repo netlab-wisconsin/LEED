@@ -186,14 +186,12 @@ static int create_connetion(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
 }
 
 static inline int on_addr_resolved(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
-    printf("address resolved.\n");
     TEST_NZ(create_connetion(self, cm_id));
     TEST_NZ(rdma_resolve_route(cm_id, TIMEOUT_IN_MS));
     return 0;
 }
 
 static inline int on_route_resolved(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
-    printf("route resolved.\n");
     struct rdma_conn_param cm_params;
     memset(&cm_params, 0, sizeof(cm_params));
     TEST_NZ(rdma_connect(cm_id, &cm_params));
@@ -201,7 +199,6 @@ static inline int on_route_resolved(struct kv_rdma *self, struct rdma_cm_id *cm_
 }
 
 static inline int on_connect_request(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
-    printf("received connection request.\n");
     struct rdma_connection *conn = kv_malloc(sizeof(struct rdma_connection)), *lconn = cm_id->context;
     *conn = (struct rdma_connection){self, cm_id, NULL, true};
     conn->u.s.handler = lconn->u.s.handler;
@@ -229,12 +226,17 @@ static inline int on_established(struct kv_rdma *self, struct rdma_cm_id *cm_id)
     if (!conn->is_server && conn->u.c.connect) {
         conn->u.c.connect(conn, conn->u.c.connect_arg);
     }
+    if (conn->is_server) {
+        struct sockaddr_in *addr = (struct sockaddr_in *)rdma_get_peer_addr(cm_id);
+        printf("server: received connection from peer %s:%u.\n", inet_ntoa(addr->sin_addr), ntohs(addr->sin_port));
+    }
     return 0;
 }
 static inline int on_disconnect(struct rdma_cm_id *cm_id) {
-    printf("peer disconnected.\n");
     struct rdma_connection *conn = cm_id->context;
     if (conn->is_server) {
+        struct sockaddr_in *addr = (struct sockaddr_in *)rdma_get_peer_addr(cm_id);
+        printf("server: peer %s:%u disconnected.\n", inet_ntoa(addr->sin_addr), ntohs(addr->sin_port));
         pthread_rwlock_wrlock(&conn->self->lock);
         HASH_DELETE(u.s.hh, conn->self->connections, conn);
         pthread_rwlock_unlock(&conn->self->lock);
@@ -283,7 +285,7 @@ static int rdma_cm_poller(void *_self) {
 // --- client ---
 
 void kv_rdma_connect(kv_rdma_handle h, char *addr_str, char *port_str, kv_rdma_connect_cb connect_cb, void *connect_arg,
-                    kv_rdma_disconnect_cb disconnect_cb, void *disconnect_arg) {
+                     kv_rdma_disconnect_cb disconnect_cb, void *disconnect_arg) {
     struct kv_rdma *self = h;
     struct rdma_connection *conn = kv_malloc(sizeof(struct rdma_connection));
     *conn = (struct rdma_connection){self, NULL, NULL, false};
@@ -342,7 +344,7 @@ void kv_rdma_disconnect(connection_handle h) {
 
 // --- server ---
 void kv_rdma_listen(kv_rdma_handle h, char *addr_str, char *port_str, uint32_t con_req_num, uint32_t max_msg_sz,
-                   kv_rdma_req_handler handler, void *arg) {
+                    kv_rdma_req_handler handler, void *arg) {
     struct kv_rdma *self = h;
     self->has_server = true;
     self->connections = NULL;
@@ -402,7 +404,7 @@ static inline void on_recv_req(struct ibv_wc *wc) {
     assert(wc->byte_len > HEADER_SIZE);
     assert(wc->wc_flags & IBV_WC_WITH_IMM);
     pthread_rwlock_rdlock(&ctx->self->lock);
-    HASH_FIND(u.s.hh, ctx->self->connections, &wc->qp_num,sizeof(uint32_t), ctx->conn);
+    HASH_FIND(u.s.hh, ctx->self->connections, &wc->qp_num, sizeof(uint32_t), ctx->conn);
     pthread_rwlock_unlock(&ctx->self->lock);
     assert(ctx->conn);
     assert(ctx->conn->is_server);

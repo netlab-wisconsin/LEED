@@ -29,14 +29,14 @@ CIRCLEQ_HEAD(vid_ring, vid_entry);
 
 struct kv_ring {
     kv_rdma_handle h;
-    uint32_t thread_id;
+    uint32_t thread_id, thread_num;
     char *local_ip;
     char *local_port;
-    pthread_rwlock_t lock;
     struct kv_node *nodes;
-    struct vid_ring *rings;
-    pthread_mutex_t rings_lock;
+    struct vid_ring **rings;
+    uint32_t vid_num;
     STAILQ_HEAD(, kv_node) conn_q;
+    void *conn_q_poller;
     // ssd_status
     kv_ring_cb ready_cb;
     void *arg;
@@ -66,24 +66,52 @@ static struct vid_entry *find_vid_entry(struct vid_ring *ring, char *vid) {
 }
 static void vid_ring_init(uint32_t vid_num) {
     struct kv_ring *self = &g_ring;
-    pthread_mutex_lock(&self->rings_lock);
     if (self->rings == NULL) {
-        self->rings = kv_calloc(vid_num, sizeof(struct vid_ring));
-        for (size_t i = 0; i < vid_num; i++) CIRCLEQ_INIT(self->rings + i);
+        self->vid_num = vid_num;
+        self->rings = kv_calloc(self->thread_num, sizeof(struct vid_ring *));
+        for (size_t i = 0; i < self->thread_num; i++) {
+            self->rings[i] = kv_calloc(self->vid_num, sizeof(struct vid_ring));
+            for (size_t j = 0; j < vid_num; j++) CIRCLEQ_INIT(self->rings[i] + j);
+        }
     }
-    pthread_mutex_unlock(&self->rings_lock);
+}
+static void add_node_to_rings(void *arg) {
+    struct kv_node *node = arg;
+    struct kv_ring *self = &g_ring;
+    struct vid_ring *ring = self->rings[kv_app_get_thread_index() - self->thread_id];
+    for (size_t i = 0; i < self->vid_num; i++) {  // add vids to ring
+        struct vid_entry *entry = kv_malloc(sizeof(struct vid_entry)), *x;
+        *entry = (struct vid_entry){node->info->vids + i, node};
+        x = find_vid_entry(ring + i, node->info->vids[i].vid);
+        if (x) {
+            CIRCLEQ_INSERT_BEFORE(ring + i, x, entry, entry);
+        } else {
+            CIRCLEQ_INSERT_HEAD(ring + i, entry, entry);
+        }
+    }
+}
+
+static void del_node_from_rings(void *arg) {
+    struct kv_node *node = arg;
+    struct kv_ring *self = &g_ring;
+    struct vid_ring *ring = self->rings[kv_app_get_thread_index() - self->thread_id];
+    for (size_t i = 0; i < self->vid_num; i++) {  // remove vids from ring
+        struct vid_entry *x = NULL, *tmp;
+        CIRCLEQ_FOREACH_SAFE(x, ring + i, entry, tmp) {
+            if (x->node == node) CIRCLEQ_REMOVE(ring + i, x, entry);
+        }
+    }
 }
 
 void kv_ring_dispatch(char *key, connection_handle *h, uint32_t *ssd_id) {
     struct kv_ring *self = &g_ring;
-    pthread_rwlock_rdlock(&self->lock);
-    if (self->nodes == NULL) {
+    if (self->rings == NULL) {
         fprintf(stderr, "no available server!\n");
         exit(-1);
     }
-    uint32_t index = get_vid_part(key, self->nodes->info->vid_num);
-    struct vid_entry *entry = find_vid_entry(self->rings + index, key);
-    pthread_rwlock_unlock(&self->lock);
+    struct vid_ring *ring = self->rings[kv_app_get_thread_index() - self->thread_id];
+    uint32_t index = get_vid_part(key, self->vid_num);
+    struct vid_entry *entry = find_vid_entry(ring + index, key);
     if (entry == NULL) {
         fprintf(stderr, "no available server for this partition!\n");
         exit(-1);
@@ -95,12 +123,14 @@ static void rdma_disconnect_cb(void *arg) {
     struct kv_ring *self = &g_ring;
     struct kv_node *node = arg;
     if (node->is_disconnecting) {
+        printf("client: disconnected to node %s:%s.\n", node->info->rdma_ip, node->info->rdma_port);
         free(node->info);  // info is allocated by libkv_etcd
         kv_free(node);
     } else {
         node->is_connected = false;
         STAILQ_INSERT_TAIL(&self->conn_q, node, next);
     }
+    for (size_t i = 0; i < self->thread_num; i++) kv_app_send(self->thread_id + i, del_node_from_rings, node);
 }
 static void rdma_connect_cb(connection_handle h, void *arg) {
     struct kv_ring *self = &g_ring;
@@ -112,9 +142,10 @@ static void rdma_connect_cb(connection_handle h, void *arg) {
         STAILQ_INSERT_TAIL(&self->conn_q, node, next);
         return;
     }
-    printf("connected to node %s:%s.\n", node->info->rdma_ip, node->info->rdma_port);
+    printf("client: connected to node %s:%s.\n", node->info->rdma_ip, node->info->rdma_port);
     node->is_connected = true;
     node->conn = h;
+    for (size_t i = 0; i < self->thread_num; i++) kv_app_send(self->thread_id + i, add_node_to_rings, node);
 }
 
 static int kv_conn_q_poller(void *arg) {
@@ -149,17 +180,9 @@ static void node_handler(void *arg) {
     vid_ring_init(info->vid_num);
     if (info->msg_type == KV_NODE_INFO_DELETE) {
         struct kv_node *node = NULL;
-        pthread_rwlock_wrlock(&self->lock);
         HASH_FIND(hh, self->nodes, info->rdma_ip, 24, node);
         assert(node);
-        for (size_t i = 0; i < info->vid_num; i++) {  // remove vids from ring
-            struct vid_entry *x = NULL, *tmp;
-            CIRCLEQ_FOREACH_SAFE(x, self->rings + i, entry, tmp) {
-                if (x->node == node) CIRCLEQ_REMOVE(self->rings + i, x, entry);
-            }
-        }
         HASH_DEL(self->nodes, node);
-        pthread_rwlock_unlock(&self->lock);
         if (node->is_local) {
             fprintf(stderr, "kv_etcd keepalive timeout!\n");
             exit(-1);
@@ -173,20 +196,8 @@ static void node_handler(void *arg) {
         node->is_disconnecting = false;
         node->is_connected = false;
         node->info = info;
-        pthread_rwlock_wrlock(&self->lock);
         // node may already exist?
         HASH_ADD(hh, self->nodes, info->rdma_ip, 24, node);  // ip & port as key
-        for (size_t i = 0; i < info->vid_num; i++) {         // add vids to ring
-            struct vid_entry *entry = kv_malloc(sizeof(struct vid_entry)), *x;
-            *entry = (struct vid_entry){info->vids + i, node};
-            x = find_vid_entry(self->rings + i, info->vids[i].vid);
-            if (x) {
-                CIRCLEQ_INSERT_BEFORE(self->rings + i, x, entry, entry);
-            } else {
-                CIRCLEQ_INSERT_HEAD(self->rings + i, entry, entry);
-            }
-        }
-        pthread_rwlock_unlock(&self->lock);
         if (!node->is_local) {
             STAILQ_INSERT_TAIL(&self->conn_q, node, next);
         }
@@ -216,10 +227,10 @@ kv_rdma_handle kv_ring_init(char *etcd_ip, char *etcd_port, uint32_t thread_num,
     self->rings = NULL;
     STAILQ_INIT(&self->conn_q);
     self->thread_id = kv_app_get_thread_index();
-    pthread_mutex_init(&self->rings_lock, NULL);
+    self->thread_num = thread_num;
     kv_rdma_init(&self->h, thread_num);
     kvEtcdInit(etcd_ip, etcd_port, _node_handler, NULL);
-    kv_app_poller_register(kv_conn_q_poller, self, 1000000);
+    self->conn_q_poller = kv_app_poller_register(kv_conn_q_poller, self, 1000000);
     return self->h;
 }
 
@@ -245,9 +256,7 @@ void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uin
     vid_ring_init(vid_num);
     struct kv_node_info *info = kv_node_info_alloc(local_ip, local_port, vid_num);
     struct vid_ring_stat *stats = kv_calloc(vid_num, sizeof(struct vid_ring_stat));
-    pthread_rwlock_rdlock(&self->lock);
-    for (size_t i = 0; i < vid_num; i++) stats[i] = (struct vid_ring_stat){i, ring_size(self->rings + i)};
-    pthread_rwlock_unlock(&self->lock);
+    for (size_t i = 0; i < vid_num; i++) stats[i] = (struct vid_ring_stat){i, ring_size(self->rings[0] + i)};
     qsort(stats, vid_num, sizeof(struct vid_ring_stat), vid_ring_stat_cmp);
     uint32_t ssd_id = 0;
     for (size_t i = 0; i < vid_per_ssd * ssd_num; i++) {
@@ -264,8 +273,11 @@ void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uin
 void kv_ring_fini(kv_rdma_fini_cb cb, void *cb_arg) {
     struct kv_ring *self = &g_ring;
     kvEtcdFini();
-    //TODO: diconnect all nodes
-    //TODO: kv_conn_q_poller unregister
+    // TODO: diconnect all nodes
+    kv_app_poller_unregister(&self->conn_q_poller);
     kv_rdma_fini(self->h, cb, cb_arg);
-    if (self->rings) kv_free(self->rings);
+    if (self->rings) {
+        for (size_t i = 0; i < self->thread_num; i++) kv_free(self->rings[i]);
+        kv_free(self->rings);
+    }
 }

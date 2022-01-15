@@ -110,7 +110,8 @@ static void io_start(void *arg) {
 static void handler(void *req, uint8_t *buf, uint32_t req_sz, void *arg) {
     struct io_ctx *ctx = malloc(sizeof(struct io_ctx));
     *ctx = (struct io_ctx){req, (struct kv_msg *)buf, 0, kv_app_get_thread_index()};
-    ctx->worker_id = ctx->msg->ssd_id;
+    uint64_t key_frag = *(uint64_t *)(KV_MSG_KEY(ctx->msg) + 8);
+    ctx->worker_id = key_frag % opt.ssd_num;
     kv_app_send(ctx->worker_id, io_start, ctx);
 }
 #define EXTRA_BUF 32
