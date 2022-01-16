@@ -34,7 +34,7 @@ include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 include $(SPDK_ROOT_DIR)/mk/spdk.modules.mk
 
 APP = kv_client
-C_SRCS := ../kv_rdma.c ../kv_app.c  ../benchmark2/city.c ../benchmark2/timing.c kv_client.c
+C_SRCS := ../kv_memory.c ../kv_rdma.c ../kv_app.c  ../benchmark2/city.c ../benchmark2/timing.c kv_client.c
 
 SYS_LIBS += -libverbs -lrdmacm -lconcurrentqueue
 #Attach only if FreeBSD and RDMA is specified with configure

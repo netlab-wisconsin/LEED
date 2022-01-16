@@ -1,6 +1,6 @@
 #include "kv_storage.h"
 
-#include "memery_operation.h"
+#include "kv_memory.h"
 #include "spdk/bdev.h"
 #include "spdk/bdev_module.h"
 #include "spdk/env.h"

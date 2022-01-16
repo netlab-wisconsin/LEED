@@ -5,7 +5,7 @@
 #include <sys/queue.h>
 
 #include "kv_app.h"
-#include "memery_operation.h"
+#include "kv_memory.h"
 
 // --- queue ---
 struct queue_entry {

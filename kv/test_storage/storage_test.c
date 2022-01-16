@@ -1,6 +1,6 @@
 #include "../kv_app.h"
 #include "../kv_storage.h"
-#include "../memery_operation.h"
+#include "../kv_memory.h"
 #include "spdk/log.h"
 #include "spdk/string.h"
 

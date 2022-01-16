@@ -6,7 +6,7 @@
 
 #include "kv_app.h"
 #include "kv_etcd.h"
-#include "memery_operation.h"
+#include "kv_memory.h"
 #include "pthread.h"
 #include "uthash.h"
 

@@ -4,7 +4,7 @@
 #include <stdio.h>
 
 #include "kv_app.h"
-#include "memery_operation.h"
+#include "kv_memory.h"
 // --- init & fini ---
 void kv_circular_log_init(struct kv_circular_log *self, struct kv_storage *storage, uint64_t base, uint64_t size, uint64_t head,
                           uint64_t tail, uint64_t fetch_buf_size, uint64_t fetch_len) {

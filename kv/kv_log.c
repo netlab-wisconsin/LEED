@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <sys/uio.h>
 
-#include "memery_operation.h"
+#include "kv_memory.h"
 
 
 void kv_log_init(struct kv_log *self, struct kv_storage *storage, uint64_t head, uint64_t tail) {

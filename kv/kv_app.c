@@ -4,7 +4,7 @@
 #include <stdio.h>
 
 #include "concurrentqueue.h"
-#include "memery_operation.h"
+#include "kv_memory.h"
 #include "spdk/env.h"
 #include "spdk/event.h"
 #include "spdk/thread.h"

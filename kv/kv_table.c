@@ -4,7 +4,7 @@
 #include <stdio.h>
 
 #include "kv_table_concurrent.h"
-#include "memery_operation.h"
+#include "kv_memory.h"
 
 void mehcached_print_bucket(const struct mehcached_bucket *bucket) {
     printf("<bucket %zx>\n", (size_t)bucket);
