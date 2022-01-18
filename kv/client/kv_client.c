@@ -125,9 +125,17 @@ static void stop(void) {
 static void test(void *arg);
 static void io_fini(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_mr resp, void *arg) {
     struct io_buffer_t *io = arg;
-    if (!success) {
+    struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_resp_buf(resp);
+    if (!success || msg->type != KV_MSG_OK) {
         fprintf(stderr, "io fail. \n");
         exit(-1);
+    }
+    if (state == READ) {
+        uint128 key = index_to_key(atoll(KV_MSG_VALUE(msg)));
+        if (memcmp(&key, KV_MSG_KEY(msg), 16) != 0) {
+            fprintf(stderr, "wrong value!\n");
+            exit(-1);
+        }
     }
     kv_app_send(opt.thread_num + io->producer_id, test, arg);
 }
@@ -205,6 +213,7 @@ static void test(void *arg) {
             msg->value_offset = msg->key_len;
             msg->value_len = opt.value_size;
             io->req_sz = KV_MSG_SIZE(msg);
+            sprintf(KV_MSG_VALUE(msg), "%lu", p->start_io);
             break;
         case READ:
             msg->type = KV_MSG_GET;

@@ -422,7 +422,7 @@ static inline void on_recv_resp(struct ibv_wc *wc) {
     assert(!conn->is_server);
     assert(wc->wc_flags & IBV_WC_WITH_IMM);
     // using wc->imm_data(req_id) to find corresponding request_ctx
-    struct client_req_ctx *ctx = kv_mempool_get_ele(conn->u.c.mp, wc->imm_data);
+    struct client_req_ctx *ctx = kv_mempool_get_ele(conn->u.c.mp, (int32_t)wc->imm_data);
     ctx->cb(ctx->conn, wc->status == IBV_WC_SUCCESS, ctx->req, ctx->resp, ctx->cb_arg);
     kv_mempool_put(conn->u.c.mp, ctx);
 }
