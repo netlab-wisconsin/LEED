@@ -22,6 +22,7 @@ static inline int kv_app_start_single_task(const char *json_config_file, kv_app_
 }
 void kv_app_stop(int rc);
 void kv_app_send(uint32_t index, kv_app_func func, void *arg);
+void kv_app_send_without_token(uint32_t index, kv_app_func func, void *arg);
 void kv_app_send_msg(uint32_t index, kv_app_func func, void *arg);
 uint32_t kv_app_get_thread_index(void);
 

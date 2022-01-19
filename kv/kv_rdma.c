@@ -32,18 +32,24 @@ struct rdma_connection {
     struct kv_rdma *self;
     struct rdma_cm_id *cm_id;
     struct ibv_qp *qp;
-    union {
-        kv_rdma_connect_cb connect;
-        kv_rdma_req_handler handler;
-        kv_rdma_disconnect_cb disconnect;
-    } cb;
-    void *cb_arg;
     bool is_server;
-    // sever connection data
-    UT_hash_handle hh;
-    // client connection data
-    pthread_mutex_t lock;
-    STAILQ_HEAD(, client_req_ctx) request_ctxs;
+    union {
+        // server connection data
+        struct {
+            kv_rdma_req_handler handler;
+            void *arg;
+            UT_hash_handle hh;
+        } s;
+        // client connection data
+        struct {
+            kv_rdma_connect_cb connect;
+            void *connect_arg;
+            kv_rdma_disconnect_cb disconnect;
+            void *disconnect_arg;
+            pthread_mutex_t lock;
+            STAILQ_HEAD(, client_req_ctx) request_ctxs;
+        } c;
+    } u;
 };
 struct cq_poller_ctx {
     struct kv_rdma *self;
@@ -180,14 +186,12 @@ static int create_connetion(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
 }
 
 static inline int on_addr_resolved(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
-    printf("address resolved.\n");
     TEST_NZ(create_connetion(self, cm_id));
     TEST_NZ(rdma_resolve_route(cm_id, TIMEOUT_IN_MS));
     return 0;
 }
 
 static inline int on_route_resolved(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
-    printf("route resolved.\n");
     struct rdma_conn_param cm_params;
     memset(&cm_params, 0, sizeof(cm_params));
     TEST_NZ(rdma_connect(cm_id, &cm_params));
@@ -195,14 +199,14 @@ static inline int on_route_resolved(struct kv_rdma *self, struct rdma_cm_id *cm_
 }
 
 static inline int on_connect_request(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
-    printf("received connection request.\n");
     struct rdma_connection *conn = kv_malloc(sizeof(struct rdma_connection)), *lconn = cm_id->context;
-    *conn = (struct rdma_connection){self, cm_id, NULL, .cb.handler = lconn->cb.handler, .cb_arg = lconn->cb_arg};
-    conn->is_server = true;
+    *conn = (struct rdma_connection){self, cm_id, NULL, true};
+    conn->u.s.handler = lconn->u.s.handler;
+    conn->u.s.arg = lconn->u.s.arg;
     cm_id->context = conn;
     TEST_NZ(create_connetion(self, cm_id));
     pthread_rwlock_wrlock(&self->lock);
-    HASH_ADD_INT(self->connections, qp->qp_num, conn);
+    HASH_ADD(u.s.hh, self->connections, qp->qp_num, sizeof(uint32_t), conn);
     pthread_rwlock_unlock(&self->lock);
     struct rdma_conn_param cm_params;
     memset(&cm_params, 0, sizeof(cm_params));
@@ -211,30 +215,35 @@ static inline int on_connect_request(struct kv_rdma *self, struct rdma_cm_id *cm
 }
 static inline int on_connect_error(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
     struct rdma_connection *conn = cm_id->context;
-    if (!conn->is_server && conn->cb.connect) {
-        if (conn->cb.connect) conn->cb.connect(NULL, conn->cb_arg);
+    if (!conn->is_server) {
+        if (conn->u.c.connect) conn->u.c.connect(NULL, conn->u.c.connect_arg);
         kv_free(conn);
     }
     return 0;
 }
 static inline int on_established(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
     struct rdma_connection *conn = cm_id->context;
-    if (!conn->is_server && conn->cb.connect) {
-        conn->cb.connect(conn, conn->cb_arg);
+    if (!conn->is_server && conn->u.c.connect) {
+        conn->u.c.connect(conn, conn->u.c.connect_arg);
+    }
+    if (conn->is_server) {
+        struct sockaddr_in *addr = (struct sockaddr_in *)rdma_get_peer_addr(cm_id);
+        printf("server: received connection from peer %s:%u.\n", inet_ntoa(addr->sin_addr), ntohs(addr->sin_port));
     }
     return 0;
 }
 static inline int on_disconnect(struct rdma_cm_id *cm_id) {
-    printf("peer disconnected.\n");
     struct rdma_connection *conn = cm_id->context;
     if (conn->is_server) {
+        struct sockaddr_in *addr = (struct sockaddr_in *)rdma_get_peer_addr(cm_id);
+        printf("server: peer %s:%u disconnected.\n", inet_ntoa(addr->sin_addr), ntohs(addr->sin_port));
         pthread_rwlock_wrlock(&conn->self->lock);
-        HASH_DEL(conn->self->connections, conn);
+        HASH_DELETE(u.s.hh, conn->self->connections, conn);
         pthread_rwlock_unlock(&conn->self->lock);
     }
     rdma_destroy_qp(cm_id);
     rdma_destroy_id(cm_id);
-    if (!conn->is_server && conn->cb.disconnect) conn->cb.disconnect(conn->cb_arg);
+    if (!conn->is_server && conn->u.c.disconnect) conn->u.c.disconnect(conn->u.c.disconnect_arg);
     kv_free(conn);
     return 0;
 }
@@ -275,20 +284,23 @@ static int rdma_cm_poller(void *_self) {
 
 // --- client ---
 
-int kv_rdma_connect(kv_rdma_handle h, char *addr_str, char *port_str, kv_rdma_connect_cb cb, void *cb_arg) {
+void kv_rdma_connect(kv_rdma_handle h, char *addr_str, char *port_str, kv_rdma_connect_cb connect_cb, void *connect_arg,
+                     kv_rdma_disconnect_cb disconnect_cb, void *disconnect_arg) {
     struct kv_rdma *self = h;
     struct rdma_connection *conn = kv_malloc(sizeof(struct rdma_connection));
-    *conn = (struct rdma_connection){self, NULL, NULL, .cb.connect = cb, .cb_arg = cb_arg};
-    conn->is_server = false;
-    pthread_mutex_init(&conn->lock, NULL);
-    STAILQ_INIT(&conn->request_ctxs);
+    *conn = (struct rdma_connection){self, NULL, NULL, false};
+    conn->u.c.connect = connect_cb;
+    conn->u.c.connect_arg = connect_arg;
+    conn->u.c.disconnect = disconnect_cb;
+    conn->u.c.disconnect_arg = disconnect_arg;
+    pthread_mutex_init(&conn->u.c.lock, NULL);
+    STAILQ_INIT(&conn->u.c.request_ctxs);
     struct addrinfo *addr;
     TEST_NZ(getaddrinfo(addr_str, port_str, NULL, &addr));
     TEST_NZ(rdma_create_id(self->ec, &conn->cm_id, NULL, RDMA_PS_TCP));
     TEST_NZ(rdma_resolve_addr(conn->cm_id, NULL, addr->ai_addr, TIMEOUT_IN_MS));
     conn->cm_id->context = conn;
     freeaddrinfo(addr);
-    return 0;
 }
 
 void kv_rmda_send_req(connection_handle h, kv_rmda_mr req, uint32_t req_sz, kv_rmda_mr resp, kv_rdma_req_cb cb, void *cb_arg) {
@@ -299,9 +311,9 @@ void kv_rmda_send_req(connection_handle h, kv_rmda_mr req, uint32_t req_sz, kv_r
 
     *(uint64_t *)ctx->req->addr = (uint64_t)ctx->resp->addr;
 
-    pthread_mutex_lock(&conn->lock);
-    STAILQ_INSERT_TAIL(&conn->request_ctxs, ctx, next);
-    pthread_mutex_unlock(&conn->lock);
+    pthread_mutex_lock(&conn->u.c.lock);
+    STAILQ_INSERT_TAIL(&conn->u.c.request_ctxs, ctx, next);
+    pthread_mutex_unlock(&conn->u.c.lock);
 
     struct ibv_recv_wr r_wr = {(uintptr_t)conn, NULL, NULL, 0}, *r_bad_wr = NULL;
     if (ibv_post_recv(conn->qp, &r_wr, &r_bad_wr)) {
@@ -325,21 +337,21 @@ fail:
     kv_free(ctx);
 }
 
-void kv_rdma_disconnect(connection_handle h, kv_rdma_disconnect_cb cb, void *cb_arg) {
+void kv_rdma_disconnect(connection_handle h) {
     struct rdma_connection *conn = h;
-    conn->cb.disconnect = cb;
-    conn->cb_arg = cb_arg;
     TEST_NZ(rdma_disconnect(conn->cm_id));
 }
 
 // --- server ---
-int kv_rdma_listen(kv_rdma_handle h, char *addr_str, char *port_str, uint32_t con_req_num, uint32_t max_msg_sz,
-                   kv_rdma_req_handler handler, void *arg) {
+void kv_rdma_listen(kv_rdma_handle h, char *addr_str, char *port_str, uint32_t con_req_num, uint32_t max_msg_sz,
+                    kv_rdma_req_handler handler, void *arg) {
     struct kv_rdma *self = h;
     self->has_server = true;
     self->connections = NULL;
     struct rdma_connection *conn = kv_malloc(sizeof(struct rdma_connection));
-    *conn = (struct rdma_connection){self, NULL, NULL, .cb.handler = handler, .cb_arg = arg};
+    *conn = (struct rdma_connection){self, NULL, NULL, true};
+    conn->u.s.handler = handler;
+    conn->u.s.arg = arg;
     struct addrinfo *addr;
     TEST_NZ(getaddrinfo(addr_str, port_str, NULL, &addr));
     TEST_NZ(rdma_create_id(self->ec, &conn->cm_id, NULL, RDMA_PS_TCP));
@@ -351,7 +363,6 @@ int kv_rdma_listen(kv_rdma_handle h, char *addr_str, char *port_str, uint32_t co
     self->max_msg_sz = max_msg_sz + HEADER_SIZE;
     pthread_rwlock_init(&self->lock, NULL);
     printf("kv rdma listening on %s %s.\n", addr_str, port_str);
-    return 0;
 }
 
 void kv_rdma_make_resp(void *req, uint8_t *resp, uint32_t resp_sz) {
@@ -393,35 +404,34 @@ static inline void on_recv_req(struct ibv_wc *wc) {
     assert(wc->byte_len > HEADER_SIZE);
     assert(wc->wc_flags & IBV_WC_WITH_IMM);
     pthread_rwlock_rdlock(&ctx->self->lock);
-    HASH_FIND_INT(ctx->self->connections, &wc->qp_num, ctx->conn);
+    HASH_FIND(u.s.hh, ctx->self->connections, &wc->qp_num, sizeof(uint32_t), ctx->conn);
     pthread_rwlock_unlock(&ctx->self->lock);
     assert(ctx->conn);
     assert(ctx->conn->is_server);
     ctx->resp_rkey = wc->imm_data;
-    ctx->conn->cb.handler(ctx, ctx->buf + HEADER_SIZE, wc->byte_len - HEADER_SIZE, ctx->conn->cb_arg);
+    ctx->conn->u.s.handler(ctx, ctx->buf + HEADER_SIZE, wc->byte_len - HEADER_SIZE, ctx->conn->u.s.arg);
 }
 
 static inline void on_recv_resp(struct ibv_wc *wc) {
     struct rdma_connection *conn = (struct rdma_connection *)wc->wr_id;
-
+    assert(!conn->is_server);
+    assert(wc->wc_flags & IBV_WC_WITH_IMM);
     // using wc->imm_data(rkey) to find corresponding request_ctx
-    pthread_mutex_lock(&conn->lock);
-    struct client_req_ctx *ctx = STAILQ_FIRST(&conn->request_ctxs), *tmp = ctx;
+    pthread_mutex_lock(&conn->u.c.lock);
+    struct client_req_ctx *ctx = STAILQ_FIRST(&conn->u.c.request_ctxs), *tmp = ctx;
     assert(ctx);
     if (ctx->resp->rkey == wc->imm_data)  // likely
-        STAILQ_REMOVE_HEAD(&conn->request_ctxs, next);
+        STAILQ_REMOVE_HEAD(&conn->u.c.request_ctxs, next);
     else
         while (true) {
             TEST_Z((ctx = STAILQ_NEXT(tmp, next)));
             if (ctx->resp->rkey == wc->imm_data) {
-                STAILQ_REMOVE_AFTER(&conn->request_ctxs, tmp, next);
+                STAILQ_REMOVE_AFTER(&conn->u.c.request_ctxs, tmp, next);
                 break;
             }
             tmp = ctx;
         }
-    pthread_mutex_unlock(&conn->lock);
-    assert(!ctx->conn->is_server);
-    assert(wc->wc_flags & IBV_WC_WITH_IMM);
+    pthread_mutex_unlock(&conn->u.c.lock);
     ctx->cb(ctx->conn, wc->status == IBV_WC_SUCCESS, ctx->req, ctx->resp, ctx->cb_arg);
 }
 

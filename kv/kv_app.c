@@ -38,6 +38,12 @@ void kv_app_send(uint32_t index, kv_app_func func, void *arg) {
     moodycamel_cq_enqueue_with_token(g_threads[index].cq, g_threads[index].p_tokens[local_index], msg);
 }
 
+void kv_app_send_without_token(uint32_t index, kv_app_func func, void *arg) {
+    struct kv_app_task *msg = spdk_mempool_get(g_event_mempool);
+    *msg = (struct kv_app_task){func, arg};
+    moodycamel_cq_enqueue(g_threads[index].cq, msg);
+}
+
 #define MAX_POLL_SZ 16
 static int msg_poller(void *arg) {
     struct thread_data *data = arg;

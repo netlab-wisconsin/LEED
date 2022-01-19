@@ -1,6 +1,4 @@
 #
-#  BSD LICENSE
-#
 #  Copyright (c) Intel Corporation.
 #  All rights reserved.
 #
@@ -31,32 +29,17 @@
 #  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../..)
+SPDK_ROOT_DIR := $(abspath $(CURDIR)/../../../..)
 include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
+include $(SPDK_ROOT_DIR)/mk/spdk.modules.mk
 
-DIRS-y = test_storage
-DIRS-y += test_kv_log
-DIRS-y += test_kv_table
-DIRS-y += benchmark
-DIRS-y += test_kv_value_log
-DIRS-y += test_kv_circular_log
-DIRS-y += test_kv_data_store
-DIRS-y += benchmark2
-DIRS-y += benchmark3
-DIRS-y += test_kv_rdma
-DIRS-y += test_kv_app
-DIRS-y += client
-DIRS-y += server
-DIRS-y += test_kv_ring
-DIRS-y += ring_client
-DIRS-y += ring_server
+APP = kv_ring_client
+C_SRCS := ../kv_rdma.c ../kv_ring.c ../kv_app.c  ../benchmark2/city.c ../benchmark2/timing.c kv_client.c
 
-.PHONY: all clean $(DIRS-y)
+SYS_LIBS += -libverbs -lrdmacm -lconcurrentqueue -lkv_etcd
 
-all: $(DIRS-y)
-	@:
+SPDK_LIB_LIST = $(ALL_MODULES_LIST)
+SPDK_LIB_LIST += $(EVENT_BDEV_SUBSYSTEM)
+SPDK_LIB_LIST += $(KV_BDEV_MODULES)
 
-clean: $(DIRS-y)
-	@:
-
-include $(SPDK_ROOT_DIR)/mk/spdk.subdirs.mk
+include $(SPDK_ROOT_DIR)/mk/spdk.app.mk
