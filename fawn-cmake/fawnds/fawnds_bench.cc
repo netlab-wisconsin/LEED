@@ -35,6 +35,7 @@ struct benchData {
 uint32_t readyCount = 0;
 pthread_mutex_t count_lock;
 vector<double> search_times;
+vector<double> read_latency_times;
 u_int max_record = 0;
 
 
@@ -114,10 +115,15 @@ void *randomReadThread(void* p)
     gettimeofday(&tv_start, NULL);
     string data;
     const char *key = l;
+    double single_search_time = 0;
+    struct timeval single_start, single_end;
     for (u_int i = 0; i < num_to_scan; ++i) {
+        gettimeofday(&single_start, NULL);
         if(!mydb->Get(key, sizeof(uint32_t), data)) {
             perror("Get failed.\n");
         }
+        gettimeofday(&single_end, NULL);
+        single_search_time += timeval_diff(&single_start, &single_end);
         key += sizeof(uint32_t);
     }
 
@@ -129,6 +135,8 @@ void *randomReadThread(void* p)
 
     pthread_mutex_lock(&count_lock);
     search_times.push_back(dbsearch_time);
+    read_latency_times.push_back(single_search_time);
+    //printf("Query rate: %f\n", ((double)single_search_time / num_to_scan) );
     pthread_mutex_unlock(&count_lock);
     return NULL;
 }
@@ -293,7 +301,7 @@ void bench(int argc, char** argv) {
         }
         int n = l.size();
         timeval write_tv_start, write_tv_end;
-        gettimeofday(&write_tv_start, nullptr);
+        gettimeofday(&write_tv_start, NULL);
         for (int i = 0; i < n; i++) {
             u_int val = l[i];
             string ps_key((const char *)&val, sizeof(val));
@@ -307,12 +315,12 @@ void bench(int argc, char** argv) {
 
             }
 
-            int dbi = (int)(i / bucket);
+            int dbi = (int)(val / bucket);
             if(!dbs[dbi]->Insert(key.data(), key.get_actual_size(), value.data(), valuesize)) {
                 perror("Insert failed\n");
             }
         }
-        gettimeofday(&write_tv_end, nullptr);
+        gettimeofday(&write_tv_end, NULL);
         cout << "Insert Rate: " << num_to_scan / timeval_diff(&write_tv_start,&write_tv_end) << " inserts per second" << endl;
 
     } else {
@@ -356,12 +364,14 @@ void bench(int argc, char** argv) {
     free(bd);
     if (!writeTest){
         double totalTime = 0;
+        double totalReadLatency = 0;
         for (int i = 0; i < numThreads; i++) {
             totalTime = max(totalTime, search_times[i]);
+            totalReadLatency += read_latency_times[i];
         }
         double totalQueries = num_to_scan * numThreads;
-
-        cout << "Aggregate Query Rate: " << totalQueries / totalTime << " queries per second" << endl;
+        cout << "Random Query Rate: " << totalQueries / totalTime << " queries per second" << endl;
+        cout << "Random Query Latency: " << totalReadLatency / totalQueries * 1000 * 1000 << "us" << endl;
     }
 }
 
