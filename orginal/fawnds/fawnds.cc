@@ -62,8 +62,9 @@ namespace fawn {
         }
 
         return FawnDS<T>::Create_FawnDS_From_Fd(fd, filename,
-                                                hash_table_size * FawnDS<T>::EXCESS_BUCKET_FACTOR,
-                                                0, // empty
+ hash_table_size * FawnDS<T>::EXCESS_BUCKET_FACTOR
+                                              , 
+0, // empty
                                                 0, // hashtable
                                                 max_deleted_ratio,
                                                 max_load_factor,
@@ -109,12 +110,12 @@ namespace fawn {
         uint64_t db_size = header_size() + sizeof(struct HashEntry) * max_entries;
 
         printf("CreateFawnDS table information:\n"
-               "\t hashtablesize: %"PRIu64"\n"
-               "\t num_entries: %"PRIu64"\n"
-               "\t deleted entries: %"PRIu64"\n"
-               "\t Database header size %"PRIu64"B\n"
-               "\t Total db size %"PRIu64"B\n"
-               "\t Maximum number of entries: %"PRIu64"\n",
+               "\t hashtablesize: %" PRIu64"\n"
+               "\t num_entries: %" PRIu64"\n"
+               "\t deleted entries: %" PRIu64"\n"
+               "\t Database header size %" PRIu64"B\n"
+               "\t Total db size %" PRIu64"B\n"
+               "\t Maximum number of entries: %" PRIu64"\n",
                hash_table_size, num_entries, deleted_entries,
                header_size(), db_size, max_entries);
 
@@ -122,7 +123,7 @@ namespace fawn {
         // requires NUMPAGES(sizeof(struct DbHeader)) +
         // sizeof(struct HashEntry) * max_entries.
         if (ftruncate(fd, (off_t)db_size) == -1) {
-            fprintf(stderr, "Could not extend file to %"PRIu64" bytes: %s\n",
+            fprintf(stderr, "Could not extend file to %" PRIu64" bytes: %s\n",
                     db_size, strerror(errno));
         }
         lseek(fd, 0, SEEK_SET);
@@ -171,7 +172,7 @@ namespace fawn {
         ds->header_->data_start_point = db_size;
 
         if (lseek(ds->fd_, db_size, SEEK_SET) != (off_t)db_size) {
-            fprintf(stderr, "Could not seek to offset %"PRIu64": %s\n",
+            fprintf(stderr, "Could not seek to offset %" PRIu64": %s\n",
                     db_size, strerror(errno));
         }
 
@@ -268,7 +269,7 @@ namespace fawn {
         uint64_t length = sizeof(struct DbHeader);
         uint64_t offset = 0;
         if ((uint64_t)pread64(fd_, header_, length, offset) != length) {
-            fprintf(stderr, "Could not read header for data at position %"PRIu64": %s\n",
+            fprintf(stderr, "Could not read header for data at position %" PRIu64": %s\n",
                     offset, strerror(errno));
             return false;
         }
@@ -621,7 +622,7 @@ namespace fawn {
                 DataHeader data_header;
                 string key;
                 if (!datastore->ReadIntoHeader(current_offset, data_header, key)) {
-                    fprintf(stderr, "ReadIntoHeader failed at offset %"PRIu64".\n",
+                    fprintf(stderr, "ReadIntoHeader failed at offset %" PRIu64".\n",
                             current_offset);
                     delete new_db;
                     if (unlink(temp_filename.c_str()) == -1) {
@@ -757,7 +758,7 @@ namespace fawn {
         DataHeader data_header;
         string key;
         if (!datastore->ReadIntoHeader(currSplit, data_header, key)) {
-            fprintf(stderr, "ReadIntoHeader failed at offset %"PRIu64".\n",
+            fprintf(stderr, "ReadIntoHeader failed at offset %" PRIu64".\n",
                     currSplit);
             return false;
         }
@@ -843,7 +844,7 @@ namespace fawn {
                 DataHeader data_header;
                 string key;
                 if (!datastore->ReadIntoHeader(current_offset, data_header, key)) {
-                    fprintf(stderr, "ReadIntoHeader failed at offset %"PRIu64".\n",
+                    fprintf(stderr, "ReadIntoHeader failed at offset %" PRIu64".\n",
                             current_offset);
                     return false;
                 }
@@ -955,8 +956,8 @@ namespace fawn {
         for (u_int hash_fn_index = 0; hash_fn_index < HASH_COUNT; hash_fn_index++) {
             uint32_t indexkey = (*(Hashes::hashes[hash_fn_index]))(key, key_len);
             uint32_t hash_index_start = indexkey & (header_->hashtable_size-1);
-            if (hash_fn_index == 2)
-                print_payload((const u_char*) &indexkey, sizeof(indexkey));
+//            if (hash_fn_index == 2)
+//                print_payload((const u_char*) &indexkey, sizeof(indexkey));
 
             hash_index_start &= (~(PROBES_BEFORE_REHASH-1));
 
