@@ -74,6 +74,7 @@ Manager::Manager(string localIP, int num_replicas) {
 }
 
 void Manager::init(string localIP, int num_replicas) {
+    cout << "### set replicas is " << num_replicas << endl;
     myIP.assign(localIP);
     replica_group_size = num_replicas;
 
@@ -1361,9 +1362,10 @@ void Manager::get_ring_state(ringState& _return) {
 
 void usage()
 {
-    cerr <<  "./manager myIP [-j] \n\n"
+    cerr <<  "./manager myIP [-j] -r \n\n"
          <<   "Options: " << endl
          <<  "-j         use only if backends are static joining.\n"
+         <<  "-r         the number of replicas.\n"
          << endl;
 }
 
@@ -1371,10 +1373,17 @@ int main(int argc, char **argv)
 {
     int ch;
     bool static_join = false;
-    while ((ch = getopt(argc, argv, "j")) != -1) {
+    int num_replicas = 1;
+    int argindex = 2;
+    while ((ch = getopt(argc, argv, "j:r")) != -1) {
         switch (ch) {
         case 'j':
+            argindex++;
             static_join = true;
+            break;
+        case 'r':
+            argindex++;
+            num_replicas = atoi(argv[argindex]);
             break;
         default:
             usage();
@@ -1392,7 +1401,7 @@ int main(int argc, char **argv)
     string myIP(argv[0]);
 
     /* Initialize Manager */
-    Manager manager(myIP, 1);
+    Manager manager(myIP, num_replicas);
 
     // If backend is static_joining, ask user to send neighbor updates
     if (static_join) {
