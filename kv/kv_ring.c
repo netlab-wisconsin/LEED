@@ -222,7 +222,7 @@ static void node_handler(void *arg) {
         node->info = info;
         // node may already exist?
         HASH_ADD(hh, self->nodes, info->rdma_ip, 24, node);  // ip & port as key
-        if (!node->is_local) {
+        if (node->is_local) {
             for (size_t i = 0; i < self->thread_num; i++) kv_app_send(self->thread_id + i, add_node_to_rings, node);
         } else {
             STAILQ_INSERT_TAIL(&self->conn_q, node, next);
