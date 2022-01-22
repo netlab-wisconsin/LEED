@@ -94,11 +94,12 @@ struct worker_t {
 
 kv_rdma_handle server;
 struct io_ctx {
-    void *req;
+    kv_rmda_mr req_h;
     struct kv_msg *msg;
     uint32_t worker_id;
     uint32_t server_thread;
-    void *resp;
+    kv_rmda_mr req, resp;
+    bool success;
     SLIST_ENTRY(io_ctx) next;
 };
 
@@ -106,14 +107,16 @@ SLIST_HEAD(, io_ctx) *io_ctx_heads = NULL;
 
 static void send_response(void *arg) {
     struct io_ctx *io = arg;
-    kv_rdma_make_resp(io->req, (uint8_t *)io->msg, KV_MSG_SIZE(io->msg));
+    if (io->msg->type == KV_MSG_SET) io->msg->value_len = 0;
+    io->msg->type = io->success ? KV_MSG_OK : KV_MSG_ERR;
+    kv_rdma_make_resp(io->req_h, (uint8_t *)io->msg, KV_MSG_SIZE(io->msg));
     SLIST_INSERT_HEAD(io_ctx_heads + io->server_thread - opt.ssd_num, io, next);
 }
 
 static void request_cb(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_mr resp, void *arg) {
     struct io_ctx *io = arg;
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_resp_buf(resp);
-    io->msg->type = success && msg->type == KV_MSG_OK ? KV_MSG_OK : KV_MSG_ERR;
+    io->success = success && msg->type == KV_MSG_OK;
     kv_app_send(io->server_thread, send_response, arg);
 }
 
@@ -125,17 +128,16 @@ static void forward_request(void *arg) {
         io->msg->hop++;
         kv_rmda_send_req(h, io->req, KV_MSG_SIZE(io->msg), io->resp, request_cb, io);
     } else {
-        io->msg->type = KV_MSG_OK;
         send_response(io);
     }
 }
 
 static void io_fini(bool success, void *arg) {
     struct io_ctx *io = arg;
+    io->success = success;
     if (success && (io->msg->type == KV_MSG_SET || io->msg->type == KV_MSG_DEL)) {
         kv_app_send(io->server_thread, forward_request, arg);
     } else {
-        io->msg->type = success ? KV_MSG_OK : KV_MSG_ERR;
         kv_app_send(io->server_thread, send_response, arg);
     }
 }
@@ -147,7 +149,6 @@ static void io_start(void *arg) {
         case KV_MSG_SET:
             kv_data_store_set(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, KV_MSG_VALUE(io->msg),
                               io->msg->value_len, io_fini, arg);
-            io->msg->value_len = 0;
             break;
         case KV_MSG_GET:
             kv_data_store_get(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, KV_MSG_VALUE(io->msg),
@@ -165,12 +166,12 @@ static void io_start(void *arg) {
     }
 }
 
-static void handler(void *req, uint8_t *buf, uint32_t req_sz, void *arg) {
+static void handler(void *req_h, kv_rmda_mr req, uint32_t req_sz, void *arg) {
     uint32_t thread_id = kv_app_get_thread_index();
     struct io_ctx *ctx = SLIST_FIRST(io_ctx_heads + thread_id - opt.ssd_num);
     assert(ctx);
     SLIST_REMOVE_HEAD(io_ctx_heads + thread_id - opt.ssd_num, next);
-    *ctx = (struct io_ctx){req, (struct kv_msg *)buf, 0, thread_id};
+    *ctx = (struct io_ctx){req, (struct kv_msg *)kv_rdma_get_req_buf(req), 0, thread_id};
     ctx->worker_id = ctx->msg->ssd_id;
     kv_app_send(ctx->worker_id, io_start, ctx);
 }

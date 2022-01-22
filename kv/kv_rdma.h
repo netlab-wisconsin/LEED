@@ -9,7 +9,7 @@ typedef void *kv_rmda_mr;
 typedef void (*kv_rdma_req_cb)(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_mr resp, void *cb_arg);
 typedef void (*kv_rdma_connect_cb)(connection_handle h, void *cb_arg);
 typedef void (*kv_rdma_disconnect_cb)(void *cb_arg);
-typedef void (*kv_rdma_req_handler)(void *req, uint8_t *buf, uint32_t req_sz, void *arg);
+typedef void (*kv_rdma_req_handler)(void *req_h, kv_rmda_mr req, uint32_t req_sz, void *arg);
 typedef void (*kv_rdma_fini_cb)(void *ctx);
 typedef void (*kv_rdma_server_init_cb)(void *arg);
 
@@ -24,7 +24,7 @@ void kv_rdma_free_mr(kv_rmda_mr h);
 
 void kv_rdma_listen(kv_rdma_handle h, char *addr_str, char *port_str, uint32_t con_req_num, uint32_t max_msg_sz,
                     kv_rdma_req_handler handler, void *arg, kv_rdma_server_init_cb cb, void *cb_arg);
-void kv_rdma_make_resp(void *req, uint8_t *resp, uint32_t resp_sz);  // resp must within buf
+void kv_rdma_make_resp(void *req_h, uint8_t *resp, uint32_t resp_sz);  // resp must within buf
 
 void kv_rdma_connect(kv_rdma_handle h, char *addr_str, char *port_str, kv_rdma_connect_cb connect_cb, void *connect_arg,
                      kv_rdma_disconnect_cb disconnect_cb, void *disconnect_arg);

@@ -4,7 +4,8 @@
 #include <stdio.h>
 
 #include "../kv_app.h"
-static void handler(void *req, uint8_t *buf, uint32_t req_sz, void *arg) {
+static void handler(void *req_h, kv_rmda_mr req, uint32_t req_sz, void *arg) {
+    uint8_t *buf = kv_rdma_get_req_buf(req);
     puts(buf);
     sprintf(buf, "msg from server.");
     kv_rdma_make_resp(req, buf, 1024);
