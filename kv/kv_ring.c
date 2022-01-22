@@ -102,8 +102,7 @@ static void del_node_from_rings(void *arg) {
         }
     }
 }
-
-void kv_ring_dispatch(char *key, connection_handle *h, uint32_t *ssd_id) {
+static inline struct vid_entry *find_vid_entry_from_key(char *key, struct vid_ring **p_ring) {
     struct kv_ring *self = &g_ring;
     if (self->rings == NULL) {
         fprintf(stderr, "no available server!\n");
@@ -116,9 +115,34 @@ void kv_ring_dispatch(char *key, connection_handle *h, uint32_t *ssd_id) {
         fprintf(stderr, "no available server for this partition!\n");
         exit(-1);
     }
+    if (p_ring) *p_ring = ring;
+    return entry;
+}
+
+void kv_ring_dispatch(char *key, connection_handle *h, uint16_t *ssd_id) {
+    struct vid_entry *entry = find_vid_entry_from_key(key, NULL);
     *h = entry->node->conn;
     *ssd_id = entry->vid->ssd_id;
 }
+
+void kv_ring_forward(char *key, uint32_t hop, uint32_t r_num, connection_handle *h, uint16_t *ssd_id) {
+    if (hop >= r_num) {
+        *h = NULL;
+        return;
+    }
+    struct vid_ring *ring;
+    struct vid_entry *base_entry = find_vid_entry_from_key(key, &ring), *entry = base_entry;
+    for (uint16_t i = 0; i < hop; i++) {
+        struct vid_entry *entry = CIRCLEQ_LOOP_NEXT(ring, entry, entry);
+        if (entry == base_entry) {
+            *h = NULL;
+            return;
+        }
+    }
+    *h = entry->node->conn;
+    *ssd_id = entry->vid->ssd_id;
+}
+
 static void rdma_disconnect_cb(void *arg) {
     struct kv_ring *self = &g_ring;
     struct kv_node *node = arg;
