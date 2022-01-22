@@ -115,7 +115,7 @@ static inline struct vid_entry *find_vid_entry_from_key(char *key, struct vid_ri
         fprintf(stderr, "no available server for this partition!\n");
         exit(-1);
     }
-    if (p_ring) *p_ring = ring;
+    if (p_ring) *p_ring = ring + index;
     return entry;
 }
 
@@ -133,7 +133,7 @@ void kv_ring_forward(char *key, uint32_t hop, uint32_t r_num, connection_handle 
     struct vid_ring *ring;
     struct vid_entry *base_entry = find_vid_entry_from_key(key, &ring), *entry = base_entry;
     for (uint16_t i = 0; i < hop; i++) {
-        struct vid_entry *entry = CIRCLEQ_LOOP_NEXT(ring, entry, entry);
+        entry = CIRCLEQ_LOOP_NEXT(ring, entry, entry);
         if (entry == base_entry) {
             *h = NULL;
             return;
