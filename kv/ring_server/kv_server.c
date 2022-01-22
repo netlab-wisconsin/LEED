@@ -107,7 +107,7 @@ SLIST_HEAD(, io_ctx) *io_ctx_heads = NULL;
 static void send_response(void *arg) {
     struct io_ctx *io = arg;
     kv_rdma_make_resp(io->req, (uint8_t *)io->msg, KV_MSG_SIZE(io->msg));
-    SLIST_INSERT_HEAD(io_ctx_heads + io->server_thread, io, next);
+    SLIST_INSERT_HEAD(io_ctx_heads + io->server_thread - opt.ssd_num, io, next);
 }
 
 static void request_cb(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_mr resp, void *arg) {
@@ -125,6 +125,7 @@ static void forward_request(void *arg) {
         io->msg->hop++;
         kv_rmda_send_req(h, io->req, KV_MSG_SIZE(io->msg), io->resp, request_cb, io);
     } else {
+        io->msg->type = KV_MSG_OK;
         send_response(io);
     }
 }
