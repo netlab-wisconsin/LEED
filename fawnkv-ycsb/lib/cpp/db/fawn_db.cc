@@ -33,13 +33,18 @@ int FawnDB::Insert(const string &table, const string &key,
       data = data + v.first + ":"  + v.second + ";";
     }
     client_.put(key, data);
-    //cout << "Insert"  << ' ' << key << endl;
     return DB::kOK;
 }
 
 int FawnDB::Update(const string &table, const string &key,
            vector<KVPair> &values) {
-  return DB::kOK;
+  return Insert(table, key, values);
 }
+
+// int Scan(const string &table, const string &key,
+//            int len, const vector<string> *fields,
+//            vector<KVPair> &result) {
+//     return 1;
+// }
 
 } // namespace ycsbc

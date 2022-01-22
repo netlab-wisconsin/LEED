@@ -39,7 +39,12 @@ class FawnDB : public DB {
   int Scan(const std::string &table, const std::string &key,
            int len, const std::vector<std::string> *fields,
            std::vector<std::vector<KVPair>> &result) {
-    throw "Scan: function not implemented!";
+      vector<KVPair> res;
+      for (int i = 0; i < len; i++) {
+         Read(table, key, fields, res);
+         result.push_back(res);
+      }
+      return DB::kOK;
   }
 
   int Update(const std::string &table, const std::string &key,

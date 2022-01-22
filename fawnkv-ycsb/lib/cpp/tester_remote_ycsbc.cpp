@@ -2,13 +2,14 @@
 #include <string>
 #include <iostream>
 #include <vector>
-#include <future>
+#include "thread"
 #include "core/utils.h"
 #include "core/timer.h"
 #include "core/client.h"
 #include "core/core_workload.h"
 #include "db/db_factory.h"
 #include <mutex>
+#include "timing.h"
 
 #include "FawnKV.h"
 #include "TFawnKVRemote.h"
@@ -21,6 +22,11 @@ using namespace std;
 using namespace apache::thrift;
 using namespace apache::thrift::protocol;
 using namespace apache::thrift::transport;
+
+#define TIME_NOW (std::chrono::high_resolution_clock::now())
+#define TIME_DURATION(start, end) (std::chrono::duration<double>((end)-(start)).count() * 1000 * 1000)
+
+vector<double> search_times;
 
 void usage()
 {
@@ -157,14 +163,25 @@ int DelegateClient(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const int num_ops,
   db->Init();
   ycsbc::Client client(*db, *wl);
   int oks = 0;
+  double transactionLatency = 0;
   for (int i = 0; i < num_ops; ++i) {
+    if (i % 1000 == 0) {
+      cout << "## DelegateClient runs " << i << "/" << num_ops << "ops" << endl; 
+    }
     if (is_loading) {
       oks += client.DoInsert();
     } else {
+      timeval single_transaction_start, single_transaction_end;
+      gettimeofday(&single_transaction_start, NULL);
       oks += client.DoTransaction();
+      gettimeofday(&single_transaction_end, NULL);
+      transactionLatency += timeval_diff(&single_transaction_start, &single_transaction_end);
     }
   }
   db->Close();
+  if (!is_loading) {
+      search_times.push_back(transactionLatency);
+  }
   return oks;
 }
 
@@ -172,8 +189,6 @@ int main(int argc, char **argv)
 {   
     utils::Properties props;
     string file_name = ParseCommandLine(argc, argv, props);
-
-   
 
     ycsbc::CoreWorkload wl;
     wl.Init(props);
@@ -192,48 +207,57 @@ int main(int argc, char **argv)
       dbs[i] = db;
     }
     // Loads data
-    vector<future<int>> actual_ops;
+    vector<thread> threads;
+    // vector<future<int>> actual_ops;
     int sum = 0;
     int total_ops = 0;
 
     if (stoi(props["load"]) == 1) {
+        auto start = TIME_NOW;
         total_ops = stoi(props[ycsbc::CoreWorkload::RECORD_COUNT_PROPERTY]);
         for (int i = 0; i < num_threads; ++i) {
-            actual_ops.emplace_back(async(launch::async,
+            threads.emplace_back(bind(
                 DelegateClient, dbs[i], &wl, total_ops / num_threads, true));
         }
-        assert((int)actual_ops.size() == num_threads);
+        assert((int)threads.size() == num_threads);
 
         cerr << "# Thread init complete!\t" << endl;
 
-        
-        for (auto &n : actual_ops) {
-            assert(n.valid());
-            sum += n.get();
+        for (auto &t : threads) {
+            t.join();
         }
+        double time = TIME_DURATION(start, TIME_NOW);
+        printf("Finish %ld requests in %.3lf seconds.\n", total_ops, time/1000/1000);
         cerr << "# Loading records:\t" << sum << endl;
     } else {
         cerr << "# Not Loading records, just run"<< endl;
     }
     
-    actual_ops.clear();
+    threads.clear();
     total_ops = stoi(props[ycsbc::CoreWorkload::OPERATION_COUNT_PROPERTY]);
     utils::Timer<double> timer;
     timer.Start();
     for (int i = 0; i < num_threads; ++i) {
-        actual_ops.emplace_back(async(launch::async,
+        threads.emplace_back(bind(
             DelegateClient, dbs[i], &wl, total_ops / num_threads, false));
     }
-    assert((int)actual_ops.size() == num_threads);
+    assert((int)threads.size() == num_threads);
 
     sum = 0;
-    for (auto &n : actual_ops) {
-        assert(n.valid());
-        sum += n.get();
+    for (auto &t : threads) {
+            t.join();
     }
     double duration = timer.End();
-    cerr << "# Transaction throughput (KTPS)" << endl;
+    cerr << "# Transaction throughput (OPS)" << endl;
     cerr << props["dbname"] << '\t' << file_name << '\t' << num_threads << '\t';
-    cerr << total_ops / duration / 1000 << endl;
+    cerr << total_ops / duration << endl;
+
+    double totalTime = 0;
+    for (int i = 0; i < num_threads; i++) {
+        totalTime += search_times[i];
+    }
+    cerr << "# Transaction Latency (us)" << endl;
+    cerr << props["dbname"] << '\t' << file_name << '\t' << num_threads << '\t';
+    cerr << totalTime / total_ops * 1000 * 1000 << "us" << endl;
     return 0;
 }

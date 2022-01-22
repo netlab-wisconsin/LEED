@@ -49,7 +49,7 @@ int main(int argc, char **argv)
 
     FawnKVClt client(argv[0], port, myIP, myPort);
 
-    for (int i = 0; i < 10000; i++) {
+    for (int i = 0; i < 100000; i++) {
 	printf("putting..");
 	client.put("abc", "value");
 	string value = client.get("abc");
