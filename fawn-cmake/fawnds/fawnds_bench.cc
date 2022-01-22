@@ -35,6 +35,7 @@ struct benchData {
 uint32_t readyCount = 0;
 pthread_mutex_t count_lock;
 vector<double> search_times;
+vector<double> read_latency_times;
 u_int max_record = 0;
 
 
@@ -76,7 +77,7 @@ void *compactThread(void* p) {
     return NULL;
 }
 
-void *randomReadThread(void* p)
+void *randomReadThread(void* p, int mode)
 {
     benchData* bd = (benchData*)p;
     FawnDS<FawnDS_Flash>** dbs = bd->f;
@@ -89,7 +90,12 @@ void *randomReadThread(void* p)
     char *l = (char *)malloc(sizeof(char) * num_to_scan * sizeof(uint32_t));
 
     for (u_int i = 0; i < num_to_scan; i++) {
-        u_int val = (offsetVal * num_records) + (rand()%num_records);
+        u_int val;
+        if(mode == SCAN_RANDOM) {
+            val = (offsetVal * num_records) + (rand()%num_records);
+        } else {
+            val = (offsetVal * num_records) + (i % num_records);
+        }
         if (val < max_record) {
             string ps_key((const char *)&val, sizeof(val));
             uint32_t key_id = HashUtil::BobHash(ps_key);
@@ -114,10 +120,15 @@ void *randomReadThread(void* p)
     gettimeofday(&tv_start, NULL);
     string data;
     const char *key = l;
+    double single_search_time = 0;
+    struct timeval single_start, single_end;
     for (u_int i = 0; i < num_to_scan; ++i) {
+        gettimeofday(&single_start, NULL);
         if(!mydb->Get(key, sizeof(uint32_t), data)) {
             perror("Get failed.\n");
         }
+        gettimeofday(&single_end, NULL);
+        single_search_time += timeval_diff(&single_start, &single_end);
         key += sizeof(uint32_t);
     }
 
@@ -129,6 +140,8 @@ void *randomReadThread(void* p)
 
     pthread_mutex_lock(&count_lock);
     search_times.push_back(dbsearch_time);
+    read_latency_times.push_back(single_search_time);
+    //printf("Query rate: %f\n", ((double)single_search_time / num_to_scan) );
     pthread_mutex_unlock(&count_lock);
     return NULL;
 }
@@ -151,9 +164,10 @@ void bench(int argc, char** argv) {
     bool setAffinity = false;
     int numProcs = 1;
     int valuesize = 1024;
+    int seqWriteTest = 0;
 
     pthread_t compactThreadId_;
-    while ((ch = getopt(argc, argv, "hfn:r:p:swc:t:b:a:S:")) != -1)
+    while ((ch = getopt(argc, argv, "hfn:r:p:swc:t:b:a:S:q")) != -1)
         switch (ch) {
         case 'n':
             max_record = atoi(optarg);
@@ -169,6 +183,9 @@ void bench(int argc, char** argv) {
             break;
         case 'w':
             writeTest = 1;
+            break;
+        case 'q':
+            seqWriteTest = 1;
             break;
         case 'c':
             compactAt = atoi(optarg);
@@ -251,6 +268,10 @@ void bench(int argc, char** argv) {
     }
 
     if (createdb && !writeTest) {
+        // timeval seq_write_start, seq_write_end;
+        // timeval single_seq_write_start, single_seq_write_end;
+        // double writeSeqLatency = 0;
+        // gettimeofday(&seq_write_start, NULL);
         // Fill it sequentially if we're not testing writing
         for (u_int i = 0; i < max_record; ++i) {
             int num = i;
@@ -259,12 +280,16 @@ void bench(int argc, char** argv) {
             DBID key((char *)&key_id, sizeof(u_int32_t));
 
             int dbi = (int)(i / bucket);
-
+            // gettimeofday(&single_seq_write_start, NULL);
             if(!dbs[dbi]->Insert(key.data(), key.get_actual_size(), value.data(), valuesize)) {
                 perror("Insert failed\n");
             }
+            // gettimeofday(&single_seq_write_end, NULL);
+            // writeSeqLatency += timeval_diff(&single_seq_write_start, &single_seq_write_end);
         }
-
+        // gettimeofday(&seq_write_end, NULL);
+        // cout << "Seq Insert Rate: " << num_to_scan / timeval_diff(&seq_write_start,&seq_write_end) << " inserts per second" << endl;
+        // cout << "Seq Insert Latency: " << writeSeqLatency / num_to_scan * 1000 * 1000<< " us " << endl;
         // this is required since we're not splitting/merging/rewriting initially
         for (int i = 0; i < numThreads; i++) {
             if (!dbs[i]->WriteHashtableToFile()) {
@@ -282,10 +307,40 @@ void bench(int argc, char** argv) {
 
     srand((tv_end.tv_sec << 2) + tv_end.tv_usec);
 
+    if (seqWriteTest) {
+        timeval seq_write_start, seq_write_end;
+        timeval single_seq_write_start, single_seq_write_end;
+        double writeSeqLatency = 0;
+        gettimeofday(&seq_write_start, NULL);
+        for (u_int i = 0; i < num_to_scan; ++i) {
+            u_int val = i%max_record;
+            string ps_key((const char *)&val, sizeof(val));
+            u_int32_t key_id = HashUtil::BobHash(ps_key);
+            DBID key((char *)&key_id, sizeof(u_int32_t));
+            if (i == compactAt) {
+                cout << "Compacting..." << endl;
+                pthread_create(&compactThreadId_, NULL,
+                               compactThread, dbs);
+
+            }
+            int dbi = (int)(val / bucket);
+            gettimeofday(&single_seq_write_start, NULL);
+            if(!dbs[dbi]->Insert(key.data(), key.get_actual_size(), value.data(), valuesize)) {
+                perror("Insert failed\n");
+            }
+            gettimeofday(&single_seq_write_end, NULL);
+            writeSeqLatency += timeval_diff(&single_seq_write_start, &single_seq_write_end);
+        }
+        gettimeofday(&seq_write_end, NULL);
+        cout << "Seq Insert Rate: " << num_to_scan / timeval_diff(&seq_write_start,&seq_write_end) << " inserts per second" << endl;
+        cout << "Seq Insert Latency: " << writeSeqLatency / num_to_scan * 1000 * 1000<< " us " << endl;
+    }
+
     // Set of randomly ordered test elements
 
     //random_shuffle(l.begin(), l.end());
-
+        
+    double writeLatency = 0;
     if (writeTest) {
         vector<int> l;
         for (u_int i = 0; i < num_to_scan; i++) {
@@ -293,7 +348,8 @@ void bench(int argc, char** argv) {
         }
         int n = l.size();
         timeval write_tv_start, write_tv_end;
-        gettimeofday(&write_tv_start, nullptr);
+        timeval single_write_start, single_write_end;
+        gettimeofday(&write_tv_start, NULL);
         for (int i = 0; i < n; i++) {
             u_int val = l[i];
             string ps_key((const char *)&val, sizeof(val));
@@ -307,13 +363,17 @@ void bench(int argc, char** argv) {
 
             }
 
-            int dbi = (int)(i / bucket);
+            int dbi = (int)(val / bucket);
+            gettimeofday(&single_write_start, NULL);
             if(!dbs[dbi]->Insert(key.data(), key.get_actual_size(), value.data(), valuesize)) {
                 perror("Insert failed\n");
             }
+            gettimeofday(&single_write_end, NULL);
+            writeLatency += timeval_diff(&single_write_start, &single_write_end);
         }
-        gettimeofday(&write_tv_end, nullptr);
-        cout << "Insert Rate: " << num_to_scan / timeval_diff(&write_tv_start,&write_tv_end) << " inserts per second" << endl;
+        gettimeofday(&write_tv_end, NULL);
+        cout << "Random Insert Rate: " << num_to_scan / timeval_diff(&write_tv_start,&write_tv_end) << " inserts per second" << endl;
+        cout << "Random Insert Latency: " << writeLatency / num_to_scan * 1000 * 1000<< " us " << endl;
 
     } else {
         pthread_mutex_init(&count_lock, NULL);
@@ -334,10 +394,10 @@ void bench(int argc, char** argv) {
                     pthread_attr_setaffinity_np(&attr, sizeof(cpuset), &cpuset);
                 }
 #endif
-                pthread_create(&workerThreadIds_[i], &attr,
-                               randomReadThread, &bd[i]);
+                // pthread_create(&workerThreadIds_[i], &attr,
+                //                randomReadThread, &bd[i]);
             } else {
-                randomReadThread(&bd[0]);
+                randomReadThread(&bd[0], mode);
             }
         }
     }
@@ -356,12 +416,19 @@ void bench(int argc, char** argv) {
     free(bd);
     if (!writeTest){
         double totalTime = 0;
+        double totalReadLatency = 0;
         for (int i = 0; i < numThreads; i++) {
             totalTime = max(totalTime, search_times[i]);
+            totalReadLatency += read_latency_times[i];
         }
         double totalQueries = num_to_scan * numThreads;
-
-        cout << "Aggregate Query Rate: " << totalQueries / totalTime << " queries per second" << endl;
+        if(mode == SCAN_RANDOM) {
+            cout << "Random Query Rate: " << totalQueries / totalTime << " queries per second" << endl;
+            cout << "Random Query Latency: " << totalReadLatency / totalQueries * 1000 * 1000 << "us" << endl;
+        } else {
+            cout << "Seq Query Rate: " << totalQueries / totalTime << " queries per second" << endl;
+            cout << "Seq Query Latency: " << totalReadLatency / totalQueries * 1000 * 1000 << "us" << endl;
+        }
     }
 }
 

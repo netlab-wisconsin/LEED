@@ -62,8 +62,9 @@ namespace fawn {
         }
 
         return FawnDS<T>::Create_FawnDS_From_Fd(fd, filename,
-                                                hash_table_size * FawnDS<T>::EXCESS_BUCKET_FACTOR,
-                                                0, // empty
+ hash_table_size * FawnDS<T>::EXCESS_BUCKET_FACTOR
+                                              , 
+0, // empty
                                                 0, // hashtable
                                                 max_deleted_ratio,
                                                 max_load_factor,
