@@ -415,7 +415,7 @@ static inline void on_recv_req(struct ibv_wc *wc) {
     assert(ctx->conn);
     assert(ctx->conn->is_server);
     ctx->resp_rkey = wc->imm_data;
-    ctx->header = *(struct req_header *)(ctx->mr->addr + HEADER_SIZE);
+    ctx->header = *(struct req_header *)ctx->mr->addr;
     ctx->conn->u.s.handler(ctx, ctx->mr, wc->byte_len - HEADER_SIZE, ctx->conn->u.s.arg);
 }
 
