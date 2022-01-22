@@ -121,6 +121,7 @@ static inline struct vid_entry *find_vid_entry_from_key(char *key, struct vid_ri
 
 void kv_ring_dispatch(char *key, connection_handle *h, uint16_t *ssd_id) {
     struct vid_entry *entry = find_vid_entry_from_key(key, NULL);
+    printf("kv_ring_dispatch: %s\n",entry->node->info->rdma_ip);
     *h = entry->node->conn;
     *ssd_id = entry->vid->ssd_id;
 }

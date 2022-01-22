@@ -131,7 +131,6 @@ void kv_rdma_free_mr(kv_rmda_mr h) {
 // --- cm_poller ---
 static int rdma_cq_poller(void *arg);
 static void server_data_init(struct kv_rdma *self) {
-    if (self->requests != NULL) return;
     struct ibv_srq_init_attr srq_init_attr;
     memset(&srq_init_attr, 0, sizeof(srq_init_attr));
     srq_init_attr.attr.max_wr = MAX_Q_NUM;
@@ -156,6 +155,7 @@ static void server_data_init(struct kv_rdma *self) {
 }
 
 static int create_connetion(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
+    struct rdma_connection *conn = cm_id->context;
     // --- build context ---
     if (self->ctx == NULL) {
         self->ctx = cm_id->verbs;
@@ -167,28 +167,24 @@ static int create_connetion(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
             kv_app_poller_register_on(self->thread_id + i, rdma_cq_poller, self->cq_pollers + i, 0,
                                       &self->cq_pollers[i].poller);
         }
-        self->srq = NULL;
     }
     // assume only have one context
     assert(self->ctx == cm_id->verbs);
-    if (self->has_server) server_data_init(self);
+    if (self->has_server && self->requests == NULL) server_data_init(self);
     // --- build qp ---
     struct ibv_qp_init_attr qp_attr;
     memset(&qp_attr, 0, sizeof(struct ibv_qp_init_attr));
     qp_attr.send_cq = self->cq;
     qp_attr.recv_cq = self->cq;
     qp_attr.qp_type = IBV_QPT_RC;
-    qp_attr.srq = self->srq;
+    if (conn->is_server) qp_attr.srq = self->srq;
 
     qp_attr.cap.max_send_wr = MAX_Q_NUM;
     qp_attr.cap.max_recv_wr = MAX_Q_NUM;
     qp_attr.cap.max_send_sge = 1;
     qp_attr.cap.max_recv_sge = 1;
     TEST_NZ(rdma_create_qp(cm_id, self->pd, &qp_attr));
-
-    struct rdma_connection *conn = cm_id->context;
     conn->qp = cm_id->qp;
-
     return 0;
 }
 
