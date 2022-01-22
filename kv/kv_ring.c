@@ -292,7 +292,7 @@ void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uin
         ssd_id = (ssd_id + 1) % ssd_num;
     }
     kv_free(stats);
-    kvEtcdCreateNode(info, 1);
+    kvEtcdCreateNode(info, 10);
     free(info);
     kv_app_poller_register(kv_etcd_poller, NULL, 300000);
 }

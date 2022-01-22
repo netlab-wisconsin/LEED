@@ -171,7 +171,8 @@ static void handler(void *req_h, kv_rmda_mr req, uint32_t req_sz, void *arg) {
     struct io_ctx *ctx = SLIST_FIRST(io_ctx_heads + thread_id - opt.ssd_num);
     assert(ctx);
     SLIST_REMOVE_HEAD(io_ctx_heads + thread_id - opt.ssd_num, next);
-    *ctx = (struct io_ctx){req, (struct kv_msg *)kv_rdma_get_req_buf(req), 0, thread_id};
+    *ctx = (struct io_ctx){req_h, (struct kv_msg *)kv_rdma_get_req_buf(req), 0, thread_id};
+    ctx->req = req;
     ctx->worker_id = ctx->msg->ssd_id;
     kv_app_send(ctx->worker_id, io_start, ctx);
 }
