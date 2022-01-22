@@ -100,6 +100,7 @@ struct server_req_ctx {
     struct kv_rdma *self;
     uint32_t resp_rkey;
     struct ibv_mr *mr;
+    struct req_header header;
 };
 
 // --- alloc and free ---
@@ -374,15 +375,14 @@ void kv_rdma_make_resp(void *req_h, uint8_t *resp, uint32_t resp_sz) {
     struct server_req_ctx *ctx = req_h;
     struct ibv_sge sge = {(uintptr_t)resp, resp_sz, ctx->mr->lkey};
     struct ibv_send_wr wr, *bad_wr = NULL;
-    struct req_header *header = (struct req_header *)ctx->mr->addr;
     wr.wr_id = (uintptr_t)ctx;
     wr.next = NULL;
     wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-    wr.imm_data = header->req_id;
+    wr.imm_data = ctx->header.req_id;
     wr.sg_list = &sge;
     wr.num_sge = 1;
     wr.send_flags = IBV_SEND_SIGNALED;
-    wr.wr.rdma.remote_addr = header->resp_addr;
+    wr.wr.rdma.remote_addr = ctx->header.resp_addr;
     wr.wr.rdma.rkey = ctx->resp_rkey;
     TEST_NZ(ibv_post_send(ctx->conn->qp, &wr, &bad_wr));
 }
@@ -415,6 +415,7 @@ static inline void on_recv_req(struct ibv_wc *wc) {
     assert(ctx->conn);
     assert(ctx->conn->is_server);
     ctx->resp_rkey = wc->imm_data;
+    ctx->header = *(struct req_header *)(ctx->mr->addr + HEADER_SIZE);
     ctx->conn->u.s.handler(ctx, ctx->mr, wc->byte_len - HEADER_SIZE, ctx->conn->u.s.arg);
 }
 
