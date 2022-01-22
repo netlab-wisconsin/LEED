@@ -102,7 +102,7 @@ struct io_ctx {
     SLIST_ENTRY(io_ctx) next;
 };
 
-SLIST_HEAD(, io_ctx) * io_ctx_heads;
+SLIST_HEAD(, io_ctx) *io_ctx_heads = NULL;
 
 static void send_response(void *arg) {
     struct io_ctx *io = arg;
@@ -174,7 +174,7 @@ static void handler(void *req, uint8_t *buf, uint32_t req_sz, void *arg) {
     kv_app_send(ctx->worker_id, io_start, ctx);
 }
 #define EXTRA_BUF 32
-static void ring_ready_cb(void *arg) {
+static void ring_server_init_cb(void *arg) {
     io_ctx_heads = calloc(opt.thread_num, sizeof(*io_ctx_heads));
     for (size_t i = 0; i < opt.thread_num; i++) {
         SLIST_INIT(io_ctx_heads + i);
@@ -184,11 +184,14 @@ static void ring_ready_cb(void *arg) {
             SLIST_INSERT_HEAD(io_ctx_heads + i, ctx, next);
         }
     }
-    kv_ring_server_init(opt.local_ip, opt.local_port, opt.vid_num, opt.vid_per_ssd, opt.ssd_num, opt.concurrent_io_num,
-                        EXTRA_BUF + opt.value_size, handler, NULL);
 }
 
-static void ring_init(void *arg) { kv_ring_init(opt.etcd_ip, opt.etcd_port, opt.thread_num, ring_ready_cb, NULL); }
+static void ring_ready_cb(void *arg) {
+    kv_ring_server_init(opt.local_ip, opt.local_port, opt.vid_num, opt.vid_per_ssd, opt.ssd_num, opt.concurrent_io_num,
+                        EXTRA_BUF + opt.value_size, handler, NULL, ring_server_init_cb, NULL);
+}
+
+static void ring_init(void *arg) { server = kv_ring_init(opt.etcd_ip, opt.etcd_port, opt.thread_num, ring_ready_cb, NULL); }
 
 static uint32_t io_cnt;
 static void worker_init_done(bool success, void *arg) {

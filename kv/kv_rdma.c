@@ -85,6 +85,8 @@ struct kv_rdma {
     pthread_rwlock_t lock;
     struct server_req_ctx *requests;
     struct rdma_connection *connections;
+    kv_rdma_server_init_cb init_cb;
+    void *init_cb_arg;
     // finish ctx
     struct fini_ctx_t fini_ctx;
 };
@@ -152,6 +154,7 @@ static void server_data_init(struct kv_rdma *self) {
         TEST_NZ(ibv_post_srq_recv(self->srq, &wr, &bad_wr));
         sge.addr += self->max_msg_sz;
     }
+    if(self->init_cb) self->init_cb(self->init_cb_arg);
 }
 
 static int create_connetion(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
@@ -246,7 +249,7 @@ static inline int on_disconnect(struct rdma_cm_id *cm_id) {
         pthread_rwlock_wrlock(&conn->self->lock);
         HASH_DELETE(u.s.hh, conn->self->connections, conn);
         pthread_rwlock_unlock(&conn->self->lock);
-    }else{
+    } else {
         kv_mempool_free(conn->u.c.mp);
     }
     rdma_destroy_qp(cm_id);
@@ -348,10 +351,12 @@ void kv_rdma_disconnect(connection_handle h) {
 
 // --- server ---
 void kv_rdma_listen(kv_rdma_handle h, char *addr_str, char *port_str, uint32_t con_req_num, uint32_t max_msg_sz,
-                    kv_rdma_req_handler handler, void *arg) {
+                    kv_rdma_req_handler handler, void *arg, kv_rdma_server_init_cb cb, void *cb_arg) {
     struct kv_rdma *self = h;
     self->has_server = true;
     self->connections = NULL;
+    self->init_cb = cb;
+    self->init_cb_arg = cb_arg;
     struct rdma_connection *conn = kv_malloc(sizeof(struct rdma_connection));
     *conn = (struct rdma_connection){self, NULL, NULL, true};
     conn->u.s.handler = handler;

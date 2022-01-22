@@ -269,12 +269,13 @@ static int vid_ring_stat_cmp(const void *_a, const void *_b) {
 }
 
 void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uint32_t vid_per_ssd, uint32_t ssd_num,
-                         uint32_t con_req_num, uint32_t max_msg_sz, kv_rdma_req_handler handler, void *arg) {
+                         uint32_t con_req_num, uint32_t max_msg_sz, kv_rdma_req_handler handler, void *arg,
+                         kv_rdma_server_init_cb cb, void *cb_arg) {
     assert(ssd_num != 0);
     assert(vid_per_ssd * ssd_num <= vid_num);
     assert(local_ip && local_port);
     struct kv_ring *self = &g_ring;
-    kv_rdma_listen(self->h, local_ip, local_port, con_req_num, max_msg_sz, handler, arg);
+    kv_rdma_listen(self->h, local_ip, local_port, con_req_num, max_msg_sz, handler, arg, cb, cb_arg);
     self->local_ip = local_ip;
     self->local_port = local_port;
     vid_ring_init(vid_num);

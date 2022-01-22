@@ -118,7 +118,7 @@ static void handler(void *req, uint8_t *buf, uint32_t req_sz, void *arg) {
 
 static void rdma_start(void *arg) {
     kv_rdma_init(&server, opt.server_num);
-    kv_rdma_listen(server, "0.0.0.0", opt.port, opt.concurrent_io_num, EXTRA_BUF + opt.value_size, handler, NULL);
+    kv_rdma_listen(server, "0.0.0.0", opt.port, opt.concurrent_io_num, EXTRA_BUF + opt.value_size, handler, NULL, NULL, NULL);
 }
 
 static uint32_t io_cnt;
