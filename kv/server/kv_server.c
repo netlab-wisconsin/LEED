@@ -64,7 +64,7 @@ struct worker_t {
 
 kv_rdma_handle server;
 struct io_ctx {
-    void *req;
+    kv_rmda_mr req_h;
     struct kv_msg *msg;
     uint32_t worker_id;
     uint32_t server_thread;
@@ -72,7 +72,7 @@ struct io_ctx {
 
 static void send_response(void *arg) {
     struct io_ctx *io = arg;
-    kv_rdma_make_resp(io->req, (uint8_t *)io->msg, KV_MSG_SIZE(io->msg));
+    kv_rdma_make_resp(io->req_h, (uint8_t *)io->msg, KV_MSG_SIZE(io->msg));
     free(io);
 }
 
@@ -107,9 +107,9 @@ static void io_start(void *arg) {
     }
 }
 
-static void handler(void *req, uint8_t *buf, uint32_t req_sz, void *arg) {
+static void handler(void *req_h, kv_rmda_mr req, uint32_t req_sz, void *arg) {
     struct io_ctx *ctx = malloc(sizeof(struct io_ctx));
-    *ctx = (struct io_ctx){req, (struct kv_msg *)buf, 0, kv_app_get_thread_index()};
+    *ctx = (struct io_ctx){req_h, (struct kv_msg *)kv_rdma_get_req_buf(req), 0, kv_app_get_thread_index()};
     uint64_t key_frag = *(uint64_t *)(KV_MSG_KEY(ctx->msg) + 8);
     ctx->worker_id = key_frag % opt.ssd_num;
     kv_app_send(ctx->worker_id, io_start, ctx);
@@ -118,7 +118,7 @@ static void handler(void *req, uint8_t *buf, uint32_t req_sz, void *arg) {
 
 static void rdma_start(void *arg) {
     kv_rdma_init(&server, opt.server_num);
-    kv_rdma_listen(server, "0.0.0.0", opt.port, opt.concurrent_io_num, EXTRA_BUF + opt.value_size, handler, NULL);
+    kv_rdma_listen(server, "0.0.0.0", opt.port, opt.concurrent_io_num, EXTRA_BUF + opt.value_size, handler, NULL, NULL, NULL);
 }
 
 static uint32_t io_cnt;

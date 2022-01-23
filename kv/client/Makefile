@@ -34,25 +34,9 @@ include $(SPDK_ROOT_DIR)/mk/spdk.common.mk
 include $(SPDK_ROOT_DIR)/mk/spdk.modules.mk
 
 APP = kv_client
-C_SRCS := ../kv_rdma.c ../kv_app.c  ../benchmark2/city.c ../benchmark2/timing.c kv_client.c
+C_SRCS := ../kv_memory.c ../kv_rdma.c ../kv_app.c  ../benchmark2/city.c ../benchmark2/timing.c kv_client.c
 
 SYS_LIBS += -libverbs -lrdmacm -lconcurrentqueue
-#Attach only if FreeBSD and RDMA is specified with configure
-ifeq ($(OS),FreeBSD)
-# Mellanox - MLX4 HBA Userspace Library
-ifneq ("$(wildcard /usr/lib/libmlx4.*)","")
-SYS_LIBS += -lmlx4
-endif
-# Mellanox - MLX5 HBA Userspace Library
-ifneq ("$(wildcard /usr/lib/libmlx5.*)","")
-SYS_LIBS += -lmlx5
-endif
-# Chelsio HBA Userspace Library
-ifneq ("$(wildcard /usr/lib/libcxgb4.*)","")
-SYS_LIBS += -lcxgb4
-endif
-endif
-
 
 SPDK_LIB_LIST = $(ALL_MODULES_LIST)
 SPDK_LIB_LIST += $(EVENT_BDEV_SUBSYSTEM)

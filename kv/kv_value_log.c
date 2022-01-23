@@ -5,7 +5,7 @@
 #include <sys/queue.h>
 #include <sys/uio.h>
 
-#include "memery_operation.h"
+#include "kv_memory.h"
 #include "uthash.h"
 static inline uint64_t align(struct kv_value_log *self, uint64_t size) {
     if (size & self->blk_mask) return (size >> self->blk_shift) + 1;

@@ -6,7 +6,7 @@
 
 #include "kv_app.h"
 #include "kv_etcd.h"
-#include "memery_operation.h"
+#include "kv_memory.h"
 #include "pthread.h"
 #include "uthash.h"
 
@@ -102,8 +102,7 @@ static void del_node_from_rings(void *arg) {
         }
     }
 }
-
-void kv_ring_dispatch(char *key, connection_handle *h, uint32_t *ssd_id) {
+static inline struct vid_entry *find_vid_entry_from_key(char *key, struct vid_ring **p_ring) {
     struct kv_ring *self = &g_ring;
     if (self->rings == NULL) {
         fprintf(stderr, "no available server!\n");
@@ -116,9 +115,34 @@ void kv_ring_dispatch(char *key, connection_handle *h, uint32_t *ssd_id) {
         fprintf(stderr, "no available server for this partition!\n");
         exit(-1);
     }
+    if (p_ring) *p_ring = ring + index;
+    return entry;
+}
+
+void kv_ring_dispatch(char *key, connection_handle *h, uint16_t *ssd_id) {
+    struct vid_entry *entry = find_vid_entry_from_key(key, NULL);
     *h = entry->node->conn;
     *ssd_id = entry->vid->ssd_id;
 }
+
+void kv_ring_forward(char *key, uint32_t hop, uint32_t r_num, connection_handle *h, uint16_t *ssd_id) {
+    if (hop >= r_num) {
+        *h = NULL;
+        return;
+    }
+    struct vid_ring *ring;
+    struct vid_entry *base_entry = find_vid_entry_from_key(key, &ring), *entry = base_entry;
+    for (uint16_t i = 0; i < hop; i++) {
+        entry = CIRCLEQ_LOOP_NEXT(ring, entry, entry);
+        if (entry == base_entry) {
+            *h = NULL;
+            return;
+        }
+    }
+    *h = entry->node->conn;
+    *ssd_id = entry->vid->ssd_id;
+}
+
 static void rdma_disconnect_cb(void *arg) {
     struct kv_ring *self = &g_ring;
     struct kv_node *node = arg;
@@ -198,7 +222,9 @@ static void node_handler(void *arg) {
         node->info = info;
         // node may already exist?
         HASH_ADD(hh, self->nodes, info->rdma_ip, 24, node);  // ip & port as key
-        if (!node->is_local) {
+        if (node->is_local) {
+            for (size_t i = 0; i < self->thread_num; i++) kv_app_send(self->thread_id + i, add_node_to_rings, node);
+        } else {
             STAILQ_INSERT_TAIL(&self->conn_q, node, next);
         }
     }
@@ -245,12 +271,13 @@ static int vid_ring_stat_cmp(const void *_a, const void *_b) {
 }
 
 void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uint32_t vid_per_ssd, uint32_t ssd_num,
-                         uint32_t con_req_num, uint32_t max_msg_sz, kv_rdma_req_handler handler, void *arg) {
+                         uint32_t con_req_num, uint32_t max_msg_sz, kv_rdma_req_handler handler, void *arg,
+                         kv_rdma_server_init_cb cb, void *cb_arg) {
     assert(ssd_num != 0);
     assert(vid_per_ssd * ssd_num <= vid_num);
     assert(local_ip && local_port);
     struct kv_ring *self = &g_ring;
-    kv_rdma_listen(self->h, local_ip, local_port, con_req_num, max_msg_sz, handler, arg);
+    kv_rdma_listen(self->h, local_ip, local_port, con_req_num, max_msg_sz, handler, arg, cb, cb_arg);
     self->local_ip = local_ip;
     self->local_port = local_port;
     vid_ring_init(vid_num);
@@ -265,7 +292,7 @@ void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uin
         ssd_id = (ssd_id + 1) % ssd_num;
     }
     kv_free(stats);
-    kvEtcdCreateNode(info, 1);
+    kvEtcdCreateNode(info, 10);
     free(info);
     kv_app_poller_register(kv_etcd_poller, NULL, 300000);
 }

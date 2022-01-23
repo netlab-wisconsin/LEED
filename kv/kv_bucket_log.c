@@ -7,7 +7,7 @@
 
 #include "kv_app.h"
 #include "kv_circular_log.h"
-#include "memery_operation.h"
+#include "kv_memory.h"
 
 // --- lock & unlock ---
 struct bucket_lock_q_entry {

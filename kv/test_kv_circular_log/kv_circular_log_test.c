@@ -4,7 +4,7 @@
 #include <stdio.h>
 
 #include "../kv_app.h"
-#include "../memery_operation.h"
+#include "../kv_memory.h"
 struct kv_storage storage;
 struct kv_circular_log circular_log;
 uint8_t *buf;

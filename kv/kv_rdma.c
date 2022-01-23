@@ -1,5 +1,7 @@
 #include "kv_rdma.h"
 
+#include <arpa/inet.h>
+#include <assert.h>
 #include <fcntl.h>
 #include <netdb.h>
 #include <pthread.h>
@@ -11,11 +13,9 @@
 #include <unistd.h>
 
 #include "kv_app.h"
-#include "memery_operation.h"
-#include "spdk/env.h"
+#include "kv_memory.h"
 #include "uthash.h"
 
-#define HEADER_SIZE (sizeof(uint64_t))
 #define TIMEOUT_IN_MS (500U)
 #define MAX_Q_NUM (4096U)
 
@@ -27,6 +27,12 @@
         }                                               \
     } while (0)
 #define TEST_Z(x) TEST_NZ(!(x))
+
+struct req_header {
+    uint64_t resp_addr;
+    uint32_t req_id;
+#define HEADER_SIZE (sizeof(struct req_header))
+} __attribute__((packed));
 
 struct rdma_connection {
     struct kv_rdma *self;
@@ -46,8 +52,7 @@ struct rdma_connection {
             void *connect_arg;
             kv_rdma_disconnect_cb disconnect;
             void *disconnect_arg;
-            pthread_mutex_t lock;
-            STAILQ_HEAD(, client_req_ctx) request_ctxs;
+            struct kv_mempool *mp;
         } c;
     } u;
 };
@@ -70,14 +75,17 @@ struct kv_rdma {
     bool has_server;
     uint32_t thread_num, thread_id;
     struct cq_poller_ctx *cq_pollers;
+    // client data
+    uint32_t conn_id;
     // server data
     struct ibv_srq *srq;
     uint32_t con_req_num;
     uint32_t max_msg_sz;
-    struct ibv_mr *mr;
     pthread_rwlock_t lock;
     struct server_req_ctx *requests;
     struct rdma_connection *connections;
+    kv_rdma_server_init_cb init_cb;
+    void *init_cb_arg;
     // finish ctx
     struct fini_ctx_t fini_ctx;
 };
@@ -86,20 +94,20 @@ struct client_req_ctx {
     kv_rdma_req_cb cb;
     void *cb_arg;
     struct ibv_mr *req, *resp;
-    STAILQ_ENTRY(client_req_ctx) next;
 };
 struct server_req_ctx {
     struct rdma_connection *conn;
     struct kv_rdma *self;
     uint32_t resp_rkey;
-    uint8_t *buf;
+    struct ibv_mr *mr;
+    struct req_header header;
 };
 
 // --- alloc and free ---
 kv_rmda_mr kv_rdma_alloc_req(kv_rdma_handle h, uint32_t size) {
     struct kv_rdma *self = h;
     size += HEADER_SIZE;
-    uint8_t *buf = spdk_dma_malloc(size, 4, NULL);
+    uint8_t *buf = kv_dma_malloc(size);
     return ibv_reg_mr(self->pd, buf, size, 0);
 }
 
@@ -107,7 +115,7 @@ uint8_t *kv_rdma_get_req_buf(kv_rmda_mr mr) { return (uint8_t *)((struct ibv_mr 
 
 kv_rmda_mr kv_rdma_alloc_resp(kv_rdma_handle h, uint32_t size) {
     struct kv_rdma *self = h;
-    uint8_t *buf = spdk_dma_malloc(size, 4, NULL);
+    uint8_t *buf = kv_dma_malloc(size);
     return ibv_reg_mr(self->pd, buf, size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
 }
 
@@ -117,35 +125,34 @@ void kv_rdma_free_mr(kv_rmda_mr h) {
     struct ibv_mr *mr = h;
     uint8_t *buf = mr->addr;
     ibv_dereg_mr(mr);
-    spdk_dma_free(buf);
+    kv_dma_free(buf);
 }
 
 // --- cm_poller ---
 static int rdma_cq_poller(void *arg);
 static void server_data_init(struct kv_rdma *self) {
-    if (self->mr != NULL) return;
+    if (self->requests != NULL) return;
     struct ibv_srq_init_attr srq_init_attr;
     memset(&srq_init_attr, 0, sizeof(srq_init_attr));
     srq_init_attr.attr.max_wr = MAX_Q_NUM;
     srq_init_attr.attr.max_sge = 1;
     TEST_Z(self->srq = ibv_create_srq(self->pd, &srq_init_attr));
-    assert(self->mr == NULL);
-    uint8_t *buf = spdk_dma_malloc(self->con_req_num * self->max_msg_sz, 4, NULL);
-    self->mr = ibv_reg_mr(self->pd, buf, self->con_req_num * self->max_msg_sz, IBV_ACCESS_LOCAL_WRITE);
-    self->requests = kv_calloc(self->con_req_num, sizeof(struct server_req_ctx));
 
+    self->requests = kv_calloc(self->con_req_num, sizeof(struct server_req_ctx));
     struct ibv_recv_wr wr, *bad_wr = NULL;
-    struct ibv_sge sge = {(uint64_t)buf, self->max_msg_sz, self->mr->lkey};
+    struct ibv_sge sge = {0, self->max_msg_sz, 0};
     wr.next = NULL;
     wr.sg_list = &sge;
     wr.num_sge = 1;
     for (size_t i = 0; i < self->con_req_num; i++) {
         self->requests[i].self = self;
-        self->requests[i].buf = (uint8_t *)sge.addr;
+        sge.addr = (uint64_t)kv_dma_malloc(self->max_msg_sz);
+        self->requests[i].mr = ibv_reg_mr(self->pd, (void *)sge.addr, self->max_msg_sz, IBV_ACCESS_LOCAL_WRITE);
+        sge.lkey = self->requests[i].mr->lkey;
         wr.wr_id = (uint64_t)(self->requests + i);
         TEST_NZ(ibv_post_srq_recv(self->srq, &wr, &bad_wr));
-        sge.addr += self->max_msg_sz;
     }
+    if (self->init_cb) self->init_cb(self->init_cb_arg);
 }
 
 static int create_connetion(struct kv_rdma *self, struct rdma_cm_id *cm_id) {
@@ -240,6 +247,8 @@ static inline int on_disconnect(struct rdma_cm_id *cm_id) {
         pthread_rwlock_wrlock(&conn->self->lock);
         HASH_DELETE(u.s.hh, conn->self->connections, conn);
         pthread_rwlock_unlock(&conn->self->lock);
+    } else {
+        kv_mempool_free(conn->u.c.mp);
     }
     rdma_destroy_qp(cm_id);
     rdma_destroy_id(cm_id);
@@ -293,8 +302,9 @@ void kv_rdma_connect(kv_rdma_handle h, char *addr_str, char *port_str, kv_rdma_c
     conn->u.c.connect_arg = connect_arg;
     conn->u.c.disconnect = disconnect_cb;
     conn->u.c.disconnect_arg = disconnect_arg;
-    pthread_mutex_init(&conn->u.c.lock, NULL);
-    STAILQ_INIT(&conn->u.c.request_ctxs);
+    char name[32];
+    sprintf(name, "kv_rdma_conn_%u", self->conn_id++);
+    conn->u.c.mp = kv_mempool_create(name, 8191, sizeof(struct client_req_ctx));
     struct addrinfo *addr;
     TEST_NZ(getaddrinfo(addr_str, port_str, NULL, &addr));
     TEST_NZ(rdma_create_id(self->ec, &conn->cm_id, NULL, RDMA_PS_TCP));
@@ -306,15 +316,10 @@ void kv_rdma_connect(kv_rdma_handle h, char *addr_str, char *port_str, kv_rdma_c
 void kv_rmda_send_req(connection_handle h, kv_rmda_mr req, uint32_t req_sz, kv_rmda_mr resp, kv_rdma_req_cb cb, void *cb_arg) {
     struct rdma_connection *conn = h;
     assert(conn->is_server == false);
-    struct client_req_ctx *ctx = kv_malloc(sizeof(struct client_req_ctx));
+    struct client_req_ctx *ctx = kv_mempool_get(conn->u.c.mp);  // kv_malloc(sizeof(struct client_req_ctx));
     *ctx = (struct client_req_ctx){conn, cb, cb_arg, req, resp};
-
-    *(uint64_t *)ctx->req->addr = (uint64_t)ctx->resp->addr;
-
-    pthread_mutex_lock(&conn->u.c.lock);
-    STAILQ_INSERT_TAIL(&conn->u.c.request_ctxs, ctx, next);
-    pthread_mutex_unlock(&conn->u.c.lock);
-
+    *(struct req_header *)ctx->req->addr =
+        (struct req_header){(uint64_t)ctx->resp->addr, (uint32_t)kv_mempool_get_id(conn->u.c.mp, ctx)};
     struct ibv_recv_wr r_wr = {(uintptr_t)conn, NULL, NULL, 0}, *r_bad_wr = NULL;
     if (ibv_post_recv(conn->qp, &r_wr, &r_bad_wr)) {
         goto fail;
@@ -344,10 +349,11 @@ void kv_rdma_disconnect(connection_handle h) {
 
 // --- server ---
 void kv_rdma_listen(kv_rdma_handle h, char *addr_str, char *port_str, uint32_t con_req_num, uint32_t max_msg_sz,
-                    kv_rdma_req_handler handler, void *arg) {
+                    kv_rdma_req_handler handler, void *arg, kv_rdma_server_init_cb cb, void *cb_arg) {
     struct kv_rdma *self = h;
     self->has_server = true;
-    self->connections = NULL;
+    self->init_cb = cb;
+    self->init_cb_arg = cb_arg;
     struct rdma_connection *conn = kv_malloc(sizeof(struct rdma_connection));
     *conn = (struct rdma_connection){self, NULL, NULL, true};
     conn->u.s.handler = handler;
@@ -365,18 +371,18 @@ void kv_rdma_listen(kv_rdma_handle h, char *addr_str, char *port_str, uint32_t c
     printf("kv rdma listening on %s %s.\n", addr_str, port_str);
 }
 
-void kv_rdma_make_resp(void *req, uint8_t *resp, uint32_t resp_sz) {
-    struct server_req_ctx *ctx = req;
-    struct ibv_sge sge = {(uintptr_t)resp, resp_sz, ctx->self->mr->lkey};
+void kv_rdma_make_resp(void *req_h, uint8_t *resp, uint32_t resp_sz) {
+    struct server_req_ctx *ctx = req_h;
+    struct ibv_sge sge = {(uintptr_t)resp, resp_sz, ctx->mr->lkey};
     struct ibv_send_wr wr, *bad_wr = NULL;
     wr.wr_id = (uintptr_t)ctx;
     wr.next = NULL;
     wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-    wr.imm_data = ctx->resp_rkey;
+    wr.imm_data = ctx->header.req_id;
     wr.sg_list = &sge;
     wr.num_sge = 1;
     wr.send_flags = IBV_SEND_SIGNALED;
-    wr.wr.rdma.remote_addr = *(uint64_t *)ctx->buf;
+    wr.wr.rdma.remote_addr = ctx->header.resp_addr;
     wr.wr.rdma.rkey = ctx->resp_rkey;
     TEST_NZ(ibv_post_send(ctx->conn->qp, &wr, &bad_wr));
 }
@@ -388,7 +394,7 @@ static inline void on_write_resp_done(struct ibv_wc *wc) {
     }
     struct server_req_ctx *ctx = (struct server_req_ctx *)wc->wr_id;
     assert(ctx->conn->is_server);
-    struct ibv_sge sge = {(uint64_t)ctx->buf, ctx->self->max_msg_sz, ctx->self->mr->lkey};
+    struct ibv_sge sge = {(uint64_t)ctx->mr->addr, ctx->self->max_msg_sz, ctx->mr->lkey};
     struct ibv_recv_wr wr = {(uint64_t)ctx, NULL, &sge, 1}, *bad_wr = NULL;
     TEST_NZ(ibv_post_srq_recv(ctx->self->srq, &wr, &bad_wr));
 }
@@ -409,30 +415,18 @@ static inline void on_recv_req(struct ibv_wc *wc) {
     assert(ctx->conn);
     assert(ctx->conn->is_server);
     ctx->resp_rkey = wc->imm_data;
-    ctx->conn->u.s.handler(ctx, ctx->buf + HEADER_SIZE, wc->byte_len - HEADER_SIZE, ctx->conn->u.s.arg);
+    ctx->header = *(struct req_header *)(ctx->mr->addr + HEADER_SIZE);
+    ctx->conn->u.s.handler(ctx, ctx->mr, wc->byte_len - HEADER_SIZE, ctx->conn->u.s.arg);
 }
 
 static inline void on_recv_resp(struct ibv_wc *wc) {
     struct rdma_connection *conn = (struct rdma_connection *)wc->wr_id;
     assert(!conn->is_server);
     assert(wc->wc_flags & IBV_WC_WITH_IMM);
-    // using wc->imm_data(rkey) to find corresponding request_ctx
-    pthread_mutex_lock(&conn->u.c.lock);
-    struct client_req_ctx *ctx = STAILQ_FIRST(&conn->u.c.request_ctxs), *tmp = ctx;
-    assert(ctx);
-    if (ctx->resp->rkey == wc->imm_data)  // likely
-        STAILQ_REMOVE_HEAD(&conn->u.c.request_ctxs, next);
-    else
-        while (true) {
-            TEST_Z((ctx = STAILQ_NEXT(tmp, next)));
-            if (ctx->resp->rkey == wc->imm_data) {
-                STAILQ_REMOVE_AFTER(&conn->u.c.request_ctxs, tmp, next);
-                break;
-            }
-            tmp = ctx;
-        }
-    pthread_mutex_unlock(&conn->u.c.lock);
+    // using wc->imm_data(req_id) to find corresponding request_ctx
+    struct client_req_ctx *ctx = kv_mempool_get_ele(conn->u.c.mp, (int32_t)wc->imm_data);
     ctx->cb(ctx->conn, wc->status == IBV_WC_SUCCESS, ctx->req, ctx->resp, ctx->cb_arg);
+    kv_mempool_put(conn->u.c.mp, ctx);
 }
 
 static inline void on_send_req(struct ibv_wc *wc) {
@@ -494,10 +488,10 @@ static void poller_unregister_done(void *arg) {
         ibv_destroy_cq(self->cq);
         ibv_dealloc_pd(self->pd);
         kv_free(self->cq_pollers);
-        if (self->mr) {
+        if (self->requests) {
             ibv_destroy_srq(self->srq);
+            for (size_t i = 0; i < self->con_req_num; i++) kv_rdma_free_mr(self->requests[i].mr);
             kv_free(self->requests);
-            kv_rdma_free_mr(self->mr);
         }
     }
     kv_app_send(self->fini_ctx.thread_id, self->fini_ctx.cb, self->fini_ctx.cb_arg);

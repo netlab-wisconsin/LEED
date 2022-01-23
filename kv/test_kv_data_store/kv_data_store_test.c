@@ -3,7 +3,7 @@
 #include <stdio.h>
 
 #include "../kv_app.h"
-#include "../memery_operation.h"
+#include "../kv_memory.h"
 #define VALUE_NUM 3
 struct kv_storage storage;
 struct kv_data_store data_store;
