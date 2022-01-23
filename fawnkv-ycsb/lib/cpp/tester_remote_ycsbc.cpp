@@ -270,6 +270,8 @@ int main(int argc, char **argv)
     threads.clear();
     total_ops = stoi(props[ycsbc::CoreWorkload::OPERATION_COUNT_PROPERTY]);
     
+    pthread_mutex_init(&count_lock, NULL);
+
     utils::Timer<double> timer;
     timer.Start();
     for (int i = 0; i < num_threads; ++i) {
@@ -283,6 +285,8 @@ int main(int argc, char **argv)
             t.join();
     }
     double duration = timer.End();
+
+    pthread_mutex_destroy(&count_lock);
     cerr << "# Transaction throughput (OPS)" << endl;
     cerr << props["dbname"] << '\t' << file_name << '\t' << num_threads << '\t';
     cerr << num_threads * total_ops / duration << endl;
