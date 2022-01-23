@@ -90,15 +90,15 @@ struct producer_t {
 static struct timeval tv_start, tv_end;
 enum { INIT, FILL, READ, CLEAR } state = INIT;
 kv_rdma_handle rdma;
+kv_rmda_mrs_handle req_mrs, resp_mrs;
+
 static void thread_stop(void *arg) { kv_app_stop(0); }
 static void ring_fini_cb(void *arg) {
     for (size_t i = 0; i < opt.thread_num + opt.producer_num; i++) kv_app_send(i, thread_stop, NULL);
 }
 static void stop(void) {
-    for (size_t i = 0; i < opt.concurrent_io_num; i++) {
-        kv_rdma_free_mr(io_buffers[i].req);
-        kv_rdma_free_mr(io_buffers[i].resp);
-    }
+    kv_rdma_free_bulk(req_mrs);
+    kv_rdma_free_bulk(resp_mrs);
     kv_ring_fini(ring_fini_cb, NULL);
 }
 
@@ -128,11 +128,13 @@ static void test_fini(void *arg) {  // always running on producer 0
     producer_cnt = opt.producer_num;
     switch (state) {
         case INIT:
-            printf("rdma client initialized in %lf s.\n", timeval_diff(&tv_start, &tv_end));
+            req_mrs = kv_rdma_alloc_bulk(rdma, KV_RDMA_MR_REQ, opt.value_size + EXTRA_BUF, opt.concurrent_io_num);
+            resp_mrs = kv_rdma_alloc_bulk(rdma, KV_RDMA_MR_RESP, opt.value_size + EXTRA_BUF, opt.concurrent_io_num);
             for (size_t i = 0; i < opt.concurrent_io_num; i++) {
-                io_buffers[i].req = kv_rdma_alloc_req(rdma, opt.value_size + EXTRA_BUF);
-                io_buffers[i].resp = kv_rdma_alloc_resp(rdma, opt.value_size + EXTRA_BUF);
+                io_buffers[i].req = kv_rdma_mrs_get(req_mrs, i);
+                io_buffers[i].resp = kv_rdma_mrs_get(resp_mrs, i);
             }
+            printf("rdma client initialized in %lf s.\n", timeval_diff(&tv_start, &tv_end));
             total_io = opt.num_items;
             state = FILL;
             break;

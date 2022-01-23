@@ -104,6 +104,7 @@ struct io_ctx {
 };
 
 SLIST_HEAD(, io_ctx) *io_ctx_heads = NULL;
+kv_rmda_mrs_handle resp_mrs;
 
 static void send_response(void *arg) {
     struct io_ctx *io = arg;
@@ -181,11 +182,13 @@ static void handler(void *req_h, kv_rmda_mr req, uint32_t req_sz, void *arg) {
 #define EXTRA_BUF 32
 static void ring_server_init_cb(void *arg) {
     io_ctx_heads = calloc(opt.thread_num, sizeof(*io_ctx_heads));
+    resp_mrs = kv_rdma_alloc_bulk(server, KV_RDMA_MR_RESP, sizeof(struct kv_msg) + KV_MAX_KEY_LENGTH,
+                                  opt.concurrent_io_num * opt.thread_num);
     for (size_t i = 0; i < opt.thread_num; i++) {
         SLIST_INIT(io_ctx_heads + i);
         for (size_t j = 0; j < opt.concurrent_io_num; j++) {
             struct io_ctx *ctx = malloc(sizeof(struct io_ctx));
-            ctx->resp = kv_rdma_alloc_resp(server, sizeof(struct kv_msg) + KV_MAX_KEY_LENGTH);
+            ctx->resp = kv_rdma_mrs_get(resp_mrs, i * opt.thread_num + j);
             SLIST_INSERT_HEAD(io_ctx_heads + i, ctx, next);
         }
     }
