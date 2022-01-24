@@ -55,14 +55,13 @@ static inline size_t ring_size(struct vid_ring *ring) {
 static inline uint32_t get_vid_part(uint8_t *vid, uint32_t vid_num) { return *(uint32_t *)(vid + 12) % vid_num; }
 static inline uint64_t get_vid_64(uint8_t *vid) { return *(uint64_t *)(vid + 4); }
 static struct vid_entry *find_vid_entry(struct vid_ring *ring, char *vid) {
-    uint64_t vid64 = get_vid_64(vid);
-    struct vid_entry *x = NULL, *next;
+    if (CIRCLEQ_EMPTY(ring)) return NULL;
+    uint64_t base_vid = get_vid_64(CIRCLEQ_LAST(ring)->vid->vid), d = get_vid_64(vid) - base_vid;
+    struct vid_entry *x;
     CIRCLEQ_FOREACH(x, ring, entry) {
-        next = CIRCLEQ_LOOP_NEXT(ring, x, entry);
-        if (next == x) break;
-        if (get_vid_64(next->vid->vid) - vid64 > get_vid_64(x->vid->vid) - vid64) break;
+        if (get_vid_64(x->vid->vid) - base_vid >= d) break;
     }
-    return x == (void *)(ring) ? NULL : x;
+    return x;
 }
 static void vid_ring_init(uint32_t vid_num) {
     struct kv_ring *self = &g_ring;
