@@ -17,7 +17,7 @@ void *kv_dma_malloc(size_t size);
 void *kv_dma_zmalloc(size_t size);
 void kv_dma_free(void *buf);
 struct kv_mempool;
-struct kv_mempool *kv_mempool_create(const char *name, size_t count, size_t ele_size);
+struct kv_mempool *kv_mempool_create( size_t count, size_t ele_size);
 void kv_mempool_put(struct kv_mempool *mp, void *ele);
 void *kv_mempool_get(struct kv_mempool *mp);
 void kv_mempool_free(struct kv_mempool *mp);

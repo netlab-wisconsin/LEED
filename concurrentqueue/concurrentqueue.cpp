@@ -40,17 +40,26 @@ int moodycamel_prod_token_destroy(MoodycamelToken token) {
     return 1;
 }
 
+int moodycamel_cq_enqueue(MoodycamelCQHandle handle, MoodycamelValue value) {
+    return reinterpret_cast<MoodycamelCQPtr>(handle)->enqueue(value) ? 1 : 0;
+}
 int moodycamel_cq_enqueue_with_token(MoodycamelCQHandle handle, MoodycamelToken prod_token, MoodycamelValue value) {
     ProducerToken *token = (ProducerToken *)prod_token;
     return reinterpret_cast<MoodycamelCQPtr>(handle)->enqueue(*token, value) ? 1 : 0;
 }
-
-int moodycamel_cq_enqueue(MoodycamelCQHandle handle, MoodycamelValue value) {
-    return reinterpret_cast<MoodycamelCQPtr>(handle)->enqueue(value) ? 1 : 0;
+size_t moodycamel_cq_enqueue_bulk_with_token(MoodycamelCQHandle handle, MoodycamelToken prod_token, MoodycamelValue *values,
+                                             size_t num) {
+    ProducerToken *token = (ProducerToken *)prod_token;
+    return reinterpret_cast<MoodycamelCQPtr>(handle)->enqueue_bulk(*token, values, num);
 }
 
 int moodycamel_cq_try_dequeue(MoodycamelCQHandle handle, MoodycamelValue *value) {
     return reinterpret_cast<MoodycamelCQPtr>(handle)->try_dequeue(*value) ? 1 : 0;
+}
+
+int moodycamel_cq_try_dequeue_with_token(MoodycamelCQHandle handle, MoodycamelToken cons_token, MoodycamelValue *value) {
+    ConsumerToken *token = (ConsumerToken *)cons_token;
+    return reinterpret_cast<MoodycamelCQPtr>(handle)->try_dequeue(*token, *value) ? 1 : 0;
 }
 
 size_t moodycamel_cq_try_dequeue_bulk(MoodycamelCQHandle handle, MoodycamelValue *values, size_t max) {

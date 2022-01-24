@@ -327,9 +327,7 @@ void kv_rdma_connect(kv_rdma_handle h, char *addr_str, char *port_str, kv_rdma_c
     conn->u.c.connect_arg = connect_arg;
     conn->u.c.disconnect = disconnect_cb;
     conn->u.c.disconnect_arg = disconnect_arg;
-    char name[32];
-    sprintf(name, "kv_rdma_conn_%u", self->conn_id++);
-    conn->u.c.mp = kv_mempool_create(name, 8191, sizeof(struct client_req_ctx));
+    conn->u.c.mp = kv_mempool_create(8191, sizeof(struct client_req_ctx));
     struct addrinfo *addr;
     TEST_NZ(getaddrinfo(addr_str, port_str, NULL, &addr));
     TEST_NZ(rdma_create_id(self->ec, &conn->cm_id, NULL, RDMA_PS_TCP));
