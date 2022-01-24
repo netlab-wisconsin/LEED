@@ -26,7 +26,26 @@ using namespace apache::thrift::transport;
 #define TIME_NOW (std::chrono::high_resolution_clock::now())
 #define TIME_DURATION(start, end) (std::chrono::duration<double>((end)-(start)).count() * 1000 * 1000)
 
+
+#include <assert.h>
+
+template <typename T1, typename T2> typename T1::value_type quant(const T1 &x, T2 q)
+{
+    assert(q >= 0.0 && q <= 1.0);
+    
+    const auto n  = x.size();
+    const auto id = (n - 1) * q;
+    const auto lo = floor(id);
+    const auto hi = ceil(id);
+    const auto qs = x[lo];
+    const auto h  = (id - lo);
+    return (1.0 - h) * qs + h * x[hi];
+}
+
 vector<double> search_times;
+pthread_mutex_t count_lock;
+vector<double> latencyList;
+
 
 void usage()
 {
@@ -144,6 +163,14 @@ string ParseCommandLine(int argc, char *argv[], utils::Properties &props) {
       }
       props.SetProperty("load", argv[argindex]);
       argindex++;
+    } else if (strcmp(argv[argindex], "-operations") == 0) {
+      argindex++;
+      if (argindex >= argc) {
+        UsageMessage(argv[0]);
+        exit(0);
+      }
+      props.SetProperty("operations", argv[argindex]);
+      argindex++;
     } else {
       cout << "Unknown option '" << argv[argindex] << "'" << endl;
       exit(0);
@@ -159,9 +186,12 @@ string ParseCommandLine(int argc, char *argv[], utils::Properties &props) {
 }
 
 int DelegateClient(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const int num_ops,
-    bool is_loading) {
+    bool is_loading
+    //, vector<double>& latencyTime
+    ) {
   db->Init();
   ycsbc::Client client(*db, *wl);
+  vector<double> latLst;
   int oks = 0;
   double transactionLatency = 0;
   for (int i = 0; i < num_ops; ++i) {
@@ -175,12 +205,16 @@ int DelegateClient(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const int num_ops,
       gettimeofday(&single_transaction_start, NULL);
       oks += client.DoTransaction();
       gettimeofday(&single_transaction_end, NULL);
+      latLst.push_back(timeval_diff(&single_transaction_start, &single_transaction_end));
       transactionLatency += timeval_diff(&single_transaction_start, &single_transaction_end);
     }
   }
   db->Close();
   if (!is_loading) {
+      pthread_mutex_lock(&count_lock);
       search_times.push_back(transactionLatency);
+      latencyList.insert(latencyList.end(), latLst.begin(), latLst.end());
+      pthread_mutex_unlock(&count_lock);
   }
   return oks;
 }
@@ -235,11 +269,14 @@ int main(int argc, char **argv)
     
     threads.clear();
     total_ops = stoi(props[ycsbc::CoreWorkload::OPERATION_COUNT_PROPERTY]);
+    
+    pthread_mutex_init(&count_lock, NULL);
+
     utils::Timer<double> timer;
     timer.Start();
     for (int i = 0; i < num_threads; ++i) {
         threads.emplace_back(bind(
-            DelegateClient, dbs[i], &wl, total_ops / num_threads, false));
+            DelegateClient, dbs[i], &wl, total_ops, false));
     }
     assert((int)threads.size() == num_threads);
 
@@ -248,9 +285,11 @@ int main(int argc, char **argv)
             t.join();
     }
     double duration = timer.End();
+
+    pthread_mutex_destroy(&count_lock);
     cerr << "# Transaction throughput (OPS)" << endl;
     cerr << props["dbname"] << '\t' << file_name << '\t' << num_threads << '\t';
-    cerr << total_ops / duration << endl;
+    cerr << num_threads * total_ops / duration << endl;
 
     double totalTime = 0;
     for (int i = 0; i < num_threads; i++) {
@@ -258,6 +297,11 @@ int main(int argc, char **argv)
     }
     cerr << "# Transaction Latency (us)" << endl;
     cerr << props["dbname"] << '\t' << file_name << '\t' << num_threads << '\t';
-    cerr << totalTime / total_ops * 1000 * 1000 << "us" << endl;
+    cerr << totalTime / (num_threads * total_ops )* 1000 * 1000 << "us" << endl;
+
+    cerr << "# Transaction p999 Latency (us)" << endl;
+    cerr << props["dbname"] << '\t' << file_name << '\t' << num_threads << '\t';
+    sort(latencyList.begin(), latencyList.end());
+    cout << quant(latencyList, 0.999) * 1000 * 1000 << "us" << endl;
     return 0;
 }
