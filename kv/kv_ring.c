@@ -56,11 +56,13 @@ static inline uint32_t get_vid_part(uint8_t *vid, uint32_t vid_num) { return *(u
 static inline uint64_t get_vid_64(uint8_t *vid) { return *(uint64_t *)(vid + 4); }
 static struct vid_entry *find_vid_entry(struct vid_ring *ring, char *vid) {
     if (CIRCLEQ_EMPTY(ring)) return NULL;
-    uint64_t base_vid = get_vid_64(CIRCLEQ_LAST(ring)->vid->vid), d = get_vid_64(vid) - base_vid;
+    uint64_t base_vid = get_vid_64(CIRCLEQ_LAST(ring)->vid->vid) + 1;
+    uint64_t d = get_vid_64(vid) - base_vid;
     struct vid_entry *x;
     CIRCLEQ_FOREACH(x, ring, entry) {
         if (get_vid_64(x->vid->vid) - base_vid >= d) break;
     }
+    assert(x != (const void *)(ring));
     return x;
 }
 static void vid_ring_init(uint32_t vid_num) {
@@ -138,6 +140,7 @@ void kv_ring_forward(char *key, uint32_t hop, uint32_t r_num, connection_handle 
             return;
         }
     }
+    assert(!entry->node->is_local);
     *h = entry->node->conn;
     *ssd_id = entry->vid->ssd_id;
 }
