@@ -17,18 +17,17 @@ static struct thread_data {
     MoodycamelCQHandle cq;
     MoodycamelToken c_token, p_tokens[MAX_TASKS_NUM];
     struct spdk_poller *poller;
+    uint32_t index;
 } g_threads[MAX_TASKS_NUM];
 
+static __thread struct thread_data *app_thread = NULL;
 const struct kv_app_t *kv_app(void) { return &g_app; }
 
 void kv_app_send_msg(uint32_t index, kv_app_func func, void *arg) { spdk_thread_send_msg(g_threads[index].thread, func, arg); }
 
 uint32_t kv_app_get_thread_index(void) {
-    const struct spdk_thread *thread = spdk_get_thread();
-    uint32_t index;
-    for (index = 0; g_threads[index].thread != thread; ++index)
-        ;
-    return index;
+    assert(app_thread);
+    return app_thread->index;
 }
 
 void kv_app_send(uint32_t index, kv_app_func func, void *arg) {
@@ -66,10 +65,12 @@ static void app_start(void *arg) {
 }
 static inline void thread_init(uint32_t index) {
     g_threads[index].thread = spdk_get_thread();
+    g_threads[index].index = index;
     moodycamel_cq_create(&g_threads[index].cq);
     for (size_t i = 0; i < g_app.task_num; i++) moodycamel_prod_token(g_threads[index].cq, &g_threads[index].p_tokens[i]);
     moodycamel_cons_token(g_threads[index].cq, &g_threads[index].c_token);
     g_threads[index].poller = spdk_poller_register(msg_poller, g_threads + index, 0);
+    app_thread = g_threads + index;
 }
 
 static void register_func(void *arg) {
