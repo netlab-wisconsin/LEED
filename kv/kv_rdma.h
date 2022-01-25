@@ -2,9 +2,12 @@
 #define _KV_RDMA_H_
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
+
 typedef void *connection_handle;
 typedef void *kv_rdma_handle;
 typedef void *kv_rmda_mr;
+typedef void *kv_rmda_mrs_handle;
 
 typedef void (*kv_rdma_req_cb)(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_mr resp, void *cb_arg);
 typedef void (*kv_rdma_connect_cb)(connection_handle h, void *cb_arg);
@@ -15,6 +18,11 @@ typedef void (*kv_rdma_server_init_cb)(void *arg);
 
 void kv_rdma_init(kv_rdma_handle *h, uint32_t thread_num);
 void kv_rdma_fini(kv_rdma_handle h, kv_rdma_fini_cb cb, void *cb_arg);
+
+enum kv_rmda_mr_type {KV_RDMA_MR_REQ,KV_RDMA_MR_RESP,KV_RDMA_MR_SERVER};
+kv_rmda_mrs_handle kv_rdma_alloc_bulk(kv_rdma_handle h, enum kv_rmda_mr_type type, size_t size, size_t count);
+kv_rmda_mr kv_rdma_mrs_get(kv_rmda_mrs_handle h, size_t index);
+void kv_rdma_free_bulk(kv_rmda_mrs_handle h);
 
 kv_rmda_mr kv_rdma_alloc_req(kv_rdma_handle h, uint32_t size);
 uint8_t *kv_rdma_get_req_buf(kv_rmda_mr mr);
