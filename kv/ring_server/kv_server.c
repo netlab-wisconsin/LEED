@@ -160,8 +160,7 @@ static void send_response(void *arg) {
 
 static void forward_cb(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_mr resp, void *arg) {
     struct io_ctx *io = arg;
-    struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_resp_buf(resp);
-    io->success = success && msg->type == KV_MSG_OK;
+    io->success = success && io->msg->type == KV_MSG_OK;
     send_response(io);
 }
 
