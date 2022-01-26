@@ -35,8 +35,10 @@ void *kv_mempool_get(struct kv_mempool *_mp) {
     struct _kv_mempool *mp = (struct _kv_mempool *)_mp;
     MoodycamelValue value;
     // moodycamel_cq_try_dequeue(mp->cq, &value);
-    moodycamel_cq_try_dequeue_with_token(mp->cq, mp->c_tokens[kv_app_get_thread_index()], &value);
-    return value;
+    if (moodycamel_cq_try_dequeue_with_token(mp->cq, mp->c_tokens[kv_app_get_thread_index()], &value))
+        return value;
+    else
+        return NULL;
 }
 void kv_mempool_free(struct kv_mempool *_mp) {
     struct _kv_mempool *mp = (struct _kv_mempool *)_mp;

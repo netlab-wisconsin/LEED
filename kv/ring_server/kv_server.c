@@ -151,10 +151,11 @@ static void del_key(void *arg) {
 
 static void send_response(void *arg) {
     struct io_ctx *io = arg;
+    bool need_del_key = io->msg->type == KV_MSG_DEL || io->msg->type == KV_MSG_SET;
     if (io->msg->type == KV_MSG_SET) io->msg->value_len = 0;
     io->msg->type = io->success ? KV_MSG_OK : KV_MSG_ERR;
     kv_rdma_make_resp(io->req_h, (uint8_t *)io->msg, KV_MSG_SIZE(io->msg));
-    if (io->msg->type == KV_MSG_DEL || io->msg->type == KV_MSG_SET)
+    if (need_del_key)
         kv_app_send(io->worker_id, del_key, io);
     else
         kv_mempool_put(io_pool, io);
