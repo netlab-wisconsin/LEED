@@ -7,8 +7,10 @@
 
 #include "../kv_app.h"
 #include "../kv_data_store.h"
+#include "../kv_memory.h"
 #include "../kv_msg.h"
 #include "../kv_ring.h"
+#include "../uthash.h"
 struct {
     uint64_t num_items;
     uint32_t value_size;
@@ -87,9 +89,15 @@ static void get_options(int argc, char **argv) {
         }
 }
 
+struct key_set_t {
+    uint8_t key[KV_MAX_KEY_LENGTH];
+    uint32_t cnt;
+    UT_hash_handle hh;
+};
 struct worker_t {
     struct kv_storage storage;
     struct kv_data_store data_store;
+    struct key_set_t *dirty_keys;
 } * workers;
 
 kv_rdma_handle server;
@@ -99,19 +107,57 @@ struct io_ctx {
     uint32_t worker_id;
     uint32_t server_thread;
     kv_rmda_mr req, resp;
-    bool success;
+    bool success, is_tail;
     SLIST_ENTRY(io_ctx) next;
 };
 
-SLIST_HEAD(, io_ctx) *io_ctx_heads = NULL;
+// SLIST_HEAD(, io_ctx) *io_ctx_heads = NULL;
+struct kv_mempool *io_pool;
 kv_rmda_mrs_handle resp_mrs;
+
+static inline struct key_set_t *find_key(struct worker_t *worker, uint8_t *_key, uint8_t key_length) {
+    uint8_t key[KV_MAX_KEY_LENGTH];
+    kv_memset(key, 0, KV_MAX_KEY_LENGTH);
+    kv_memcpy(key, _key, key_length);
+    struct key_set_t *entry;
+    HASH_FIND(hh, worker->dirty_keys, key, KV_MAX_KEY_LENGTH, entry);
+    return entry;
+}
+
+static void put_key(struct worker_t *worker, uint8_t *key, uint8_t key_length) {
+    struct key_set_t *entry = find_key(worker, key, key_length);
+    if (entry) {
+        entry->cnt++;
+        return;
+    }
+    entry = kv_malloc(sizeof(struct key_set_t));
+    kv_memset(entry->key, 0, KV_MAX_KEY_LENGTH);
+    kv_memcpy(entry->key, key, key_length);
+    entry->cnt = 1;
+    HASH_ADD(hh, worker->dirty_keys, key, KV_MAX_KEY_LENGTH, entry);
+}
+
+static void del_key(void *arg) {
+    struct io_ctx *io = arg;
+    struct worker_t *worker = workers + io->worker_id;
+    struct key_set_t *entry = find_key(worker, KV_MSG_KEY(io->msg), io->msg->key_len);
+    assert(entry);
+    if (--entry->cnt == 0) {
+        HASH_DEL(worker->dirty_keys, entry);
+        kv_free(entry);
+    }
+    kv_mempool_put(io_pool, io);
+}
 
 static void send_response(void *arg) {
     struct io_ctx *io = arg;
     if (io->msg->type == KV_MSG_SET) io->msg->value_len = 0;
     io->msg->type = io->success ? KV_MSG_OK : KV_MSG_ERR;
     kv_rdma_make_resp(io->req_h, (uint8_t *)io->msg, KV_MSG_SIZE(io->msg));
-    SLIST_INSERT_HEAD(io_ctx_heads + io->server_thread - opt.ssd_num, io, next);
+    if (io->msg->type == KV_MSG_DEL || io->msg->type == KV_MSG_SET)
+        kv_app_send(io->worker_id, del_key, io);
+    else
+        kv_mempool_put(io_pool, io);
 }
 
 static void request_cb(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_mr resp, void *arg) {
@@ -148,15 +194,23 @@ static void io_start(void *arg) {
     struct worker_t *self = workers + io->worker_id;
     switch (io->msg->type) {
         case KV_MSG_SET:
+            put_key(self, KV_MSG_KEY(io->msg), io->msg->key_len);
             kv_data_store_set(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, KV_MSG_VALUE(io->msg),
                               io->msg->value_len, io_fini, arg);
             break;
         case KV_MSG_GET:
+            // if (io->is_tail || find_key(self, KV_MSG_KEY(io->msg), io->msg->key_len) == NULL) {
+            //     kv_data_store_get(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, KV_MSG_VALUE(io->msg),
+            //                       &io->msg->value_len, io_fini, arg);
+            // } else {
+            //     // forward;
+            // }
             kv_data_store_get(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, KV_MSG_VALUE(io->msg),
                               &io->msg->value_len, io_fini, arg);
             break;
         case KV_MSG_DEL:
             assert(io->msg->value_len == 0);
+            put_key(self, KV_MSG_KEY(io->msg), io->msg->key_len);
             kv_data_store_delete(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, io_fini, arg);
             break;
         case KV_MSG_TEST:
@@ -169,28 +223,23 @@ static void io_start(void *arg) {
 
 static void handler(void *req_h, kv_rmda_mr req, uint32_t req_sz, void *arg) {
     uint32_t thread_id = kv_app_get_thread_index();
-    struct io_ctx *ctx = SLIST_FIRST(io_ctx_heads + thread_id - opt.ssd_num);
+    struct io_ctx *ctx = kv_mempool_get(io_pool);
     assert(ctx);
-    SLIST_REMOVE_HEAD(io_ctx_heads + thread_id - opt.ssd_num, next);
     ctx->req_h = req_h;
     ctx->msg = (struct kv_msg *)kv_rdma_get_req_buf(req);
     ctx->worker_id = ctx->msg->ssd_id;
     ctx->server_thread = thread_id;
     ctx->req = req;
+    if (ctx->msg->type == KV_MSG_GET) ctx->is_tail = kv_ring_is_tail(KV_MSG_KEY(ctx->msg), opt.r_num);
     kv_app_send(ctx->worker_id, io_start, ctx);
 }
 #define EXTRA_BUF 32
 static void ring_server_init_cb(void *arg) {
-    io_ctx_heads = calloc(opt.thread_num, sizeof(*io_ctx_heads));
-    resp_mrs = kv_rdma_alloc_bulk(server, KV_RDMA_MR_RESP, sizeof(struct kv_msg) + KV_MAX_KEY_LENGTH,
-                                  opt.concurrent_io_num * opt.thread_num);
-    for (size_t i = 0; i < opt.thread_num; i++) {
-        SLIST_INIT(io_ctx_heads + i);
-        for (size_t j = 0; j < opt.concurrent_io_num; j++) {
-            struct io_ctx *ctx = malloc(sizeof(struct io_ctx));
-            ctx->resp = kv_rdma_mrs_get(resp_mrs, i * opt.thread_num + j);
-            SLIST_INSERT_HEAD(io_ctx_heads + i, ctx, next);
-        }
+    io_pool = kv_mempool_create(opt.concurrent_io_num, sizeof(struct io_ctx));
+    resp_mrs = kv_rdma_alloc_bulk(server, KV_RDMA_MR_RESP, sizeof(struct kv_msg) + KV_MAX_KEY_LENGTH, opt.concurrent_io_num);
+    for (size_t i = 0; i < opt.concurrent_io_num; i++) {
+        struct io_ctx *ctx = kv_mempool_get_ele(io_pool, i * sizeof(struct io_ctx));
+        ctx->resp = kv_rdma_mrs_get(resp_mrs, i);
     }
 }
 
@@ -214,6 +263,7 @@ static void worker_init_done(bool success, void *arg) {
 
 static void worker_init(void *arg) {
     struct worker_t *self = arg;
+    self->dirty_keys = NULL;
     kv_storage_init(&self->storage, self - workers);
     uint32_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET;
     uint64_t value_log_block_num = opt.value_size * opt.num_items * 1.4 / self->storage.block_size;
