@@ -117,7 +117,7 @@ static void io_start(void *arg) {
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(io->req);
     kv_ring_dispatch(KV_MSG_KEY(msg), &io->h, &msg->ssd_id);
     msg->hop = 1;
-    kv_rmda_send_req(io->h, io->req, io->req_sz, io->resp, io_fini, arg);
+    kv_rmda_send_req(io->h, io->req, io->req_sz, io->resp, NULL, io_fini, arg);
 }
 
 static void test_fini(void *arg) {  // always running on producer 0

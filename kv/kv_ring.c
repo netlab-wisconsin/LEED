@@ -144,16 +144,6 @@ void kv_ring_forward(char *key, uint32_t hop, uint32_t r_num, connection_handle 
     *h = entry->node->conn;
     *ssd_id = entry->vid->ssd_id;
 }
-bool kv_ring_is_tail(char *key, uint32_t r_num) {
-    struct vid_ring *ring;
-    struct vid_entry *base_entry = find_vid_entry_from_key(key, &ring), *entry = base_entry;
-    for (uint16_t i = 1; i < r_num; i++) {
-        struct vid_entry *next = CIRCLEQ_LOOP_NEXT(ring, entry, entry);
-        if (next == base_entry) break;
-        entry = next;
-    }
-    return entry->node->is_local;
-}
 
 static void rdma_disconnect_cb(void *arg) {
     struct kv_ring *self = &g_ring;

@@ -36,6 +36,7 @@ void kv_rdma_make_resp(void *req_h, uint8_t *resp, uint32_t resp_sz);  // resp m
 
 void kv_rdma_connect(kv_rdma_handle h, char *addr_str, char *port_str, kv_rdma_connect_cb connect_cb, void *connect_arg,
                      kv_rdma_disconnect_cb disconnect_cb, void *disconnect_arg);
-void kv_rmda_send_req(connection_handle h, kv_rmda_mr req, uint32_t req_sz, kv_rmda_mr resp, kv_rdma_req_cb cb, void *cb_arg);
+void kv_rmda_send_req(connection_handle h, kv_rmda_mr req, uint32_t req_sz, kv_rmda_mr resp, void *resp_addr, kv_rdma_req_cb cb,
+                      void *cb_arg);
 void kv_rdma_disconnect(connection_handle h);
 #endif

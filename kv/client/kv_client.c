@@ -142,7 +142,7 @@ static void io_fini(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_m
 static void io_start(void *arg) {
     struct io_buffer_t *io = arg;
     struct client_t *client = clients + io->client_id;
-    kv_rmda_send_req(client->h, io->req, io->req_sz, io->resp, io_fini, arg);
+    kv_rmda_send_req(client->h, io->req, io->req_sz, io->resp, NULL, io_fini, arg);
 }
 
 static void test_fini(void *arg) {  // always running on producer 0

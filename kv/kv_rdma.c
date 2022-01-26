@@ -336,13 +336,15 @@ void kv_rdma_connect(kv_rdma_handle h, char *addr_str, char *port_str, kv_rdma_c
     freeaddrinfo(addr);
 }
 
-void kv_rmda_send_req(connection_handle h, kv_rmda_mr req, uint32_t req_sz, kv_rmda_mr resp, kv_rdma_req_cb cb, void *cb_arg) {
+void kv_rmda_send_req(connection_handle h, kv_rmda_mr req, uint32_t req_sz, kv_rmda_mr resp, void *resp_addr, kv_rdma_req_cb cb,
+                      void *cb_arg) {
     struct rdma_connection *conn = h;
     assert(conn->is_server == false);
-    struct client_req_ctx *ctx = kv_mempool_get(conn->u.c.mp);  // kv_malloc(sizeof(struct client_req_ctx));
+    struct client_req_ctx *ctx = kv_mempool_get(conn->u.c.mp); 
     *ctx = (struct client_req_ctx){conn, cb, cb_arg, req, resp};
+    if (resp_addr == NULL) resp_addr = ctx->resp->addr;
     *(struct req_header *)ctx->req->addr =
-        (struct req_header){(uint64_t)ctx->resp->addr, (uint32_t)kv_mempool_get_id(conn->u.c.mp, ctx)};
+        (struct req_header){(uint64_t)resp_addr, (uint32_t)kv_mempool_get_id(conn->u.c.mp, ctx)};
     struct ibv_recv_wr r_wr = {(uintptr_t)conn, NULL, NULL, 0}, *r_bad_wr = NULL;
     if (ibv_post_recv(conn->qp, &r_wr, &r_bad_wr)) {
         goto fail;

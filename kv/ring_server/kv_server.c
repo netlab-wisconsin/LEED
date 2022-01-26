@@ -107,8 +107,8 @@ struct io_ctx {
     uint32_t worker_id;
     uint32_t server_thread;
     kv_rmda_mr req, resp;
-    bool success, is_tail;
-    SLIST_ENTRY(io_ctx) next;
+    bool success;
+    connection_handle forward_to;
 };
 
 // SLIST_HEAD(, io_ctx) *io_ctx_heads = NULL;
@@ -151,11 +151,10 @@ static void del_key(void *arg) {
 
 static void send_response(void *arg) {
     struct io_ctx *io = arg;
-    bool need_del_key = io->msg->type == KV_MSG_DEL || io->msg->type == KV_MSG_SET;
     if (io->msg->type == KV_MSG_SET) io->msg->value_len = 0;
     io->msg->type = io->success ? KV_MSG_OK : KV_MSG_ERR;
     kv_rdma_make_resp(io->req_h, (uint8_t *)io->msg, KV_MSG_SIZE(io->msg));
-    if (need_del_key)
+    if (io->forward_to)
         kv_app_send(io->worker_id, del_key, io);
     else
         kv_mempool_put(io_pool, io);
@@ -165,25 +164,19 @@ static void request_cb(connection_handle h, bool success, kv_rmda_mr req, kv_rmd
     struct io_ctx *io = arg;
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_resp_buf(resp);
     io->success = success && msg->type == KV_MSG_OK;
-    kv_app_send(io->server_thread, send_response, arg);
+    send_response(io);
 }
 
 static void forward_request(void *arg) {
     struct io_ctx *io = arg;
-    connection_handle h;
-    kv_ring_forward(KV_MSG_KEY(io->msg), io->msg->hop, opt.r_num, &h, &io->msg->ssd_id);
-    if (h) {
-        io->msg->hop++;
-        kv_rmda_send_req(h, io->req, KV_MSG_SIZE(io->msg), io->resp, request_cb, io);
-    } else {
-        send_response(io);
-    }
+    io->msg->hop++;
+    kv_rmda_send_req(io->forward_to, io->req, KV_MSG_SIZE(io->msg), io->req, io->msg, request_cb, io);
 }
 
 static void io_fini(bool success, void *arg) {
     struct io_ctx *io = arg;
     io->success = success;
-    if (success && (io->msg->type == KV_MSG_SET || io->msg->type == KV_MSG_DEL)) {
+    if (success && io->forward_to) {
         kv_app_send(io->server_thread, forward_request, arg);
     } else {
         kv_app_send(io->server_thread, send_response, arg);
@@ -195,12 +188,12 @@ static void io_start(void *arg) {
     struct worker_t *self = workers + io->worker_id;
     switch (io->msg->type) {
         case KV_MSG_SET:
-            put_key(self, KV_MSG_KEY(io->msg), io->msg->key_len);
+            if (io->forward_to) put_key(self, KV_MSG_KEY(io->msg), io->msg->key_len);
             kv_data_store_set(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, KV_MSG_VALUE(io->msg),
                               io->msg->value_len, io_fini, arg);
             break;
         case KV_MSG_GET:
-            // if (io->is_tail || find_key(self, KV_MSG_KEY(io->msg), io->msg->key_len) == NULL) {
+            // if (find_key(self, KV_MSG_KEY(io->msg), io->msg->key_len) == NULL) {
             //     kv_data_store_get(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, KV_MSG_VALUE(io->msg),
             //                       &io->msg->value_len, io_fini, arg);
             // } else {
@@ -211,7 +204,7 @@ static void io_start(void *arg) {
             break;
         case KV_MSG_DEL:
             assert(io->msg->value_len == 0);
-            put_key(self, KV_MSG_KEY(io->msg), io->msg->key_len);
+            if (io->forward_to) put_key(self, KV_MSG_KEY(io->msg), io->msg->key_len);
             kv_data_store_delete(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, io_fini, arg);
             break;
         case KV_MSG_TEST:
@@ -224,15 +217,17 @@ static void io_start(void *arg) {
 
 static void handler(void *req_h, kv_rmda_mr req, uint32_t req_sz, void *arg) {
     uint32_t thread_id = kv_app_get_thread_index();
-    struct io_ctx *ctx = kv_mempool_get(io_pool);
-    assert(ctx);
-    ctx->req_h = req_h;
-    ctx->msg = (struct kv_msg *)kv_rdma_get_req_buf(req);
-    ctx->worker_id = ctx->msg->ssd_id;
-    ctx->server_thread = thread_id;
-    ctx->req = req;
-    if (ctx->msg->type == KV_MSG_GET) ctx->is_tail = kv_ring_is_tail(KV_MSG_KEY(ctx->msg), opt.r_num);
-    kv_app_send(ctx->worker_id, io_start, ctx);
+    struct io_ctx *io = kv_mempool_get(io_pool);
+    assert(io);
+    io->req_h = req_h;
+    io->msg = (struct kv_msg *)kv_rdma_get_req_buf(req);
+    io->worker_id = io->msg->ssd_id;
+    io->server_thread = thread_id;
+    io->req = req;
+    io->forward_to = NULL;
+    if (io->msg->type == KV_MSG_SET || io->msg->type == KV_MSG_DEL)
+        kv_ring_forward(KV_MSG_KEY(io->msg), io->msg->hop, opt.r_num, &io->forward_to, &io->msg->ssd_id);
+    kv_app_send(io->worker_id, io_start, io);
 }
 #define EXTRA_BUF 32
 static void ring_server_init_cb(void *arg) {
