@@ -28,7 +28,6 @@ using namespace apache::thrift::transport;
 
 
 #include <assert.h>
-
 template <typename T1, typename T2> typename T1::value_type quant(const T1 &x, T2 q)
 {
     assert(q >= 0.0 && q <= 1.0);
@@ -42,9 +41,11 @@ template <typename T1, typename T2> typename T1::value_type quant(const T1 &x, T
     return (1.0 - h) * qs + h * x[hi];
 }
 
-vector<double> search_times;
+// record transaction latency from different threads
+// must for thread safety
 pthread_mutex_t count_lock;
 vector<double> latencyList;
+vector<double> search_times;
 
 
 void usage()
@@ -187,7 +188,6 @@ string ParseCommandLine(int argc, char *argv[], utils::Properties &props) {
 
 int DelegateClient(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const int num_ops,
     bool is_loading
-    //, vector<double>& latencyTime
     ) {
   db->Init();
   ycsbc::Client client(*db, *wl);
@@ -210,12 +210,14 @@ int DelegateClient(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const int num_ops,
     }
   }
   db->Close();
+
   if (!is_loading) {
       pthread_mutex_lock(&count_lock);
       search_times.push_back(transactionLatency);
       latencyList.insert(latencyList.end(), latLst.begin(), latLst.end());
       pthread_mutex_unlock(&count_lock);
   }
+
   return oks;
 }
 
@@ -223,6 +225,8 @@ int main(int argc, char **argv)
 {   
     utils::Properties props;
     string file_name = ParseCommandLine(argc, argv, props);
+    
+    cerr << "# Run workload:\t" << file_name << endl;
 
     ycsbc::CoreWorkload wl;
     wl.Init(props);
@@ -240,9 +244,9 @@ int main(int argc, char **argv)
       }
       dbs[i] = db;
     }
+
     // Loads data
     vector<thread> threads;
-    // vector<future<int>> actual_ops;
     int sum = 0;
     int total_ops = 0;
 
@@ -297,11 +301,11 @@ int main(int argc, char **argv)
     }
     cerr << "# Transaction Latency (us)" << endl;
     cerr << props["dbname"] << '\t' << file_name << '\t' << num_threads << '\t';
-    cerr << totalTime / (num_threads * total_ops )* 1000 * 1000 << "us" << endl;
+    cerr << totalTime / (num_threads * total_ops )* 1000 * 1000 << endl;
 
     cerr << "# Transaction p999 Latency (us)" << endl;
     cerr << props["dbname"] << '\t' << file_name << '\t' << num_threads << '\t';
     sort(latencyList.begin(), latencyList.end());
-    cout << quant(latencyList, 0.999) * 1000 * 1000 << "us" << endl;
+    cout << quant(latencyList, 0.999) * 1000 * 1000 << endl;
     return 0;
 }
