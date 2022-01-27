@@ -19,6 +19,6 @@ insertproportion=0
 
 requestdistribution=zipfian
 
-recordcount=100000
-operationcount=100000
+recordcount=20000000
+operationcount=8000000
 fieldlength=1024

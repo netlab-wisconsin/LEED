@@ -11,11 +11,10 @@
 # which orders items purely by time, and demands the latest, is very different than 
 # workload here (which we believe is more typical of how people build systems.)
 
-recordcount=100000
-operationcount=100000
 workload=com.yahoo.ycsb.workloads.CoreWorkload
-
+fieldcount=1
 readallfields=true
+writeallfields=true
 
 readproportion=0.95
 updateproportion=0
@@ -23,4 +22,7 @@ scanproportion=0
 insertproportion=0.05
 
 requestdistribution=latest
+recordcount=20000000
+operationcount=8000000
+fieldlength=1024
 

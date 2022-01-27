@@ -12,8 +12,8 @@ fieldcount=1
 readallfields=true
 writeallfields=true
 
-readproportion=1
-updateproportion=0
+readproportion=0.5
+updateproportion=0.5
 scanproportion=0
 insertproportion=0
 
