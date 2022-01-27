@@ -382,7 +382,7 @@ struct pool_put_ctx {
 };
 static void pool_write_cb(bool success, void *arg) {
     struct pool_put_ctx *ctx = arg;
-    if (ctx->entry->ref_cnt == 0) free_pool_entry(ctx->self, ctx->entry);
+    if (--ctx->entry->ref_cnt == 0) free_pool_entry(ctx->self, ctx->entry);
     if (ctx->cb) ctx->cb(success, ctx->cb_arg);
     kv_free(ctx);
 }
@@ -390,7 +390,6 @@ static void pool_write_cb(bool success, void *arg) {
 void kv_bucket_pool_put(struct kv_bucket_log *self, struct kv_bucket_pool *entry, bool write_back, kv_circular_log_io_cb cb,
                         void *cb_arg) {
     assert(entry && entry->is_valid);
-    entry->ref_cnt--;
     if (write_back) {
         struct pool_put_ctx *ctx = kv_malloc(sizeof(struct pool_put_ctx));
         *ctx = (struct pool_put_ctx){self, entry, cb, cb_arg};
@@ -407,6 +406,6 @@ void kv_bucket_pool_put(struct kv_bucket_log *self, struct kv_bucket_pool *entry
         kv_free(buckets);
         return;
     }
-    if (entry->ref_cnt == 0) free_pool_entry(self, entry);
+    if (--entry->ref_cnt == 0) free_pool_entry(self, entry);
     if (cb) cb(true, cb_arg);
 }
