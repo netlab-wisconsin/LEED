@@ -3,7 +3,7 @@
 #include <sys/queue.h>
 
 #include "kv_circular_log.h"
-#include "uthash.h"
+#include "utils/uthash.h"
 
 #define KV_MAX_KEY_LENGTH 20
 #define KV_MIN_KEY_LENGTH 8

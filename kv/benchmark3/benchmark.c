@@ -5,8 +5,8 @@
 #include <string.h>
 #include <sys/time.h>
 
-#include "../benchmark2/city.h"
-#include "../benchmark2/timing.h"
+#include "../utils/city.h"
+#include "../utils/timing.h"
 #include "../kv_app.h"
 #include "../kv_data_store.h"
 struct {

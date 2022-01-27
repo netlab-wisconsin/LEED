@@ -10,7 +10,7 @@
 #include "../kv_memory.h"
 #include "../kv_msg.h"
 #include "../kv_ring.h"
-#include "../uthash.h"
+#include "../utils/uthash.h"
 struct {
     uint64_t num_items;
     uint32_t value_size;

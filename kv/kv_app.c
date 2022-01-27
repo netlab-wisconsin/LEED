@@ -3,7 +3,7 @@
 #include <pthread.h>
 #include <stdio.h>
 
-#include "concurrentqueue.h"
+#include "utils/concurrentqueue.h"
 #include "kv_memory.h"
 #include "spdk/env.h"
 #include "spdk/event.h"

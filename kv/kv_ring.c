@@ -8,7 +8,7 @@
 #include "kv_etcd.h"
 #include "kv_memory.h"
 #include "pthread.h"
-#include "uthash.h"
+#include "utils/uthash.h"
 
 #define CIRCLEQ_FOREACH_SAFE(var, head, field, tvar) \
     for ((var) = CIRCLEQ_FIRST(head); (var) != (void *)(head) && ((tvar) = CIRCLEQ_NEXT(var, field), 1); (var) = (tvar))

@@ -6,8 +6,8 @@
 
 #include "../kv_table.h"
 #include "../kv_app.h"
-#include "city.h"
-#include "timing.h"
+#include "../utils/city.h"
+#include "../utils/timing.h"
 #define ALIGN(a, b) (((a) + (b)-1) / (b) * (b))
 struct {
     uint64_t num_items, read_num_items;

@@ -1,6 +1,6 @@
 #include "kv_memory.h"
 
-#include "concurrentqueue.h"
+#include "utils/concurrentqueue.h"
 #include "kv_app.h"
 #include "spdk/env.h"
 void *kv_dma_malloc(size_t size) { return spdk_dma_malloc(size, 4, NULL); }

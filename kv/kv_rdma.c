@@ -14,7 +14,7 @@
 
 #include "kv_app.h"
 #include "kv_memory.h"
-#include "uthash.h"
+#include "utils/uthash.h"
 
 #define TIMEOUT_IN_MS (500U)
 #define MAX_Q_NUM (4096U)

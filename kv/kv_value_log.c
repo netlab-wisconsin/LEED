@@ -6,7 +6,7 @@
 #include <sys/uio.h>
 
 #include "kv_memory.h"
-#include "uthash.h"
+#include "utils/uthash.h"
 static inline uint64_t align(struct kv_value_log *self, uint64_t size) {
     if (size & self->blk_mask) return (size >> self->blk_shift) + 1;
     return size >> self->blk_shift;
