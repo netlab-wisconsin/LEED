@@ -135,6 +135,14 @@ static void put_key(struct worker_t *worker, uint8_t *key, uint8_t key_length) {
     HASH_ADD(hh, worker->dirty_keys, key, KV_MAX_KEY_LENGTH, entry);
 }
 
+static void send_response(void *arg) {
+    struct io_ctx *io = arg;
+    if (io->msg->type == KV_MSG_SET) io->msg->value_len = 0;
+    io->msg->type = io->success ? KV_MSG_OK : KV_MSG_ERR;
+    kv_rdma_make_resp(io->req_h, (uint8_t *)io->msg, KV_MSG_SIZE(io->msg));
+    kv_mempool_put(io_pool, io);
+}
+
 static void del_key(void *arg) {
     struct io_ctx *io = arg;
     struct worker_t *worker = workers + io->worker_id;
@@ -144,24 +152,17 @@ static void del_key(void *arg) {
         HASH_DEL(worker->dirty_keys, entry);
         kv_free(entry);
     }
-    kv_mempool_put(io_pool, io);
-}
-
-static void send_response(void *arg) {
-    struct io_ctx *io = arg;
-    if (io->msg->type == KV_MSG_SET) io->msg->value_len = 0;
-    io->msg->type = io->success ? KV_MSG_OK : KV_MSG_ERR;
-    kv_rdma_make_resp(io->req_h, (uint8_t *)io->msg, KV_MSG_SIZE(io->msg));
-    if (io->forward_to)
-        kv_app_send(io->worker_id, del_key, io);
-    else
-        kv_mempool_put(io_pool, io);
+    kv_app_send(io->server_thread, send_response, arg);
 }
 
 static void forward_cb(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_mr resp, void *arg) {
     struct io_ctx *io = arg;
     io->success = success && io->msg->type == KV_MSG_OK;
-    send_response(io);
+    if (io->forward_to) {  // set and del
+        kv_app_send(io->worker_id, del_key, io);
+    } else {  // get
+        send_response(io);
+    }
 }
 
 static void forward_request(void *arg) {  // set and del
