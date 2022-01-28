@@ -78,6 +78,7 @@ struct kv_data_store data_store;
 static struct timeval tv_start, tv_end;
 uint64_t total_io;
 uint32_t concurrent_io = 0;
+static struct kv_ds_queue ds_queue;
 
 static void stop(void) {
     if (keys) free(keys);
@@ -183,7 +184,8 @@ static void init(void* arg) {
     uint32_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET;
     uint64_t value_log_block_num = opt.value_size * opt.num_items * 1.5 / storage.block_size;
     gettimeofday(&tv_start, NULL);
-    kv_data_store_init(&data_store, &storage, 0, bucket_num, value_log_block_num, opt.compact_buf_len, start, NULL);
+    kv_data_store_init(&data_store, &storage, 0, bucket_num, value_log_block_num, opt.compact_buf_len, &ds_queue, 0, start,
+                       NULL);
 }
 int main(int argc, char** argv) {
 #ifdef NDEBUG
@@ -192,5 +194,7 @@ int main(int argc, char** argv) {
     printf("DEBUG (low performance)\n");
 #endif
     get_options(argc, argv);
+    kv_ds_queue_init(&ds_queue, 1);
     kv_app_start_single_task(opt.json_config_file, init, NULL);
+    kv_ds_queue_fini(&ds_queue);
 }

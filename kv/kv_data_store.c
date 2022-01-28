@@ -10,7 +10,7 @@
 // --- queue ---
 struct queue_entry {
     struct kv_data_store *self;
-    enum { OP_SET = 4, OP_GET = 2, OP_DEL = 3 } op;
+    enum { OP_SET, OP_GET, OP_DEL } op;
     kv_task_cb fn;
     void *ctx;
     kv_data_store_cb cb;
@@ -18,11 +18,26 @@ struct queue_entry {
     STAILQ_ENTRY(queue_entry) entry;
 };
 STAILQ_HEAD(queue_head, queue_entry);
+static inline uint32_t op_cost(uint32_t op) {
+    switch (op) {
+        case OP_SET:
+            return 10;
+        case OP_GET:
+            return 3;
+        case OP_DEL:
+            return 4;
+        default:
+            assert(false);
+    }
+}
+
 static void *enqueue(struct kv_data_store *self, uint32_t op, kv_task_cb fn, void *ctx, kv_data_store_cb cb, void *cb_arg) {
     struct queue_entry *entry = kv_malloc(sizeof(struct queue_entry));
+    struct kv_ds_q_info q_info = self->ds_queue->q_info[self->ds_id];
     *entry = (struct queue_entry){self, op, fn, ctx, cb, cb_arg};
-    if (self->q_size + op <= self->q_max) {
-        self->q_size += op;
+    if (q_info.size + op <= q_info.cap) {
+        q_info.size += op_cost(op);
+        self->ds_queue->q_info[self->ds_id] = q_info;
         kv_app_send(self->bucket_log.log.thread_index, fn, ctx);
     } else {
         STAILQ_INSERT_TAIL((struct queue_head *)self->q, entry, entry);
@@ -32,16 +47,18 @@ static void *enqueue(struct kv_data_store *self, uint32_t op, kv_task_cb fn, voi
 static void dequeue(bool success, void *arg) {
     struct queue_entry *entry = arg;
     struct kv_data_store *self = entry->self;
-    self->q_size -= entry->op;
+    struct kv_ds_q_info q_info = self->ds_queue->q_info[self->ds_id];
+    q_info.size -= op_cost(entry->op);
     while (!STAILQ_EMPTY((struct queue_head *)self->q)) {
         struct queue_entry *first = STAILQ_FIRST((struct queue_head *)self->q);
-        if (first->op + self->q_size <= self->q_max) {
-            self->q_size += first->op;
+        if (op_cost(first->op) + q_info.size <= q_info.cap) {
+            q_info.size += op_cost(first->op);
             kv_app_send(self->bucket_log.log.thread_index, first->fn, first->ctx);
             STAILQ_REMOVE_HEAD((struct queue_head *)self->q, entry);
         } else
             break;
     }
+    self->ds_queue->q_info[self->ds_id] = q_info;
     if (entry->cb) entry->cb(success, entry->cb_arg);
     kv_free(entry);
 }
@@ -54,7 +71,8 @@ static inline bool compare_keys(const uint8_t *key1, size_t key1_len, const uint
 }
 
 void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets,
-                        uint64_t value_log_block_num, uint32_t compact_buf_len, kv_data_store_cb cb, void *cb_arg) {
+                        uint64_t value_log_block_num, uint32_t compact_buf_len, struct kv_ds_queue *ds_queue, uint32_t ds_id,
+                        kv_data_store_cb cb, void *cb_arg) {
     num_buckets = num_buckets > compact_buf_len << 4 ? num_buckets : compact_buf_len << 4;
     kv_bucket_log_init(&self->bucket_log, storage, base, num_buckets, compact_buf_len, cb, cb_arg);
     kv_value_log_init(&self->value_log, storage, &self->bucket_log, (base + self->bucket_log.log.size) * storage->block_size,
@@ -66,7 +84,9 @@ void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, 
     }
     printf("bucket log size: %lf GB\n", ((double)self->bucket_log.log.size) * storage->block_size / (1 << 30));
     printf("value log size: %lf GB\n", ((double)value_log_size) * storage->block_size / (1 << 30));
-    self->q_max = 512;
+    self->ds_queue = ds_queue;
+    self->ds_id = ds_id;
+    self->ds_queue->q_info[self->ds_id] = (struct kv_ds_q_info){.cap = 1024, .size = 0};
     self->q = kv_malloc(sizeof(struct queue_head));
     STAILQ_INIT((struct queue_head *)self->q);
 }

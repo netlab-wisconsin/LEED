@@ -5,10 +5,10 @@
 #include <string.h>
 #include <sys/time.h>
 
-#include "../utils/city.h"
-#include "../utils/timing.h"
 #include "../kv_app.h"
 #include "../kv_data_store.h"
+#include "../utils/city.h"
+#include "../utils/timing.h"
 struct {
     uint64_t num_items, read_num_items;
     uint32_t value_size;
@@ -83,6 +83,7 @@ struct io_buffer_t {
     uint64_t index;
 };
 struct io_buffer_t *io_buffer;
+struct kv_ds_queue ds_queue;
 
 static struct timeval tv_start, tv_end;
 enum { INIT, FILL, READ, CLEAR } state = INIT;
@@ -219,7 +220,8 @@ static void worker_init(void *arg) {
     kv_storage_init(&self->storage, self - workers);
     uint32_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET;
     uint64_t value_log_block_num = opt.value_size * opt.num_items * 1.4 / self->storage.block_size;
-    kv_data_store_init(&self->data_store, &self->storage, 0, bucket_num, value_log_block_num, 512, send_init_done_msg, NULL);
+    kv_data_store_init(&self->data_store, &self->storage, 0, bucket_num, value_log_block_num, 512, &ds_queue, self - workers,
+                       send_init_done_msg, NULL);
 }
 
 int main(int argc, char **argv) {
@@ -240,8 +242,10 @@ int main(int argc, char **argv) {
         task[opt.ssd_num + i] = (struct kv_app_task){NULL, NULL};
     }
     *producers = (struct producer){0, 0, opt.ssd_num};
+    kv_ds_queue_init(&ds_queue, opt.ssd_num);
     gettimeofday(&tv_start, NULL);
     kv_app_start(opt.json_config_file, opt.ssd_num + opt.producer_num, task);
+    kv_ds_queue_fini(&ds_queue);
     free(producers);
     free(workers);
     free(task);

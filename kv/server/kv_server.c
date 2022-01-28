@@ -63,6 +63,7 @@ struct worker_t {
 } * workers;
 
 kv_rdma_handle server;
+struct kv_ds_queue ds_queue;
 struct io_ctx {
     kv_rmda_mr req_h;
     struct kv_msg *msg;
@@ -137,7 +138,8 @@ static void worker_init(void *arg) {
     kv_storage_init(&self->storage, self - workers);
     uint32_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET;
     uint64_t value_log_block_num = opt.value_size * opt.num_items * 1.4 / self->storage.block_size;
-    kv_data_store_init(&self->data_store, &self->storage, 0, bucket_num, value_log_block_num, 512, worker_init_done, NULL);
+    kv_data_store_init(&self->data_store, &self->storage, 0, bucket_num, value_log_block_num, 512, &ds_queue, self - workers,
+                       worker_init_done, NULL);
 }
 
 int main(int argc, char **argv) {
@@ -157,7 +159,9 @@ int main(int argc, char **argv) {
         task[opt.ssd_num + i] = (struct kv_app_task){NULL, NULL};
     }
     io_cnt = opt.ssd_num;
+    kv_ds_queue_init(&ds_queue, opt.ssd_num);
     kv_app_start(opt.json_config_file, opt.ssd_num + opt.server_num, task);
+    kv_ds_queue_fini(&ds_queue);
     free(workers);
     free(task);
     return 0;
