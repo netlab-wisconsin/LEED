@@ -6,7 +6,7 @@ struct kv_msg {
     uint8_t key_len;
     uint16_t value_offset;
     uint32_t value_len;
-    uint16_t ssd_id;
+    uint16_t ds_id;
     uint16_t hop;
     uint8_t data[0];
 

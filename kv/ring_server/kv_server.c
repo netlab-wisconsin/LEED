@@ -225,12 +225,12 @@ static void handler(void *req_h, kv_rmda_mr req, uint32_t req_sz, void *arg) {
     assert(io);
     io->req_h = req_h;
     io->msg = (struct kv_msg *)kv_rdma_get_req_buf(req);
-    io->worker_id = io->msg->ssd_id;
+    io->worker_id = io->msg->ds_id;
     io->server_thread = thread_id;
     io->req = req;
     io->forward_to = NULL;
     if (io->msg->type == KV_MSG_SET || io->msg->type == KV_MSG_DEL)
-        kv_ring_forward(KV_MSG_KEY(io->msg), io->msg->hop, opt.r_num, &io->forward_to, &io->msg->ssd_id);
+        kv_ring_forward(KV_MSG_KEY(io->msg), io->msg->hop, opt.r_num, &io->forward_to, &io->msg->ds_id);
     kv_app_send(io->worker_id, io_start, io);
 }
 #define EXTRA_BUF 32

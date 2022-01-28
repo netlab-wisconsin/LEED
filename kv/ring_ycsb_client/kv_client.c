@@ -133,7 +133,7 @@ static void io_fini(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_m
 static void io_start(void *arg) {
     struct io_buffer_t *io = arg;
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(io->req);
-    kv_ring_dispatch(KV_MSG_KEY(msg), &io->h, &msg->ssd_id);
+    kv_ring_dispatch(KV_MSG_KEY(msg), &io->h, &msg->ds_id);
     msg->hop = 1;
     kv_rmda_send_req(io->h, io->req, io->req_sz, io->resp, NULL, io_fini, arg);
 }

@@ -29,6 +29,7 @@ static inline uint32_t op_cost(uint32_t op) {
         default:
             assert(false);
     }
+    return 0;
 }
 
 static void *enqueue(struct kv_data_store *self, uint32_t op, kv_task_cb fn, void *ctx, kv_data_store_cb cb, void *cb_arg) {

@@ -5,6 +5,7 @@
 #include <sys/queue.h>
 
 #include "kv_app.h"
+#include "kv_ds_queue.h"
 #include "kv_etcd.h"
 #include "kv_memory.h"
 #include "pthread.h"
@@ -16,6 +17,7 @@
 struct kv_node {
     struct kv_node_info *info;
     connection_handle conn;
+    struct kv_ds_queue ds_queue;
     bool is_connected, is_disconnecting, is_local;
     STAILQ_ENTRY(kv_node) next;
     UT_hash_handle hh;
@@ -120,13 +122,13 @@ static inline struct vid_entry *find_vid_entry_from_key(char *key, struct vid_ri
     return entry;
 }
 
-void kv_ring_dispatch(char *key, connection_handle *h, uint16_t *ssd_id) {
+void kv_ring_dispatch(char *key, connection_handle *h, uint16_t *ds_id) {
     struct vid_entry *entry = find_vid_entry_from_key(key, NULL);
     *h = entry->node->conn;
-    *ssd_id = entry->vid->ssd_id;
+    *ds_id = entry->vid->ds_id;
 }
 
-void kv_ring_forward(char *key, uint32_t hop, uint32_t r_num, connection_handle *h, uint16_t *ssd_id) {
+void kv_ring_forward(char *key, uint32_t hop, uint32_t r_num, connection_handle *h, uint16_t *ds_id) {
     if (hop >= r_num) {
         *h = NULL;
         return;
@@ -142,10 +144,10 @@ void kv_ring_forward(char *key, uint32_t hop, uint32_t r_num, connection_handle 
     }
     assert(!entry->node->is_local);
     *h = entry->node->conn;
-    *ssd_id = entry->vid->ssd_id;
+    *ds_id = entry->vid->ds_id;
 }
 
-connection_handle  kv_ring_get_tail(char *key, uint32_t r_num) {
+connection_handle kv_ring_get_tail(char *key, uint32_t r_num) {
     struct vid_ring *ring;
     struct vid_entry *base_entry = find_vid_entry_from_key(key, &ring), *entry = base_entry;
     for (uint16_t i = 1; i < r_num; i++) {
@@ -161,6 +163,7 @@ static void rdma_disconnect_cb(void *arg) {
     struct kv_node *node = arg;
     if (node->is_disconnecting) {
         printf("client: disconnected to node %s:%s.\n", node->info->rdma_ip, node->info->rdma_port);
+        kv_ds_queue_fini(&node->ds_queue);
         free(node->info);  // info is allocated by libkv_etcd
         kv_free(node);
     } else {
@@ -233,6 +236,7 @@ static void node_handler(void *arg) {
         node->is_disconnecting = false;
         node->is_connected = false;
         node->info = info;
+        kv_ds_queue_init(&node->ds_queue, info->ds_num);
         // node may already exist?
         HASH_ADD(hh, self->nodes, info->rdma_ip, 24, node);  // ip & port as key
         if (node->is_local) {
@@ -283,11 +287,11 @@ static int vid_ring_stat_cmp(const void *_a, const void *_b) {
     return a->size < b->size ? -1 : 1;
 }
 
-void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uint32_t vid_per_ssd, uint32_t ssd_num,
+void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uint32_t vid_per_ssd, uint32_t ds_num,
                          uint32_t con_req_num, uint32_t max_msg_sz, kv_rdma_req_handler handler, void *arg,
                          kv_rdma_server_init_cb cb, void *cb_arg) {
-    assert(ssd_num != 0);
-    assert(vid_per_ssd * ssd_num <= vid_num);
+    assert(ds_num != 0);
+    assert(vid_per_ssd * ds_num <= vid_num);
     assert(local_ip && local_port);
     struct kv_ring *self = &g_ring;
     kv_rdma_listen(self->h, local_ip, local_port, con_req_num, max_msg_sz, handler, arg, cb, cb_arg);
@@ -295,14 +299,15 @@ void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uin
     self->local_port = local_port;
     vid_ring_init(vid_num);
     struct kv_node_info *info = kv_node_info_alloc(local_ip, local_port, vid_num);
+    info->ds_num = ds_num;
     struct vid_ring_stat *stats = kv_calloc(vid_num, sizeof(struct vid_ring_stat));
     for (size_t i = 0; i < vid_num; i++) stats[i] = (struct vid_ring_stat){i, ring_size(self->rings[0] + i)};
     qsort(stats, vid_num, sizeof(struct vid_ring_stat), vid_ring_stat_cmp);
-    uint32_t ssd_id = 0;
-    for (size_t i = 0; i < vid_per_ssd * ssd_num; i++) {
-        info->vids[stats[i].index].ssd_id = ssd_id;
+    uint32_t ds_id = 0;
+    for (size_t i = 0; i < vid_per_ssd * ds_num; i++) {
+        info->vids[stats[i].index].ds_id = ds_id;
         random_vid(info->vids[stats[i].index].vid);
-        ssd_id = (ssd_id + 1) % ssd_num;
+        ds_id = (ds_id + 1) % ds_num;
     }
     kv_free(stats);
     kvEtcdCreateNode(info, 1);
