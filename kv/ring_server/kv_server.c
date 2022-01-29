@@ -17,7 +17,7 @@ struct {
     uint32_t ssd_num;
     uint32_t thread_num;
     uint32_t concurrent_io_num;
-    uint32_t vid_num, vid_per_ssd, r_num;
+    uint32_t vid_num, vid_per_ssd, rpl_num;
     char json_config_file[1024];
     char etcd_ip[32];
     char etcd_port[16];
@@ -27,7 +27,7 @@ struct {
 } opt = {.ssd_num = 2,
          .thread_num = 1,
          .concurrent_io_num = 32,
-         .r_num = 1,
+         .rpl_num = 1,
          .json_config_file = "config.json",
          .etcd_ip = "127.0.0.1",
          .etcd_port = "2379",
@@ -81,7 +81,7 @@ static void get_options(int argc, char **argv) {
                 opt.vid_per_ssd = atol(optarg);
                 break;
             case 'R':
-                opt.r_num = atol(optarg);
+                opt.rpl_num = atol(optarg);
                 break;
             default:
                 help();
@@ -174,7 +174,7 @@ static void forward_request(void *arg) {  // set and del
 static void forward_to_tail(void *arg) {  // get
     struct io_ctx *io = arg;
     io->msg->hop++;
-    connection_handle h = kv_ring_get_tail(KV_MSG_KEY(io->msg), opt.r_num);
+    connection_handle h = kv_ring_get_tail(KV_MSG_KEY(io->msg), opt.rpl_num);
     assert(h);
     kv_rmda_send_req(h, io->req, KV_MSG_SIZE(io->msg), io->req, io->msg, forward_cb, io);
 }
@@ -230,14 +230,14 @@ static void handler(void *req_h, kv_rmda_mr req, uint32_t req_sz, void *arg) {
     io->req = req;
     io->forward_to = NULL;
     if (io->msg->type == KV_MSG_SET || io->msg->type == KV_MSG_DEL)
-        kv_ring_forward(KV_MSG_KEY(io->msg), io->msg->hop, opt.r_num, &io->forward_to, &io->msg->ds_id);
+        kv_ring_forward(KV_MSG_KEY(io->msg), io->msg->hop, opt.rpl_num, &io->forward_to, &io->msg->ds_id);
     kv_app_send(io->worker_id, io_start, io);
 }
 #define EXTRA_BUF 32
 static void ring_ready_cb(void *arg) {
     io_pool = kv_mempool_create(opt.concurrent_io_num, sizeof(struct io_ctx));
-    kv_ring_server_init(opt.local_ip, opt.local_port, opt.vid_num, opt.vid_per_ssd, opt.ssd_num, opt.concurrent_io_num,
-                        EXTRA_BUF + opt.value_size, handler, NULL, NULL, NULL);
+    kv_ring_server_init(opt.local_ip, opt.local_port, opt.vid_num, opt.vid_per_ssd, opt.ssd_num, opt.rpl_num,
+                        opt.concurrent_io_num, EXTRA_BUF + opt.value_size, handler, NULL, NULL, NULL);
 }
 
 static void ring_init(void *arg) { server = kv_ring_init(opt.etcd_ip, opt.etcd_port, opt.thread_num, ring_ready_cb, NULL); }

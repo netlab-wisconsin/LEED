@@ -85,10 +85,8 @@ static inline uint128 index_to_key(uint64_t index) { return CityHash128((char *)
 #define EXTRA_BUF 32
 struct io_buffer_t {
     kv_rmda_mr req, resp;
-    uint32_t req_sz;
     uint32_t producer_id;
-    connection_handle h;
-    bool read_modify_write;
+    bool read_modify_write, is_finished;
 } * io_buffers;
 
 struct producer_t {
@@ -119,25 +117,6 @@ static void stop(void) {
 }
 
 static void test(void *arg);
-static void modify_write(void *arg);
-static void io_fini(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_mr resp, void *arg) {
-    struct io_buffer_t *io = arg;
-    struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_resp_buf(resp);
-    if (!success || msg->type != KV_MSG_OK) {
-        fprintf(stderr, "io fail. \n");
-        exit(-1);
-    }
-
-    kv_app_send(opt.thread_num + io->producer_id, io->read_modify_write ? modify_write : test, arg);
-}
-static void io_start(void *arg) {
-    struct io_buffer_t *io = arg;
-    struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(io->req);
-    kv_ring_dispatch(KV_MSG_KEY(msg), &io->h, &msg->ds_id);
-    msg->hop = 1;
-    kv_rmda_send_req(io->h, io->req, io->req_sz, io->resp, NULL, io_fini, arg);
-}
-
 static void test_fini(void *arg) {  // always running on producer 0
     uint64_t total_io = 0;
     static uint32_t producer_cnt = 1;
@@ -180,6 +159,7 @@ static void test_fini(void *arg) {  // always running on producer 0
             stop();
             return;
     }
+    for (size_t i = 0; i < opt.concurrent_io_num; i++) io_buffers[i].is_finished = false;
     gettimeofday(&tv_start, NULL);
     uint64_t io_per_producer = total_io / opt.producer_num;
     for (size_t i = 0; i < opt.producer_num; i++) {
@@ -192,14 +172,7 @@ static void test_fini(void *arg) {  // always running on producer 0
         }
     }
 }
-static void modify_write(void *arg) {
-    struct io_buffer_t *io = arg;
-    struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(io->req);
-    msg->type = KV_MSG_SET;
-    msg->value_len = opt.value_size;
-    io->req_sz = KV_MSG_SIZE(msg);
-    kv_app_send(random() % opt.thread_num, io_start, arg);
-}
+
 static inline void do_transaction(struct io_buffer_t *io, struct kv_msg *msg) {
     msg->key_len = 16;
     msg->value_offset = msg->key_len;
@@ -220,11 +193,24 @@ static inline void do_transaction(struct io_buffer_t *io, struct kv_msg *msg) {
         default:
             assert(false);
     }
-    io->req_sz = KV_MSG_SIZE(msg);
 }
 
 static void test(void *arg) {
     struct io_buffer_t *io = arg;
+    if (io && io->is_finished) {
+        if (((struct kv_msg *)kv_rdma_get_resp_buf(io->resp))->type != KV_MSG_OK) {
+            fprintf(stderr, "io fail. \n");
+            exit(-1);
+        } else if (io->read_modify_write) {
+            struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(io->req);
+            msg->type = KV_MSG_SET;
+            msg->value_len = opt.value_size;
+            io->read_modify_write = false;
+            kv_ring_dispatch(io->req, io->resp, kv_rdma_get_resp_buf(io->resp), test, io);
+            return;
+        }
+    }
+
     struct producer_t *p = io ? producers + io->producer_id : producers;
     if (p->start_io == p->end_io) {
         if (--p->iocnt == 0) {
@@ -256,9 +242,9 @@ static void test(void *arg) {
         case INIT:
             assert(false);
     }
-    io->req_sz = KV_MSG_SIZE(msg);
+    io->is_finished = true;
     p->start_io++;
-    kv_app_send(random() % opt.thread_num, io_start, arg);
+    kv_ring_dispatch(io->req, io->resp, kv_rdma_get_resp_buf(io->resp), test, io);
 }
 
 static void ring_ready_cb(void *arg) { kv_app_send(opt.thread_num, test, NULL); }

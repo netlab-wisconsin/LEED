@@ -1,6 +1,8 @@
 #ifndef _KV_MSG_H_
 #define _KV_MSG_H_
 #include <stdint.h>
+
+#include "kv_ds_queue.h"
 struct kv_msg {
     uint8_t type;
     uint8_t key_len;
@@ -8,6 +10,7 @@ struct kv_msg {
     uint32_t value_len;
     uint16_t ds_id;
     uint16_t hop;
+    struct kv_ds_q_info q_info;
     uint8_t data[0];
 
 #define KV_MSG_OK (0U)

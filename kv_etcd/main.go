@@ -14,8 +14,9 @@ package main
 //    char rdma_ip[16];
 //    char rdma_port[8];
 //    uint32_t msg_type;
-//    uint32_t ds_num;
 //    uint32_t vid_num;
+//    uint16_t rpl_num;
+//    uint16_t ds_num;
 //    struct kv_vid vids[0];
 //#define KV_NODE_INFO_READ (0)
 //#define KV_NODE_INFO_CREATE (1)
@@ -82,6 +83,7 @@ func kvEtcdCreateNode(info *C.struct_kv_node_info, ttl C.uint64_t) {
 	leaseID = lease.ID
 	var Ops []clientv3.Op
 	Ops = append(Ops, clientv3.OpPut(key+"ds_num", strconv.Itoa(int(info.ds_num)), clientv3.WithLease(leaseID)))
+	Ops = append(Ops, clientv3.OpPut(key+"rpl_num", strconv.Itoa(int(info.rpl_num)), clientv3.WithLease(leaseID)))
 	for i := 0; i < int(info.vid_num); i++ {
 		vidKey := fmt.Sprintf("%svid/%d", key, i)
 		vid := unsafe.Pointer(C.kv_etcd_get_vid(info, C.uint32_t(i)))
@@ -126,7 +128,10 @@ func sendNodeInfo(Kvs []*mvccpb.KeyValue, msgTypes []int) {
 				C.free(unsafe.Pointer(CValue))
 			} else if key[2] == "ds_num" {
 				ds_num, _ := strconv.Atoi(string(x.Value[:]))
-				info.ds_num = C.uint32_t(ds_num)
+				info.ds_num = C.uint16_t(ds_num)
+			} else if key[2] == "rpl_num" {
+				rpl_num, _ := strconv.Atoi(string(x.Value[:]))
+				info.rpl_num = C.uint16_t(rpl_num)
 			}
 		}
 	}
