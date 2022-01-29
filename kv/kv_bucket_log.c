@@ -23,7 +23,10 @@ void kv_bucket_lock_add_index(struct kv_bucket_lock_entry **set, uint32_t index)
     if (entry == NULL) {
         entry = kv_malloc(sizeof(struct kv_bucket_lock_entry));
         entry->index = index;
+        entry->ref_cnt = 1;
         HASH_ADD_INT(*set, index, entry);
+    } else {
+        entry->ref_cnt++;
     }
 }
 static inline bool lockable(struct kv_bucket_log *self, struct kv_bucket_lock_entry *set) {
@@ -374,36 +377,64 @@ void kv_bucket_pool_get(struct kv_bucket_log *self, uint32_t index, kv_bucket_po
     }
 }
 
+#define STAILQ_FOREACH_SAFE(var, head, field, tvar) \
+    for ((var) = STAILQ_FIRST((head)); (var) && ((tvar) = STAILQ_NEXT((var), field), 1); (var) = (tvar))
+
 struct pool_put_ctx {
     struct kv_bucket_log *self;
-    struct kv_bucket_pool *entry;
+    struct kv_bucket_pool_head pool_head;
     kv_circular_log_io_cb cb;
     void *cb_arg;
 };
 static void pool_write_cb(bool success, void *arg) {
     struct pool_put_ctx *ctx = arg;
-    if (--ctx->entry->ref_cnt == 0) free_pool_entry(ctx->self, ctx->entry);
+    struct kv_bucket_log *self = ctx->self;
+    struct kv_bucket_pool *entry, *tmp;
+    if (success) {
+        STAILQ_FOREACH(entry, &ctx->pool_head, next) {
+            struct kv_bucket *bucket = TAILQ_FIRST(&entry->buckets)->bucket;
+            self->bucket_meta[bucket->index].bucket_offset = entry->offset;
+            self->bucket_meta[bucket->index].chain_length = bucket->chain_length;
+        }
+    }
+    STAILQ_FOREACH_SAFE(entry, &ctx->pool_head, next, tmp) {
+        if (--entry->ref_cnt == 0) free_pool_entry(self, entry);
+    }
     if (ctx->cb) ctx->cb(success, ctx->cb_arg);
     kv_free(ctx);
+}
+
+void kv_bucket_pool_put_bulk(struct kv_bucket_log *self, struct kv_bucket_pool_head pool_head, kv_circular_log_io_cb cb,
+                             void *cb_arg) {
+    struct pool_put_ctx *ctx = kv_malloc(sizeof(struct pool_put_ctx));
+    *ctx = (struct pool_put_ctx){self, pool_head, cb, cb_arg};
+    int iovcnt = 0;
+    struct kv_bucket_pool *entry;
+    struct kv_bucket_chain_entry *chain_entry;
+    STAILQ_FOREACH(entry, &ctx->pool_head, next) { TAILQ_FOREACH(chain_entry, &entry->buckets, entry) iovcnt++; }
+    struct iovec *buckets = kv_calloc(iovcnt, sizeof(struct iovec)), *p = buckets;
+    uint32_t len = 0;
+    STAILQ_FOREACH(entry, &ctx->pool_head, next) {
+        entry->offset = (self->log.tail + len) % self->log.size;
+        len += TAILQ_FIRST(&entry->buckets)->bucket->chain_length;
+        TAILQ_FOREACH(chain_entry, &entry->buckets, entry) {
+            p->iov_base = chain_entry->bucket;
+            p->iov_len = chain_entry->len;
+            ++p;
+        }
+    }
+    kv_bucket_log_writev(self, buckets, iovcnt, pool_write_cb, ctx);
+    kv_free(buckets);
 }
 
 void kv_bucket_pool_put(struct kv_bucket_log *self, struct kv_bucket_pool *entry, bool write_back, kv_circular_log_io_cb cb,
                         void *cb_arg) {
     assert(entry && entry->is_valid);
     if (write_back) {
-        struct pool_put_ctx *ctx = kv_malloc(sizeof(struct pool_put_ctx));
-        *ctx = (struct pool_put_ctx){self, entry, cb, cb_arg};
-        int iovcnt = 0;
-        struct kv_bucket_chain_entry *chain_entry;
-        TAILQ_FOREACH(chain_entry, &entry->buckets, entry) iovcnt++;
-        struct iovec *buckets = kv_calloc(iovcnt, sizeof(struct iovec)), *p = buckets;
-        TAILQ_FOREACH(chain_entry, &entry->buckets, entry) {
-            p->iov_base = chain_entry->bucket;
-            p->iov_len = chain_entry->len;
-            ++p;
-        }
-        kv_bucket_log_writev(self, buckets, iovcnt, pool_write_cb, ctx);
-        kv_free(buckets);
+        struct kv_bucket_pool_head pool_head;
+        STAILQ_INIT(&pool_head);
+        STAILQ_INSERT_HEAD(&pool_head, entry, next);
+        kv_bucket_pool_put_bulk(self, pool_head, cb, cb_arg);
         return;
     }
     if (--entry->ref_cnt == 0) free_pool_entry(self, entry);

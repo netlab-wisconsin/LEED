@@ -185,20 +185,14 @@ struct set_ctx {
     void *cb_arg;
     uint32_t bucket_index;
     struct kv_bucket_lock_entry *index_set;
-    uint32_t bucket_offset, io_cnt;
+    uint32_t io_cnt;
     struct kv_bucket_pool *entry;
     uint64_t value_offset;
     bool success;
-    uint8_t chain_length;
 };
 
 static void set_pool_put_cb(bool success, void *arg) {
     struct set_ctx *ctx = arg;
-    if (success) {
-        struct kv_bucket_meta *meta = kv_bucket_get_meta(&ctx->self->bucket_log, ctx->bucket_index);
-        meta->chain_length = ctx->chain_length;
-        meta->bucket_offset = ctx->bucket_offset;
-    }
     kv_bucket_unlock(&ctx->self->bucket_log, &ctx->index_set);
     if (ctx->cb) ctx->cb(success, ctx->cb_arg);
     kv_free(ctx);
@@ -223,8 +217,6 @@ static void set_lock_cb(void *arg) {
     if (located_item) {  // update
         located_item->value_length = ctx->value_length;
         located_item->value_offset = ctx->value_offset;
-        ctx->chain_length = TAILQ_FIRST(&ctx->entry->buckets)->bucket->chain_length;
-        ctx->bucket_offset = kv_bucket_log_offset(&ctx->self->bucket_log);
         kv_bucket_pool_put(&ctx->self->bucket_log, ctx->entry, true, set_pool_put_cb, ctx);
     } else {  // create
         if ((located_item = find_empty(ctx->self, ctx->entry))) {
@@ -232,8 +224,6 @@ static void set_lock_cb(void *arg) {
             kv_memcpy(located_item->key, ctx->key, ctx->key_length);
             located_item->value_length = ctx->value_length;
             located_item->value_offset = ctx->value_offset;
-            ctx->chain_length = TAILQ_FIRST(&ctx->entry->buckets)->bucket->chain_length;
-            ctx->bucket_offset = kv_bucket_log_offset(&ctx->self->bucket_log);
             kv_bucket_pool_put(&ctx->self->bucket_log, ctx->entry, true, set_pool_put_cb, ctx);
         } else {
             fprintf(stderr, "set_find_item_cb: No more bucket available.\n");
@@ -330,27 +320,12 @@ struct delete_ctx {
     void *cb_arg;
     uint32_t bucket_index;
     struct kv_bucket_lock_entry *index_set;
-
-    uint32_t bucket_offset, io_cnt;
+    uint32_t io_cnt;
     struct kv_bucket_pool *entry;
-    uint8_t chain_length;
 };
-#define delete_ctx_init(ctx, self, key, key_length, cb, cb_arg) \
-    do {                                                        \
-        ctx->self = self;                                       \
-        ctx->key = key;                                         \
-        ctx->key_length = key_length;                           \
-        ctx->cb = cb;                                           \
-        ctx->cb_arg = cb_arg;                                   \
-    } while (0)
 
 static void delete_pool_put_cb(bool success, void *arg) {
     struct delete_ctx *ctx = arg;
-    if (success) {
-        struct kv_bucket_meta *meta = kv_bucket_get_meta(&ctx->self->bucket_log, ctx->bucket_index);
-        meta->chain_length = ctx->chain_length;
-        meta->bucket_offset = ctx->bucket_offset;
-    }
     kv_bucket_unlock(&ctx->self->bucket_log, &ctx->index_set);
     if (ctx->cb) ctx->cb(success, ctx->cb_arg);
     kv_free(ctx);
@@ -370,8 +345,6 @@ static void delete_lock_cb(void *arg) {
     find_item_plus(ctx->self, ctx->entry, ctx->key, ctx->key_length, &located_item);
     located_item->key_length = 0;
     fill_the_hole(ctx->self, ctx->entry);
-    ctx->chain_length = TAILQ_FIRST(&ctx->entry->buckets)->bucket->chain_length;
-    ctx->bucket_offset = kv_bucket_log_offset(&ctx->self->bucket_log);
     kv_bucket_pool_put(&ctx->self->bucket_log, ctx->entry, true, delete_pool_put_cb, ctx);
 }
 

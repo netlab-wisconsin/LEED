@@ -59,6 +59,7 @@ static inline void kv_circular_log_appendv(struct kv_circular_log *self, struct 
     kv_circular_log_iov(self, self->tail, blocks, iovcnt, cb, cb_arg, CIRCULAR_LOG_APPEND);
 }
 
+bool kv_circular_log_is_fetchable(struct kv_circular_log *self, uint64_t offset) ;
 void kv_circular_log_fetch(struct kv_circular_log *self, uint64_t offset, uint64_t n, struct iovec iov[2]);
 void kv_circular_log_fetch_one(struct kv_circular_log *self, uint64_t offset, void **buf);
 void kv_circular_log_move_head(struct kv_circular_log *self, uint64_t n);
