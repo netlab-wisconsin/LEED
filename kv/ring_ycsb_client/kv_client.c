@@ -82,7 +82,6 @@ static void get_options(int argc, char **argv) {
 }
 
 static inline uint128 index_to_key(uint64_t index) { return CityHash128((char *)&index, sizeof(uint64_t)); }
-#define EXTRA_BUF 32
 struct io_buffer_t {
     kv_rmda_mr req, resp;
     uint32_t producer_id;
@@ -125,8 +124,8 @@ static void test_fini(void *arg) {  // always running on producer 0
     producer_cnt = opt.producer_num;
     switch (state) {
         case INIT:
-            req_mrs = kv_rdma_alloc_bulk(rdma, KV_RDMA_MR_REQ, opt.value_size + EXTRA_BUF, opt.concurrent_io_num);
-            resp_mrs = kv_rdma_alloc_bulk(rdma, KV_RDMA_MR_RESP, opt.value_size + EXTRA_BUF, opt.concurrent_io_num);
+            req_mrs = kv_rdma_alloc_bulk(rdma, KV_RDMA_MR_REQ, opt.value_size + KV_MSG_MAX_HEADER_SIZE, opt.concurrent_io_num);
+            resp_mrs = kv_rdma_alloc_bulk(rdma, KV_RDMA_MR_RESP, opt.value_size + KV_MSG_MAX_HEADER_SIZE, opt.concurrent_io_num);
             for (size_t i = 0; i < opt.concurrent_io_num; i++) {
                 io_buffers[i].req = kv_rdma_mrs_get(req_mrs, i);
                 io_buffers[i].resp = kv_rdma_mrs_get(resp_mrs, i);

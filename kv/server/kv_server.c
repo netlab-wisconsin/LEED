@@ -115,11 +115,11 @@ static void handler(void *req_h, kv_rmda_mr req, uint32_t req_sz, void *arg) {
     ctx->worker_id = key_frag % opt.ssd_num;
     kv_app_send(ctx->worker_id, io_start, ctx);
 }
-#define EXTRA_BUF 32
+
 
 static void rdma_start(void *arg) {
     kv_rdma_init(&server, opt.server_num);
-    kv_rdma_listen(server, "0.0.0.0", opt.port, opt.concurrent_io_num, EXTRA_BUF + opt.value_size, handler, NULL, NULL, NULL);
+    kv_rdma_listen(server, "0.0.0.0", opt.port, opt.concurrent_io_num, KV_MSG_MAX_HEADER_SIZE + opt.value_size, handler, NULL, NULL, NULL);
 }
 
 static uint32_t io_cnt;

@@ -82,7 +82,7 @@ static void get_options(int argc, char **argv) {
 }
 
 static inline uint128 index_to_key(uint64_t index) { return CityHash128((char *)&index, sizeof(uint64_t)); }
-#define EXTRA_BUF 32
+
 struct io_buffer_t {
     kv_rmda_mr req, resp;
     uint32_t req_sz;
@@ -155,8 +155,8 @@ static void test_fini(void *arg) {  // always running on producer 0
         case INIT:
             printf("rdma client initialized in %lf s.\n", timeval_diff(&tv_start, &tv_end));
             for (size_t i = 0; i < opt.concurrent_io_num; i++) {
-                io_buffers[i].req = kv_rdma_alloc_req(rdma, opt.value_size + EXTRA_BUF);
-                io_buffers[i].resp = kv_rdma_alloc_resp(rdma, opt.value_size + EXTRA_BUF);
+                io_buffers[i].req = kv_rdma_alloc_req(rdma, opt.value_size + KV_MSG_MAX_HEADER_SIZE);
+                io_buffers[i].resp = kv_rdma_alloc_resp(rdma, opt.value_size + KV_MSG_MAX_HEADER_SIZE);
             }
             total_io = opt.num_items;
             state = opt.test_rdma ? TEST : FILL;
@@ -237,7 +237,7 @@ static void test(void *arg) {
             msg->key_len = 16;
             msg->value_offset = msg->key_len;
             msg->value_len = opt.value_size;
-            io->req_sz = EXTRA_BUF;
+            io->req_sz = KV_MSG_MAX_HEADER_SIZE;
             break;
         case INIT:
             assert(false);

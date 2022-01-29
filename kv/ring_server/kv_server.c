@@ -234,11 +234,11 @@ static void handler(void *req_h, kv_rmda_mr req, uint32_t req_sz, void *arg) {
         kv_ring_forward(KV_MSG_KEY(io->msg), io->msg->hop, opt.rpl_num, &io->forward_to, &io->msg->ds_id);
     kv_app_send(io->worker_id, io_start, io);
 }
-#define EXTRA_BUF 32
+
 static void ring_ready_cb(void *arg) {
     io_pool = kv_mempool_create(opt.concurrent_io_num, sizeof(struct io_ctx));
     kv_ring_server_init(opt.local_ip, opt.local_port, opt.vid_num, opt.vid_per_ssd, opt.ssd_num, opt.rpl_num,
-                        opt.concurrent_io_num, EXTRA_BUF + opt.value_size, handler, NULL, NULL, NULL);
+                        opt.concurrent_io_num, KV_MSG_MAX_HEADER_SIZE + opt.value_size, handler, NULL, NULL, NULL);
 }
 
 static void ring_init(void *arg) { server = kv_ring_init(opt.etcd_ip, opt.etcd_port, opt.thread_num, ring_ready_cb, NULL); }
