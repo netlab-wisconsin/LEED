@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <getopt.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -81,17 +82,22 @@ static void get_options(int argc, char **argv) {
         }
 }
 
-static inline uint128 index_to_key(uint64_t index) { return CityHash128((char *)&index, sizeof(uint64_t)); }
 struct io_buffer_t {
     kv_rmda_mr req, resp;
     uint32_t producer_id;
     bool read_modify_write, is_finished;
+    struct timeval io_start;
 } * io_buffers;
 
 struct producer_t {
     uint64_t start_io, end_io;
     uint64_t iocnt;
+    double latency_sum;
+    uint32_t io_per_record;
 } * producers;
+
+#define LATENCY_MAX_RECORD 0x100000  // 1M
+static double latency_records[LATENCY_MAX_RECORD];
 
 static struct timeval tv_start, tv_end;
 enum {
@@ -115,17 +121,34 @@ static void stop(void) {
     kv_ring_fini(ring_fini_cb, NULL);
 }
 
+static int double_cmp(const void *_a, const void *_b) {
+    const double *a = _a, *b = _b;
+    if (*a == *b) return 0;
+    return *a < *b ? -1 : 1;
+}
 static void test(void *arg);
 static void test_fini(void *arg) {  // always running on producer 0
-    uint64_t total_io = 0;
+    static uint64_t total_io = 0;
+    static uint32_t io_per_record = 0;
     static uint32_t producer_cnt = 1;
     if (--producer_cnt) return;
     gettimeofday(&tv_end, NULL);
     producer_cnt = opt.producer_num;
+    double latency_sum = 0;
+    for (size_t i = 0; i < opt.producer_num; i++) {
+        latency_sum += producers[i].latency_sum;
+        producers[i].latency_sum = 0;
+    }
+    if (total_io) {
+        qsort(latency_records, total_io / io_per_record, sizeof(double), double_cmp);
+        printf("99.9%%  tail latency: %lf us\n", latency_records[(uint32_t)(total_io * 0.999 / io_per_record)] * 1000000);
+        printf("average latency: %lf us\n", latency_sum * 1000000 / total_io);
+    }
     switch (state) {
         case INIT:
             req_mrs = kv_rdma_alloc_bulk(rdma, KV_RDMA_MR_REQ, opt.value_size + KV_MSG_MAX_HEADER_SIZE, opt.concurrent_io_num);
-            resp_mrs = kv_rdma_alloc_bulk(rdma, KV_RDMA_MR_RESP, opt.value_size + KV_MSG_MAX_HEADER_SIZE, opt.concurrent_io_num);
+            resp_mrs =
+                kv_rdma_alloc_bulk(rdma, KV_RDMA_MR_RESP, opt.value_size + KV_MSG_MAX_HEADER_SIZE, opt.concurrent_io_num);
             for (size_t i = 0; i < opt.concurrent_io_num; i++) {
                 io_buffers[i].req = kv_rdma_mrs_get(req_mrs, i);
                 io_buffers[i].resp = kv_rdma_mrs_get(resp_mrs, i);
@@ -140,28 +163,29 @@ static void test_fini(void *arg) {  // always running on producer 0
             }
             break;
         case FILL:
-            printf("Write rate: %f\n", ((double)opt.num_items / timeval_diff(&tv_start, &tv_end)));
+            printf("Write rate: %lf\n", ((double)opt.num_items / timeval_diff(&tv_start, &tv_end)));
             puts("db created successfully.");
             state = opt.seq_read ? SEQ_READ : opt.seq_write ? SEQ_WRITE : TRANSACTION;
             total_io = opt.operation_cnt;
             break;
         case SEQ_WRITE:
-            printf("SEQ_WRITE rate: %f\n", ((double)opt.operation_cnt / timeval_diff(&tv_start, &tv_end)));
+            printf("SEQ_WRITE rate: %lf\n", ((double)opt.operation_cnt / timeval_diff(&tv_start, &tv_end)));
             stop();
             return;
         case SEQ_READ:
-            printf("SEQ_READ rate: %f\n", ((double)opt.operation_cnt / timeval_diff(&tv_start, &tv_end)));
+            printf("SEQ_READ rate: %lf\n", ((double)opt.operation_cnt / timeval_diff(&tv_start, &tv_end)));
             stop();
             return;
         case TRANSACTION:
-            printf("TRANSACTION rate: %f\n", ((double)opt.operation_cnt / timeval_diff(&tv_start, &tv_end)));
+            printf("TRANSACTION rate: %lf\n", ((double)opt.operation_cnt / timeval_diff(&tv_start, &tv_end)));
             stop();
             return;
     }
     for (size_t i = 0; i < opt.concurrent_io_num; i++) io_buffers[i].is_finished = false;
-    gettimeofday(&tv_start, NULL);
+    io_per_record = (uint32_t)ceil(((double)total_io) / LATENCY_MAX_RECORD);
     uint64_t io_per_producer = total_io / opt.producer_num;
     for (size_t i = 0; i < opt.producer_num; i++) {
+        producers[i].io_per_record = io_per_record;
         producers[i].iocnt = opt.concurrent_io_num / opt.producer_num;
         producers[i].start_io = i * io_per_producer;
         producers[i].end_io = (i + 1) * io_per_producer;
@@ -170,6 +194,7 @@ static void test_fini(void *arg) {  // always running on producer 0
             kv_app_send(opt.thread_num + i, test, io_buffers + j);
         }
     }
+    gettimeofday(&tv_start, NULL);
 }
 
 static inline void do_transaction(struct io_buffer_t *io, struct kv_msg *msg) {
@@ -196,7 +221,15 @@ static inline void do_transaction(struct io_buffer_t *io, struct kv_msg *msg) {
 
 static void test(void *arg) {
     struct io_buffer_t *io = arg;
+    struct producer_t *p = io ? producers + io->producer_id : producers;
     if (io && io->is_finished) {
+        struct timeval io_end;
+        gettimeofday(&io_end, NULL);
+        double latency = timeval_diff(&io->io_start, &io_end);
+        p->latency_sum += latency;
+        if (p->start_io % p->io_per_record == 0) {
+            latency_records[p->start_io / p->io_per_record] = latency;
+        }
         if (((struct kv_msg *)kv_rdma_get_resp_buf(io->resp))->type != KV_MSG_OK) {
             fprintf(stderr, "io fail. \n");
             exit(-1);
@@ -210,7 +243,6 @@ static void test(void *arg) {
         }
     }
 
-    struct producer_t *p = io ? producers + io->producer_id : producers;
     if (p->start_io == p->end_io) {
         if (--p->iocnt == 0) {
             kv_app_send(opt.thread_num, test_fini, NULL);
@@ -243,6 +275,7 @@ static void test(void *arg) {
     }
     io->is_finished = true;
     p->start_io++;
+    gettimeofday(&io->io_start, NULL);
     kv_ring_dispatch(io->req, io->resp, kv_rdma_get_resp_buf(io->resp), test, io);
 }
 

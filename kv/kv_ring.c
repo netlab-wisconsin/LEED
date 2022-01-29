@@ -381,7 +381,7 @@ static void ring_init(uint32_t vid_num) {
         self->dq_pollers = kv_calloc(self->thread_num, sizeof(void *));
         for (size_t i = 0; i < self->thread_num; i++) {
             TAILQ_INIT(self->dqs + i);
-            kv_app_poller_register_on(self->thread_id + i, dispatch_dequeue, self, 100, &self->dq_pollers[i]);
+            kv_app_poller_register_on(self->thread_id + i, dispatch_dequeue, self, 200, &self->dq_pollers[i]);
         }
     }
 }
