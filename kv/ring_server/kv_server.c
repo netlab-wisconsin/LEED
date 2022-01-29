@@ -139,6 +139,7 @@ static void send_response(void *arg) {
     struct io_ctx *io = arg;
     if (io->msg->type == KV_MSG_SET) io->msg->value_len = 0;
     io->msg->type = io->success ? KV_MSG_OK : KV_MSG_ERR;
+    io->msg->q_info = ds_queue.q_info[io->worker_id];
     kv_rdma_make_resp(io->req_h, (uint8_t *)io->msg, KV_MSG_SIZE(io->msg));
     kv_mempool_put(io_pool, io);
 }

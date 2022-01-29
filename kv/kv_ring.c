@@ -336,6 +336,10 @@ static void node_handler(void *arg) {
         node->is_connected = false;
         node->info = info;
         kv_ds_queue_init(&node->ds_queue, info->ds_num);
+        for (uint32_t i = 0; i < info->ds_num; ++i) {
+            node->ds_queue.q_info[i] = (struct kv_ds_q_info){0, 0};
+            node->ds_queue.io_cnt[i] = 0;
+        }
         // node may already exist?
         HASH_ADD(hh, self->nodes, info->rdma_ip, 24, node);  // ip & port as key
         if (node->is_local) {
