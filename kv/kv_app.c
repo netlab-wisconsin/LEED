@@ -3,11 +3,11 @@
 #include <pthread.h>
 #include <stdio.h>
 
-#include "utils/concurrentqueue.h"
 #include "kv_memory.h"
 #include "spdk/env.h"
 #include "spdk/event.h"
 #include "spdk/thread.h"
+#include "utils/concurrentqueue.h"
 
 pthread_mutex_t g_lock;
 static struct kv_app_t g_app;
@@ -43,17 +43,14 @@ void kv_app_send_without_token(uint32_t index, kv_app_func func, void *arg) {
     moodycamel_cq_enqueue(g_threads[index].cq, msg);
 }
 
-#define MAX_POLL_SZ 16
+#define MAX_POLL_SZ 32
 static int msg_poller(void *arg) {
     struct thread_data *data = arg;
     struct kv_app_task *msg[MAX_POLL_SZ];
-    size_t size;
-    while ((size = moodycamel_cq_try_dequeue_bulk_with_token(data->cq, data->c_token, (MoodycamelValue *)msg, MAX_POLL_SZ))) {
-        for (size_t i = 0; i < size; i++) {
-            if (msg[i]->func) msg[i]->func(msg[i]->arg);
-            // kv_free(msg[i]);
-            spdk_mempool_put(g_event_mempool, msg[i]);
-        }
+    size_t size = moodycamel_cq_try_dequeue_bulk_with_token(data->cq, data->c_token, (MoodycamelValue *)msg, MAX_POLL_SZ);
+    for (size_t i = 0; i < size; i++) {
+        if (msg[i]->func) msg[i]->func(msg[i]->arg);
+        spdk_mempool_put(g_event_mempool, msg[i]);
     }
     return 0;
 }

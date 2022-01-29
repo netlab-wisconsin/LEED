@@ -6,8 +6,8 @@
 #include "kv_memory.h"
 void kv_ds_queue_init(struct kv_ds_queue *self, uint32_t ds_cnt) {
     self->ds_cnt = ds_cnt;
-    self->q_info = kv_malloc(sizeof(*self->q_info));
-    self->io_cnt = kv_malloc(sizeof(*self->io_cnt));
+    self->q_info = kv_calloc(ds_cnt, sizeof(*self->q_info));
+    self->io_cnt = kv_calloc(ds_cnt, sizeof(*self->io_cnt));
 }
 void kv_ds_queue_fini(struct kv_ds_queue *self) {
     kv_free(self->q_info);

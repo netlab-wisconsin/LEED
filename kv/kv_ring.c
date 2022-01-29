@@ -138,6 +138,21 @@ static inline struct vid_entry *find_vid_entry_from_key(char *key, struct vid_ri
     if (p_ring) *p_ring = ring + index;
     return entry;
 }
+static inline struct vid_entry *get_tail(char *key) {
+    struct vid_ring *ring;
+    struct vid_entry *base_entry = find_vid_entry_from_key(key, &ring), *entry = base_entry;
+    for (uint16_t i = 1; i < base_entry->node->info->rpl_num; i++) {
+        struct vid_entry *next = CIRCLEQ_LOOP_NEXT(ring, entry, entry);
+        if (next == base_entry) break;
+        entry = next;
+    }
+    return entry;
+}
+connection_handle kv_ring_get_tail(char *key, uint32_t r_num) {
+    struct vid_entry *entry = get_tail(key);
+    return entry->node->is_local ? NULL : entry->node->conn;
+}
+
 static void dispatch_dequeue(void);
 static void dispatch_send_cb(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_mr resp, void *cb_arg) {
     struct dispatch_ctx *ctx = cb_arg;
@@ -147,7 +162,6 @@ static void dispatch_send_cb(connection_handle h, bool success, kv_rmda_mr req, 
     if (!success) msg->type = KV_MSG_ERR;
     if (ctx->cb) kv_app_send(ctx->thread_id, ctx->cb, ctx->cb_arg);
     kv_free(ctx);
-    dispatch_dequeue();
 }
 
 static bool try_send_req(struct dispatch_ctx *ctx) {
@@ -161,10 +175,11 @@ static bool try_send_req(struct dispatch_ctx *ctx) {
         uint32_t *io_cnt = kv_calloc(rpl_num, sizeof(uint32_t));
         struct vid_entry *x = entry, **entries = kv_calloc(rpl_num, sizeof(struct vid_entry *));
         uint32_t i = 0;
-        for (; i < rpl_num; ++i) {
+        while (i < rpl_num) {
             q_info[i] = x->node->ds_queue.q_info[x->vid->ds_id];
             io_cnt[i] = x->node->ds_queue.io_cnt[x->vid->ds_id];
             entries[i] = x;
+            ++i;
             if ((x = CIRCLEQ_LOOP_NEXT(ring, entry, entry)) == entry) break;
         }
         struct kv_ds_q_info *y = kv_ds_queue_find(q_info, io_cnt, i, kv_ds_op_cost(KV_DS_GET));
@@ -172,6 +187,7 @@ static bool try_send_req(struct dispatch_ctx *ctx) {
             x = entries[y - q_info];
             x->node->ds_queue.io_cnt[x->vid->ds_id]++;
             x->node->ds_queue.q_info[x->vid->ds_id] = *y;
+            msg->ds_id = x->vid->ds_id;
             kv_rmda_send_req(x->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->resp, ctx->resp_addr, dispatch_send_cb, ctx);
         }
         kv_free(entries);
@@ -185,11 +201,22 @@ static bool try_send_req(struct dispatch_ctx *ctx) {
         if (kv_ds_queue_find(&q_info, &io_cnt, 1, cost)) {
             entry->node->ds_queue.io_cnt[entry->vid->ds_id]++;
             entry->node->ds_queue.q_info[entry->vid->ds_id] = q_info;
+            msg->ds_id = entry->vid->ds_id;
             kv_rmda_send_req(entry->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->resp, ctx->resp_addr, dispatch_send_cb, ctx);
             return true;
         }
         return false;
     }
+}
+static bool try_send_req_0(struct dispatch_ctx *ctx) {
+    struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(ctx->req);
+    uint8_t *key = KV_MSG_KEY(msg);
+    struct vid_entry *entry = msg->type == KV_MSG_GET ? get_tail(key) : find_vid_entry_from_key(key, NULL);
+    ctx->entry = entry;
+    entry->node->ds_queue.io_cnt[entry->vid->ds_id]++;
+    msg->ds_id = entry->vid->ds_id;
+    kv_rmda_send_req(entry->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->resp, ctx->resp_addr, dispatch_send_cb, ctx);
+    return true;
 }
 static void dispatch_dequeue(void) {
     struct kv_ring *self = &g_ring;
@@ -199,7 +226,7 @@ static void dispatch_dequeue(void) {
         if (try_send_req(x)) {
             if (y == NULL) {
                 STAILQ_REMOVE_HEAD(dp, next);
-                y = STAILQ_FIRST(dp);
+                if ((y = STAILQ_FIRST(dp)) == NULL) break;
             } else
                 y->next.stqe_next = x->next.stqe_next;
         } else {
@@ -210,9 +237,10 @@ static void dispatch_dequeue(void) {
 static void dispatch(void *arg) {
     struct kv_ring *self = &g_ring;
     struct dispatch_ctx *ctx = arg;
-    if (!try_send_req(ctx)) {
-        struct dispatch_queue *dp = &self->dqs[kv_app_get_thread_index() - self->thread_id];
-        STAILQ_INSERT_TAIL(dp, ctx, next);
+    if (!try_send_req_0(ctx)) {
+        // struct dispatch_queue *dp = &self->dqs[kv_app_get_thread_index() - self->thread_id];
+        // STAILQ_INSERT_TAIL(dp, ctx, next);
+        kv_app_send(self->thread_id + random() % self->thread_num, dispatch, ctx);
     }
 }
 void kv_ring_dispatch(kv_rmda_mr req, kv_rmda_mr resp, void *resp_addr, kv_ring_cb cb, void *cb_arg) {
@@ -244,17 +272,6 @@ void kv_ring_forward(char *key, uint32_t hop, uint32_t r_num, connection_handle 
     assert(!entry->node->is_local);
     *h = entry->node->conn;
     *ds_id = entry->vid->ds_id;
-}
-
-connection_handle kv_ring_get_tail(char *key, uint32_t r_num) {
-    struct vid_ring *ring;
-    struct vid_entry *base_entry = find_vid_entry_from_key(key, &ring), *entry = base_entry;
-    for (uint16_t i = 1; i < r_num; i++) {
-        struct vid_entry *next = CIRCLEQ_LOOP_NEXT(ring, entry, entry);
-        if (next == base_entry) break;
-        entry = next;
-    }
-    return entry->node->is_local ? NULL : entry->node->conn;
 }
 
 static void rdma_disconnect_cb(void *arg) {
