@@ -319,7 +319,28 @@ void kv_bucket_free_extra(struct kv_bucket_pool *entry) {
         }
     }
 }
-
+// --- debug ---
+static inline void verify_buckets(struct kv_bucket_pool *entry) {
+#ifndef NDEBUG
+    uint32_t index = UINT32_MAX, len, i = 0;
+    struct kv_bucket_chain_entry *ce;
+    TAILQ_FOREACH(ce, &entry->buckets, entry) {
+        for (struct kv_bucket *bucket = ce->bucket; bucket - ce->bucket < ce->len; ++bucket) {
+            if (index == UINT32_MAX) {
+                index = bucket->index;
+                assert(index < entry->self->bucket_num);
+                len = bucket->chain_length;
+            } else {
+                assert(bucket->chain_index == i);
+                assert(bucket->chain_length == len);
+                assert(bucket->index == index);
+            }
+            ++i;
+        }
+    }
+    assert(len == i);
+#endif
+}
 // --- bucket_pool ---
 static void free_pool_entry(struct kv_bucket_log *self, struct kv_bucket_pool *entry) {
     HASH_DEL(self->pool, entry);
@@ -335,6 +356,7 @@ static void free_pool_entry(struct kv_bucket_log *self, struct kv_bucket_pool *e
 
 static void pool_read_cb(bool success, void *arg) {
     struct kv_bucket_pool *entry = arg;
+    verify_buckets(entry);
     entry->is_valid = true;
     struct kv_bucket_pool_get_q *wq;
     while ((wq = STAILQ_FIRST(&entry->get_q)) != NULL) {
@@ -382,9 +404,9 @@ void kv_bucket_pool_get(struct kv_bucket_log *self, uint32_t index, kv_bucket_po
 
 struct pool_put_ctx {
     struct kv_bucket_log *self;
-    struct kv_bucket_pool_head pool_head;
     kv_circular_log_io_cb cb;
     void *cb_arg;
+    struct kv_bucket_pool_head pool_head;
 };
 static void pool_write_cb(bool success, void *arg) {
     struct pool_put_ctx *ctx = arg;
@@ -392,6 +414,7 @@ static void pool_write_cb(bool success, void *arg) {
     struct kv_bucket_pool *entry, *tmp;
     if (success) {
         STAILQ_FOREACH(entry, &ctx->pool_head, next) {
+            verify_buckets(entry);
             struct kv_bucket *bucket = TAILQ_FIRST(&entry->buckets)->bucket;
             self->bucket_meta[bucket->index].bucket_offset = entry->offset;
             self->bucket_meta[bucket->index].chain_length = bucket->chain_length;
@@ -404,17 +427,23 @@ static void pool_write_cb(bool success, void *arg) {
     kv_free(ctx);
 }
 
-void kv_bucket_pool_put_bulk(struct kv_bucket_log *self, struct kv_bucket_pool_head pool_head, kv_circular_log_io_cb cb,
+void kv_bucket_pool_put_bulk(struct kv_bucket_log *self, struct kv_bucket_pool_head *pool_head, kv_circular_log_io_cb cb,
                              void *cb_arg) {
     struct pool_put_ctx *ctx = kv_malloc(sizeof(struct pool_put_ctx));
-    *ctx = (struct pool_put_ctx){self, pool_head, cb, cb_arg};
+    *ctx = (struct pool_put_ctx){self, cb, cb_arg};
+    STAILQ_INIT(&ctx->pool_head);
     int iovcnt = 0;
-    struct kv_bucket_pool *entry;
+    struct kv_bucket_pool *entry, *tmp;
     struct kv_bucket_chain_entry *chain_entry;
-    STAILQ_FOREACH(entry, &ctx->pool_head, next) { TAILQ_FOREACH(chain_entry, &entry->buckets, entry) iovcnt++; }
+    STAILQ_FOREACH_SAFE(entry, pool_head, next, tmp) {
+        assert(!TAILQ_EMPTY(&entry->buckets));
+        TAILQ_FOREACH(chain_entry, &entry->buckets, entry) iovcnt++;
+        STAILQ_INSERT_TAIL(&ctx->pool_head, entry, next);
+    }
     struct iovec *buckets = kv_calloc(iovcnt, sizeof(struct iovec)), *p = buckets;
     uint32_t len = 0;
     STAILQ_FOREACH(entry, &ctx->pool_head, next) {
+        verify_buckets(entry);
         entry->offset = (self->log.tail + len) % self->log.size;
         len += TAILQ_FIRST(&entry->buckets)->bucket->chain_length;
         TAILQ_FOREACH(chain_entry, &entry->buckets, entry) {
@@ -434,7 +463,7 @@ void kv_bucket_pool_put(struct kv_bucket_log *self, struct kv_bucket_pool *entry
         struct kv_bucket_pool_head pool_head;
         STAILQ_INIT(&pool_head);
         STAILQ_INSERT_HEAD(&pool_head, entry, next);
-        kv_bucket_pool_put_bulk(self, pool_head, cb, cb_arg);
+        kv_bucket_pool_put_bulk(self, &pool_head, cb, cb_arg);
         return;
     }
     if (--entry->ref_cnt == 0) free_pool_entry(self, entry);

@@ -100,15 +100,6 @@ static void print_buckets(struct kv_bucket *buckets) {
     puts("-----");
 }
 
-static inline void verify_buckets(struct kv_bucket *buckets, uint32_t index, uint8_t length) {
-    assert(length);
-    for (size_t i = 0; i < length; i++) {
-        assert(buckets[i].chain_index == i);
-        assert(buckets[i].chain_length == length);
-        assert(buckets[i].index == index);
-    }
-}
-
 //--- find item ---
 
 static void find_item_plus(struct kv_data_store *self, struct kv_bucket_pool *entry, uint8_t *key, uint8_t key_length,
@@ -144,34 +135,26 @@ static struct kv_item *find_empty(struct kv_data_store *self, struct kv_bucket_p
     return NULL;
 }
 
-static void fill_the_hole(struct kv_data_store *self, struct kv_bucket_pool *entry) {
+static void fill_the_hole(struct kv_data_store *self, struct kv_bucket_pool *entry) { 
     if (TAILQ_FIRST(&entry->buckets)->bucket->chain_length == 1) return;
 
     struct kv_bucket_chain_entry *ce = TAILQ_LAST(&entry->buckets, kv_bucket_chain);
     struct kv_bucket *last_bucket = &ce->bucket[ce->len - 1];
-
-    ce = TAILQ_FIRST(&entry->buckets);
-    struct kv_bucket *bucket = ce->bucket;
-    struct kv_item *item = bucket->items;
-    for (size_t i = 0; i < KV_ITEM_PER_BUCKET; i++) {
-        struct kv_item *item_to_move = last_bucket->items + i;
-        if (KV_EMPTY_ITEM(item_to_move)) continue;
-        while (true) {
-            for (; bucket - ce->bucket < ce->len && bucket != last_bucket; item = (++bucket)->items)
-                for (; item - bucket->items < KV_ITEM_PER_BUCKET; ++item)
-                    if (KV_EMPTY_ITEM(item)) {
-                        kv_memcpy(item, item_to_move, sizeof(struct kv_item));
-                        item_to_move->key_length = 0;
-                        goto find_next_item_to_move;
+    struct kv_item *item_to_move = last_bucket->items;
+    TAILQ_FOREACH(ce, &entry->buckets, entry) {
+        for (struct kv_bucket *bucket = ce->bucket; bucket - ce->bucket < ce->len && bucket != last_bucket; ++bucket)
+            for (struct kv_item *item = bucket->items; item - bucket->items < KV_ITEM_PER_BUCKET; ++item)
+                if (KV_EMPTY_ITEM(item)) {
+                    while (KV_EMPTY_ITEM(item_to_move)) {
+                        if (++item_to_move - last_bucket->items == KV_ITEM_PER_BUCKET) {
+                            kv_bucket_free_extra(entry);
+                            return;
+                        }
                     }
-            ce = TAILQ_NEXT(ce, entry);
-            if (ce == NULL) return;  // no hole to fill
-            bucket = ce->bucket;
-        }
-    find_next_item_to_move:;
+                    *item = *item_to_move;
+                    item_to_move->key_length = 0;
+                };
     }
-    // last bucket is empty
-    kv_bucket_free_extra(entry);
 }
 
 // --- set ---

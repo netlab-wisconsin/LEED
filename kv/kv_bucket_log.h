@@ -105,7 +105,7 @@ void kv_bucket_free_extra(struct kv_bucket_pool *entry);
 void kv_bucket_pool_get(struct kv_bucket_log *self, uint32_t index, kv_bucket_pool_get_cb cb, void *cb_arg);
 void kv_bucket_pool_put(struct kv_bucket_log *self, struct kv_bucket_pool *entry, bool write_back, kv_circular_log_io_cb cb,
                         void *cb_arg);
-void kv_bucket_pool_put_bulk(struct kv_bucket_log *self, struct kv_bucket_pool_head pool_head, kv_circular_log_io_cb cb,
+void kv_bucket_pool_put_bulk(struct kv_bucket_log *self, struct kv_bucket_pool_head *pool_head, kv_circular_log_io_cb cb,
                              void *cb_arg);
                              
 void kv_bucket_lock_add_index(struct kv_bucket_lock_entry **set, uint32_t index);
