@@ -4,7 +4,7 @@
 
 #include "kv_circular_log.h"
 #include "utils/uthash.h"
-
+#include "kv_memory.h"
 #define KV_MAX_KEY_LENGTH 20
 #define KV_MIN_KEY_LENGTH 8
 #define KV_ITEM_PER_BUCKET 16
@@ -74,6 +74,7 @@ struct kv_bucket_log {
     void *waiting_queue;
     bool init;
     struct kv_bucket_pool *pool;
+    struct kv_mempool *mem_pool;
 };
 
 static inline uint32_t kv_bucket_log_offset(struct kv_bucket_log *self) { return (uint32_t)self->log.tail; }
