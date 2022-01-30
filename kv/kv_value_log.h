@@ -25,9 +25,10 @@ struct kv_value_log {
     uint64_t blk_mask, blk_shift;
     uint32_t *index_buf, index_buf_len;
     struct bucket_list_head bucket_list;
-    uint32_t bucket_list_size,valid_bucket_list_size;
+    uint32_t bucket_list_size, valid_bucket_list_size;
     uint32_t bucket_prefetch_io_cnt, compact_io_cnt;
     uint64_t prefetch_tail;
+    struct bucket_list_entry *valid_bucket_tail;
 };
 
 static inline uint64_t kv_value_log_offset(struct kv_value_log *self) { return self->log.tail << self->blk_shift; }

@@ -105,10 +105,14 @@ struct compact_ctx {
 static void prefetch_bucket(void *arg);
 static void get_bucket_cb(struct kv_bucket_pool *pool, void *arg) {
     struct bucket_list_entry *list_entry = arg;
+    struct kv_value_log *self = list_entry->self;
     list_entry->entry = pool;
-    list_entry->self->bucket_prefetch_io_cnt--;
-    list_entry->self->valid_bucket_list_size++;
-    prefetch_bucket(list_entry->self);
+    self->bucket_prefetch_io_cnt--;
+    for (; self->valid_bucket_tail; self->valid_bucket_tail = TAILQ_NEXT(self->valid_bucket_tail, next)) {
+        if (self->valid_bucket_tail->entry == NULL) break;
+        self->valid_bucket_list_size++;
+    }
+    prefetch_bucket(self);
 }
 static void prefetch_bucket(void *arg) {
     struct kv_value_log *self = arg;
@@ -127,8 +131,9 @@ static void prefetch_bucket(void *arg) {
             struct bucket_list_entry *list_entry = kv_malloc(sizeof(struct bucket_list_entry));
             TAILQ_INSERT_TAIL(&self->bucket_list, list_entry, next);
             list_entry->self = self;
+            list_entry->entry = NULL;
             list_entry->value_offset = self->prefetch_tail << KV_VALUE_LOG_UNIT_SHIFT;
-            self->bucket_list_size++;
+            if (self->bucket_list_size++ == 0) self->valid_bucket_tail = list_entry;
             self->bucket_prefetch_io_cnt++;
             self->prefetch_tail = (self->prefetch_tail + 1) % (self->index_log.size << KV_INDEX_LOG_ENTRY_BIT);
             kv_bucket_pool_get(self->bucket_log, index_buf[i], get_bucket_cb, list_entry);
