@@ -5,6 +5,7 @@
 #include <sys/queue.h>
 #include <sys/uio.h>
 
+#include "kv_app.h"
 #include "kv_memory.h"
 #include "utils/uthash.h"
 static inline uint64_t align(struct kv_value_log *self, uint64_t size) {
@@ -90,8 +91,8 @@ static void index_log_write(struct kv_value_log *self, uint64_t offset, uint32_t
     self->index_buf[blk_i * KV_INDEX_LOG_ENTRY_PER_BLOCK + i] = bucket_index;
 }
 // --- compact ---
-#define COMPACT_CON_IO 4U
-#define COMPACT_CON_READ 512U
+#define COMPACT_CON_IO 1U
+#define COMPACT_CON_READ 128U
 #define COMPACT_WRITE_LEN 256U
 
 struct compact_ctx {
@@ -112,7 +113,7 @@ static void get_bucket_cb(struct kv_bucket_pool *pool, void *arg) {
         if (self->valid_bucket_tail->entry == NULL) break;
         self->valid_bucket_list_size++;
     }
-    prefetch_bucket(self);
+    kv_app_send(kv_app_get_thread_index(),prefetch_bucket,self);
 }
 static void prefetch_bucket(void *arg) {
     struct kv_value_log *self = arg;
@@ -123,7 +124,7 @@ static void prefetch_bucket(void *arg) {
         kv_circular_log_fetch_one(&self->index_log, index_log_offset, (void **)&index_buf);
         for (size_t i = self->prefetch_tail & KV_INDEX_LOG_ENTRY_MASK; i < KV_INDEX_LOG_ENTRY_PER_BLOCK; i++) {
             if (self->bucket_prefetch_io_cnt >= COMPACT_CON_READ) return;
-            if (self->bucket_list_size >= 4 * COMPACT_CON_IO * COMPACT_WRITE_LEN) return;
+            if (self->bucket_list_size >= 32 * COMPACT_WRITE_LEN) return;
             if (index_buf[i] == UINT32_MAX) {
                 self->prefetch_tail = (self->prefetch_tail + 1) % (self->index_log.size << KV_INDEX_LOG_ENTRY_BIT);
                 continue;
@@ -133,8 +134,8 @@ static void prefetch_bucket(void *arg) {
             list_entry->self = self;
             list_entry->entry = NULL;
             list_entry->value_offset = self->prefetch_tail << KV_VALUE_LOG_UNIT_SHIFT;
-            if (self->bucket_list_size++ == 0) self->valid_bucket_tail = list_entry;
-            self->bucket_prefetch_io_cnt++;
+            self->bucket_list_size++; 
+            if(self->bucket_prefetch_io_cnt++==0)self->valid_bucket_tail = list_entry;
             self->prefetch_tail = (self->prefetch_tail + 1) % (self->index_log.size << KV_INDEX_LOG_ENTRY_BIT);
             kv_bucket_pool_get(self->bucket_log, index_buf[i], get_bucket_cb, list_entry);
         }

@@ -191,7 +191,7 @@ static void init(struct kv_bucket_log *self, kv_circular_log_io_cb cb, void *cb_
     }
     self->waiting_queue = kv_malloc(sizeof(struct bucket_lock_q_head));
     TAILQ_INIT((struct bucket_lock_q_head *)self->waiting_queue);
-    self->mem_pool = kv_mempool_create(8191, sizeof(struct kv_bucket));
+    self->mem_pool = kv_mempool_create(20000, sizeof(struct kv_bucket));
 
     self->init = false;
     if (cb) cb(true, cb_arg);
