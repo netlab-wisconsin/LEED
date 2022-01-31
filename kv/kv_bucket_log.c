@@ -123,7 +123,7 @@ static void compact_lock_cb(void *arg) {
     struct compact_ctx *ctx = arg;
     struct kv_bucket_log *self = ctx->self;
     uint32_t iovcnt = 0;
-    struct iovec *iov0 = kv_calloc(HASH_COUNT(ctx->index_set), sizeof(struct iovec));
+    struct iovec *iov0 = kv_calloc(HASH_COUNT(ctx->index_set) + 2, sizeof(struct iovec));
     struct iovec iov[2];
     struct kv_bucket_lock_entry *unlock_set = NULL, *x, *tmp;
     HASH_ITER(hh, ctx->index_set, x, tmp) {
