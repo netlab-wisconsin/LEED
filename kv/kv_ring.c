@@ -10,6 +10,7 @@
 #include "kv_memory.h"
 #include "kv_msg.h"
 #include "pthread.h"
+#include "utils/city.h"
 #include "utils/uthash.h"
 
 #define CIRCLEQ_FOREACH_SAFE(var, head, field, tvar) \
@@ -60,6 +61,21 @@ struct kv_ring {
 
 static void random_vid(char *vid) {
     for (size_t i = 0; i < KV_VID_LEN; i++) vid[i] = random() & 0xFF;
+}
+struct vid_src_buf {
+    char rdma_ip[16];
+    char rdma_port[8];
+    uint64_t index;
+};
+static inline void hash_vid(char *vid, char *ip, char *port, uint32_t index) {
+    struct vid_src_buf buf;
+    kv_memset(vid, 0, 20);
+    kv_memset(&buf, 0, sizeof(buf));
+    strcpy(buf.rdma_ip, ip);
+    strcpy(buf.rdma_port, port);
+    buf.index = index;
+    uint128 hash = CityHash128((const char *)&buf, sizeof(buf));
+    kv_memcpy(vid, &hash, sizeof(hash));
 }
 static inline size_t ring_size(struct vid_ring *ring) {
     struct vid_entry *x;
@@ -432,7 +448,8 @@ void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uin
     uint32_t ds_id = 0;
     for (size_t i = 0; i < vid_per_ssd * ds_num; i++) {
         info->vids[stats[i].index].ds_id = ds_id;
-        random_vid(info->vids[stats[i].index].vid);
+        // random_vid(info->vids[stats[i].index].vid);
+        hash_vid(info->vids[stats[i].index].vid, local_ip, local_port, i);
         ds_id = (ds_id + 1) % ds_num;
     }
     kv_free(stats);
