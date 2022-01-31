@@ -140,6 +140,9 @@ void kv_circular_log_fetch_one(struct kv_circular_log *self, uint64_t offset, vo
     *buf = self->fetch.buffer + offset * self->storage->block_size;
 }
 
+bool kv_circular_log_is_fetchable(struct kv_circular_log *self, uint64_t offset) {
+    return (self->size - self->head + offset) % self->size < kv_circular_log_length(&self->fetch);
+}
 // --- iov ---
 struct iov_ctx {
     struct iovec *blocks;

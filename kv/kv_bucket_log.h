@@ -15,6 +15,7 @@ typedef void (*kv_bucket_pool_get_cb)(struct kv_bucket_pool *pool, void *arg);
 
 struct kv_bucket_lock_entry {
     uint32_t index;
+    uint32_t ref_cnt;
     UT_hash_handle hh;
 };
 
@@ -57,9 +58,12 @@ struct kv_bucket_pool {
     uint32_t ref_cnt;
     bool is_valid;
     struct kv_bucket_chain buckets;
+    uint32_t offset;
     STAILQ_HEAD(, kv_bucket_pool_get_q) get_q;
+    STAILQ_ENTRY(kv_bucket_pool) next;
     UT_hash_handle hh;
 };
+STAILQ_HEAD(kv_bucket_pool_head, kv_bucket_pool);
 struct kv_bucket_log {
     struct kv_circular_log log;
     uint32_t size;
@@ -101,7 +105,9 @@ void kv_bucket_free_extra(struct kv_bucket_pool *entry);
 void kv_bucket_pool_get(struct kv_bucket_log *self, uint32_t index, kv_bucket_pool_get_cb cb, void *cb_arg);
 void kv_bucket_pool_put(struct kv_bucket_log *self, struct kv_bucket_pool *entry, bool write_back, kv_circular_log_io_cb cb,
                         void *cb_arg);
-
+void kv_bucket_pool_put_bulk(struct kv_bucket_log *self, struct kv_bucket_pool_head *pool_head, kv_circular_log_io_cb cb,
+                             void *cb_arg);
+                             
 void kv_bucket_lock_add_index(struct kv_bucket_lock_entry **set, uint32_t index);
 void kv_bucket_lock(struct kv_bucket_log *self, struct kv_bucket_lock_entry *set, kv_task_cb cb, void *cb_arg);
 void kv_bucket_unlock(struct kv_bucket_log *self, struct kv_bucket_lock_entry **set);
