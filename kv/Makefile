@@ -19,7 +19,7 @@ DIRS-y += test_kv_ring
 DIRS-y += ring_client
 DIRS-y += ring_server
 DIRS-y += ring_ycsb_client
-
+DIRS-y += ycsb_benchmark
 
 
 .PHONY: all clean $(DIRS-y)
