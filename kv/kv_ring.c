@@ -141,10 +141,10 @@ static inline struct vid_entry *find_vid_entry_from_key(char *key, struct vid_ri
     if (p_ring) *p_ring = ring + index;
     return entry;
 }
-static inline struct vid_entry *get_tail(char *key) {
+static inline struct vid_entry *get_node(char *key, uint32_t n) {
     struct vid_ring *ring;
     struct vid_entry *base_entry = find_vid_entry_from_key(key, &ring), *entry = base_entry;
-    for (uint16_t i = 1; i < base_entry->node->info->rpl_num; i++) {
+    for (uint16_t i = 1; i < n; i++) {
         struct vid_entry *next = CIRCLEQ_LOOP_NEXT(ring, entry, entry);
         if (next == base_entry) break;
         entry = next;
@@ -152,7 +152,7 @@ static inline struct vid_entry *get_tail(char *key) {
     return entry;
 }
 connection_handle kv_ring_get_tail(char *key, uint32_t r_num) {
-    struct vid_entry *entry = get_tail(key);
+    struct vid_entry *entry = get_node(key, r_num);
     return entry->node->is_local ? NULL : entry->node->conn;
 }
 
@@ -165,8 +165,8 @@ static void dispatch_send_cb(connection_handle h, bool success, kv_rmda_mr req, 
     if (ctx->cb) kv_app_send(ctx->thread_id, ctx->cb, ctx->cb_arg);
     kv_free(ctx);
 }
-
-#if 1
+#define DISPATCH_TYPE 0
+#if DISPATCH_TYPE == 0
 static bool try_send_req(struct dispatch_ctx *ctx) {
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(ctx->req);
     struct vid_ring *ring;
@@ -216,7 +216,14 @@ static bool try_send_req(struct dispatch_ctx *ctx) {
 static bool try_send_req(struct dispatch_ctx *ctx) {
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(ctx->req);
     uint8_t *key = KV_MSG_KEY(msg);
-    struct vid_entry *entry = msg->type == KV_MSG_GET ? get_tail(key) : find_vid_entry_from_key(key, NULL);
+    struct vid_entry *entry = find_vid_entry_from_key(key, NULL);
+    if (msg->type == KV_MSG_GET) {
+#if DISPATCH_TYPE == 1
+        entry = get_node(key, entry->node->info->rpl_num);  // forward to tail
+#else
+        entry = get_node(key, (random() % entry->node->info->rpl_num) + 1);  // random
+#endif
+    }
     ctx->entry = entry;
     entry->node->ds_queue.io_cnt[entry->vid->ds_id]++;
     msg->ds_id = entry->vid->ds_id;
