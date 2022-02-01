@@ -171,7 +171,6 @@ static bool try_send_req(struct dispatch_ctx *ctx) {
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(ctx->req);
     struct vid_ring *ring;
     struct vid_entry *entry = find_vid_entry_from_key(KV_MSG_KEY(msg), &ring);
-    ctx->entry = entry;
     if (msg->type == KV_MSG_GET) {
         uint32_t rpl_num = entry->node->info->rpl_num;
         struct kv_ds_q_info *q_info = kv_calloc(rpl_num, sizeof(struct kv_ds_q_info));
@@ -191,6 +190,7 @@ static bool try_send_req(struct dispatch_ctx *ctx) {
             x->node->ds_queue.io_cnt[x->vid->ds_id]++;
             x->node->ds_queue.q_info[x->vid->ds_id] = *y;
             msg->ds_id = x->vid->ds_id;
+            ctx->entry = x;
             kv_rmda_send_req(x->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->resp, ctx->resp_addr, dispatch_send_cb, ctx);
         }
         kv_free(entries);
@@ -205,6 +205,7 @@ static bool try_send_req(struct dispatch_ctx *ctx) {
             entry->node->ds_queue.io_cnt[entry->vid->ds_id]++;
             entry->node->ds_queue.q_info[entry->vid->ds_id] = q_info;
             msg->ds_id = entry->vid->ds_id;
+            ctx->entry = entry;
             kv_rmda_send_req(entry->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->resp, ctx->resp_addr, dispatch_send_cb, ctx);
             return true;
         }
