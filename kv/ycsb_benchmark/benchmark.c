@@ -319,7 +319,7 @@ static void worker_init(void *arg) {
     struct worker *self = arg;
     kv_storage_init(&self->storage, self - workers);
     uint32_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET;
-    uint64_t value_log_block_num = opt.value_size * opt.num_items / opt.ssd_num * 2.0 / self->storage.block_size;
+    uint64_t value_log_block_num = self->storage.num_blocks * 0.95 - 2 * bucket_num;
     kv_data_store_init(&self->data_store, &self->storage, 0, bucket_num, value_log_block_num, 512, &ds_queue, self - workers,
                        send_init_done_msg, NULL);
 }
