@@ -4,12 +4,15 @@
 #include "kv_ds_queue.h"
 #include "kv_storage.h"
 #include "kv_value_log.h"
+
+#define SSD_Q_NUM 7
 struct kv_data_store {
     struct kv_bucket_log bucket_log;
     struct kv_value_log value_log;
     struct kv_ds_queue *ds_queue;
     uint32_t ds_id;
     void *q;
+    void *ssd_q[SSD_Q_NUM];
 };
 
 typedef kv_storage_io_cb kv_data_store_cb;

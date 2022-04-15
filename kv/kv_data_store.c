@@ -1,6 +1,7 @@
 #include "kv_data_store.h"
 
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <sys/queue.h>
 
@@ -8,6 +9,54 @@
 #include "kv_memory.h"
 
 // --- queue ---
+struct ssd_q_entry {
+    kv_task_cb fn;
+    void *ctx;
+    STAILQ_ENTRY(ssd_q_entry) entry;
+};
+struct ssd_q_head {
+    uint32_t size, cap;
+    STAILQ_HEAD(, ssd_q_entry) head;
+};
+const double partions[SSD_Q_NUM] = {0.633097714487315, 0.15940752450472573, 0.20749476100795927};
+const uint32_t io_depth = 48;
+enum ssd_q_type { SSD_Q_SET_0, SSD_Q_SET_1, SSD_Q_SET_2, SSD_Q_GET_0, SSD_Q_GET_1, SSD_Q_DEL_0, SSD_Q_DEL_1 };
+static void ssd_q_init(struct kv_data_store *self) {
+    for (size_t i = 0; i < SSD_Q_NUM; i++) {
+        struct ssd_q_head *queue = kv_malloc(sizeof(struct ssd_q_head));
+        *queue = (struct ssd_q_head){0, (uint32_t)round(io_depth * partions[i])};
+        STAILQ_INIT(&queue->head);
+        self->ssd_q[i] = queue;
+    }
+}
+static void ssd_q_fini(struct kv_data_store *self) {
+    for (size_t i = 0; i < SSD_Q_NUM; i++) kv_free(self->ssd_q[i]);
+}
+static inline void ssd_enqueue(struct kv_data_store *self, enum ssd_q_type q_type, kv_task_cb fn, void *ctx) {
+    assert(fn);
+    struct ssd_q_head *queue = self->ssd_q[(int)q_type];
+    if (queue->size >= queue->cap) {
+        struct ssd_q_entry *entry = kv_malloc(sizeof(struct ssd_q_entry));
+        *entry = (struct ssd_q_entry){fn, ctx};
+        STAILQ_INSERT_TAIL(&queue->head, entry, entry);
+    } else {
+        queue->size++;
+        fn(ctx);
+    }
+}
+static inline void ssd_dequeue(struct kv_data_store *self, enum ssd_q_type q_type) {
+    struct ssd_q_head *queue = self->ssd_q[(int)q_type];
+    if (--queue->size < queue->cap) {
+        if (!STAILQ_EMPTY(&queue->head)) {
+            struct ssd_q_entry *entry = STAILQ_FIRST(&queue->head);
+            queue->size++;
+            entry->fn(entry->ctx);
+            STAILQ_REMOVE_HEAD(&queue->head, entry);
+            kv_free(entry);
+        }
+    }
+}
+// ----
 struct queue_entry {
     struct kv_data_store *self;
     enum kv_ds_op op;
@@ -76,12 +125,14 @@ void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, 
     self->ds_queue->q_info[self->ds_id] = (struct kv_ds_q_info){.cap = 1024, .size = 0};
     self->q = kv_malloc(sizeof(struct queue_head));
     STAILQ_INIT((struct queue_head *)self->q);
+    ssd_q_init(self);
 }
 
 void kv_data_store_fini(struct kv_data_store *self) {
     kv_bucket_log_fini(&self->bucket_log);
     kv_value_log_fini(&self->value_log);
     kv_free(self->q);
+    ssd_q_fini(self);
 }
 
 // --- debug ---
@@ -135,7 +186,7 @@ static struct kv_item *find_empty(struct kv_data_store *self, struct kv_bucket_p
     return NULL;
 }
 
-static void fill_the_hole(struct kv_data_store *self, struct kv_bucket_pool *entry) { 
+static void fill_the_hole(struct kv_data_store *self, struct kv_bucket_pool *entry) {
     if (TAILQ_FIRST(&entry->buckets)->bucket->chain_length == 1) return;
 
     struct kv_bucket_chain_entry *ce = TAILQ_LAST(&entry->buckets, kv_bucket_chain);
@@ -177,8 +228,13 @@ struct set_ctx {
 static void set_pool_put_cb(bool success, void *arg) {
     struct set_ctx *ctx = arg;
     kv_bucket_unlock(&ctx->self->bucket_log, &ctx->index_set);
+    ssd_dequeue(ctx->self, SSD_Q_SET_2);
     if (ctx->cb) ctx->cb(success, ctx->cb_arg);
     kv_free(ctx);
+}
+static void set_pool_put(void *arg) {
+    struct set_ctx *ctx = arg;
+    kv_bucket_pool_put(&ctx->self->bucket_log, ctx->entry, true, set_pool_put_cb, ctx);
 }
 
 static void set_lock_cb(void *arg) {
@@ -200,14 +256,14 @@ static void set_lock_cb(void *arg) {
     if (located_item) {  // update
         located_item->value_length = ctx->value_length;
         located_item->value_offset = ctx->value_offset;
-        kv_bucket_pool_put(&ctx->self->bucket_log, ctx->entry, true, set_pool_put_cb, ctx);
+        ssd_enqueue(ctx->self, SSD_Q_SET_2, set_pool_put, ctx);
     } else {  // create
         if ((located_item = find_empty(ctx->self, ctx->entry))) {
             located_item->key_length = ctx->key_length;
             kv_memcpy(located_item->key, ctx->key, ctx->key_length);
             located_item->value_length = ctx->value_length;
             located_item->value_offset = ctx->value_offset;
-            kv_bucket_pool_put(&ctx->self->bucket_log, ctx->entry, true, set_pool_put_cb, ctx);
+            ssd_enqueue(ctx->self, SSD_Q_SET_2, set_pool_put, ctx);
         } else {
             fprintf(stderr, "set_find_item_cb: No more bucket available.\n");
             kv_bucket_pool_put(&ctx->self->bucket_log, ctx->entry, false, NULL, NULL);
@@ -221,21 +277,33 @@ static void set_lock_cb(void *arg) {
 static void set_write_value_log_cb(bool success, void *arg) {
     struct set_ctx *ctx = arg;
     ctx->success = success;
+    ssd_dequeue(ctx->self, SSD_Q_SET_1);
     set_lock_cb(ctx);
 }
 
 static void set_pool_get_cb(struct kv_bucket_pool *entry, void *arg) {
     struct set_ctx *ctx = arg;
     ctx->entry = entry;
+    ssd_dequeue(ctx->self, SSD_Q_SET_0);
     set_lock_cb(ctx);
+}
+
+static void set_value_write(void *arg) {
+    struct set_ctx *ctx = arg;
+    ctx->value_offset = kv_value_log_offset(&ctx->self->value_log);
+    kv_value_log_write(&ctx->self->value_log, ctx->bucket_index, ctx->value, ctx->value_length, set_write_value_log_cb, ctx);
+}
+
+static void set_pool_get(void *arg) {
+    struct set_ctx *ctx = arg;
+    kv_bucket_pool_get(&ctx->self->bucket_log, ctx->bucket_index, set_pool_get_cb, ctx);
 }
 
 static void set_start(void *arg) {
     struct set_ctx *ctx = arg;
     ctx->io_cnt = 3;
-    kv_bucket_pool_get(&ctx->self->bucket_log, ctx->bucket_index, set_pool_get_cb, ctx);
-    ctx->value_offset = kv_value_log_offset(&ctx->self->value_log);
-    kv_value_log_write(&ctx->self->value_log, ctx->bucket_index, ctx->value, ctx->value_length, set_write_value_log_cb, ctx);
+    ssd_enqueue(ctx->self, SSD_Q_SET_0, set_pool_get, ctx);
+    ssd_enqueue(ctx->self, SSD_Q_SET_1, set_value_write, ctx);
     kv_bucket_lock_add_index(&ctx->index_set, ctx->bucket_index);
     kv_bucket_lock(&ctx->self->bucket_log, ctx->index_set, set_lock_cb, ctx);
 }
