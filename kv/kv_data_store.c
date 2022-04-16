@@ -50,8 +50,8 @@ static inline void ssd_dequeue(struct kv_data_store *self, enum ssd_q_type q_typ
         if (!STAILQ_EMPTY(&queue->head)) {
             struct ssd_q_entry *entry = STAILQ_FIRST(&queue->head);
             queue->size++;
-            entry->fn(entry->ctx);
             STAILQ_REMOVE_HEAD(&queue->head, entry);
+            entry->fn(entry->ctx);
             kv_free(entry);
         }
     }
