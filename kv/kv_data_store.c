@@ -18,8 +18,9 @@ struct ssd_q_head {
     uint32_t size, cap;
     STAILQ_HEAD(, ssd_q_entry) head;
 };
-const double partions[SSD_Q_NUM] = {0.633097714487315, 0.15940752450472573, 0.20749476100795927};
-const uint32_t io_depth = 48;
+const double partions[SSD_Q_NUM] = {0.28272072197878534, 0.2841236807425939, 0.2803823238687328, 0.0791422693244224,
+                                    0.07363100408546559};
+const uint32_t io_depth = 32;
 enum ssd_q_type { SSD_Q_SET_0, SSD_Q_SET_1, SSD_Q_SET_2, SSD_Q_GET_0, SSD_Q_GET_1, SSD_Q_DEL_0, SSD_Q_DEL_1 };
 static void ssd_q_init(struct kv_data_store *self) {
     for (size_t i = 0; i < SSD_Q_NUM; i++) {
@@ -324,12 +325,26 @@ struct get_ctx {
     uint8_t key_length;
     uint8_t *value;
     uint32_t *value_length;
+    uint64_t value_offset;
     kv_data_store_cb cb;
     void *cb_arg;
 };
 
+static void get_read_value_cb(bool success, void *arg) {
+    struct get_ctx *ctx = arg;
+    ssd_dequeue(ctx->self, SSD_Q_GET_1);
+    if (ctx->cb) ctx->cb(success, ctx->cb_arg);
+    kv_free(ctx);
+}
+
+static void get_read_value(void *arg) {
+    struct get_ctx *ctx = arg;
+    kv_value_log_read(&ctx->self->value_log, ctx->value_offset, ctx->value, *ctx->value_length, get_read_value_cb, ctx);
+}
+
 static void get_pool_get_cb(struct kv_bucket_pool *entry, void *arg) {
     struct get_ctx *ctx = arg;
+    ssd_dequeue(ctx->self, SSD_Q_GET_0);
     if (entry == NULL) {
         if (ctx->cb) ctx->cb(false, ctx->cb_arg);
         kv_free(ctx);
@@ -339,19 +354,25 @@ static void get_pool_get_cb(struct kv_bucket_pool *entry, void *arg) {
     find_item_plus(ctx->self, entry, ctx->key, ctx->key_length, &located_item);
     if (located_item == NULL) {
         if (ctx->cb) ctx->cb(false, ctx->cb_arg);
+        kv_bucket_pool_put(&ctx->self->bucket_log, entry, false, NULL, NULL);
+        kv_free(ctx);
     } else {
-        kv_value_log_read(&ctx->self->value_log, located_item->value_offset, ctx->value, located_item->value_length, ctx->cb,
-                          ctx->cb_arg);
+        *ctx->value_length = located_item->value_length;
+        ctx->value_offset = located_item->value_offset;
+        ssd_enqueue(ctx->self, SSD_Q_GET_1, get_read_value, ctx);
+        kv_bucket_pool_put(&ctx->self->bucket_log, entry, false, NULL, NULL);
     }
-    kv_bucket_pool_put(&ctx->self->bucket_log, entry, false, NULL, NULL);
-    kv_free(ctx);
-    return;
+}
+
+static void get_pool_get(void *arg) {
+    struct get_ctx *ctx = arg;
+    uint32_t bucket_index = kv_data_store_bucket_index(ctx->self, ctx->key);
+    kv_bucket_pool_get(&ctx->self->bucket_log, bucket_index, get_pool_get_cb, ctx);
 }
 
 static void get_read_bucket(void *arg) {
     struct get_ctx *ctx = arg;
-    uint32_t bucket_index = kv_data_store_bucket_index(ctx->self, ctx->key);
-    kv_bucket_pool_get(&ctx->self->bucket_log, bucket_index, get_pool_get_cb, ctx);
+    ssd_enqueue(ctx->self, SSD_Q_GET_0, get_pool_get, ctx);
 }
 
 void kv_data_store_get(struct kv_data_store *self, uint8_t *key, uint8_t key_length, uint8_t *value, uint32_t *value_length,
