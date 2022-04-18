@@ -18,17 +18,21 @@ struct ssd_q_head {
     uint32_t size, cap;
     STAILQ_HEAD(, ssd_q_entry) head;
 };
-const double partions[SSD_Q_NUM] = {0.28272072197878534, 0.2841236807425939, 0.2803823238687328, 0.0791422693244224,
-                                    0.07363100408546559};
-const uint32_t io_depth = 32;
+
 enum ssd_q_type { SSD_Q_SET_0, SSD_Q_SET_1, SSD_Q_SET_2, SSD_Q_GET_0, SSD_Q_GET_1, SSD_Q_DEL_0, SSD_Q_DEL_1 };
 static void ssd_q_init(struct kv_data_store *self) {
+    double partion;
+    uint32_t io_depth;
+    FILE *f = fopen("ssd_q.conf", "r");
+    if (fscanf(f, "%u", &io_depth) != 1) exit(-1);
     for (size_t i = 0; i < SSD_Q_NUM; i++) {
+        if (fscanf(f, "%lf",&partion) != 1) partion = 0;
         struct ssd_q_head *queue = kv_malloc(sizeof(struct ssd_q_head));
-        *queue = (struct ssd_q_head){0, (uint32_t)round(io_depth * partions[i])};
+        *queue = (struct ssd_q_head){0, (uint32_t)round(io_depth * partion)};
         STAILQ_INIT(&queue->head);
         self->ssd_q[i] = queue;
     }
+    fclose(f);
 }
 static void ssd_q_fini(struct kv_data_store *self) {
     for (size_t i = 0; i < SSD_Q_NUM; i++) kv_free(self->ssd_q[i]);
