@@ -91,12 +91,13 @@ struct io_buffer_t {
     uint32_t producer_id;
     bool read_modify_write, is_finished;
     struct timeval io_start;
+    enum kv_ycsb_operation op;
 } * io_buffers;
 
 struct producer_t {
     uint64_t start_io, end_io;
     uint64_t iocnt;
-    double latency_sum;
+    double latency_sum, get_lat, set_lat;
     uint32_t io_per_record;
 } * producers;
 
@@ -139,15 +140,21 @@ static void test_fini(void *arg) {  // always running on producer 0
     if (--producer_cnt) return;
     gettimeofday(&tv_end, NULL);
     producer_cnt = opt.producer_num;
-    double latency_sum = 0;
+    double latency_sum = 0, get_lat_sum = 0, set_lat_sum = 0;
     for (size_t i = 0; i < opt.producer_num; i++) {
         latency_sum += producers[i].latency_sum;
         producers[i].latency_sum = 0;
+        get_lat_sum += producers[i].get_lat;
+        producers[i].get_lat=0;
+        set_lat_sum += producers[i].set_lat;
+        producers[i].set_lat=0;
     }
     if (total_io) {
         qsort(latency_records, total_io / io_per_record, sizeof(double), double_cmp);
         printf("99.9%%  tail latency: %lf us\n", latency_records[(uint32_t)(total_io * 0.999 / io_per_record)] * 1000000);
         printf("average latency: %lf us\n", latency_sum * 1000000 / total_io);
+        printf("set lat * set_percentage: %lf us\n", set_lat_sum * 1000000 / total_io);
+        printf("get lat * get_percentage: %lf us\n", get_lat_sum * 1000000 / total_io);
     }
     switch (state) {
         case INIT:
@@ -209,8 +216,8 @@ static void test_fini(void *arg) {  // always running on producer 0
 static inline void do_transaction(struct io_buffer_t *io, struct kv_msg *msg) {
     msg->key_len = 16;
     msg->value_offset = msg->key_len;
-    enum kv_ycsb_operation op = kv_ycsb_next(workload, false, KV_MSG_KEY(msg), KV_MSG_VALUE(msg));
-    switch (op) {
+    io->op = kv_ycsb_next(workload, false, KV_MSG_KEY(msg), KV_MSG_VALUE(msg));
+    switch (io->op) {
         case YCSB_READMODIFYWRITE:
             io->read_modify_write = true;
         // fall through
@@ -236,6 +243,10 @@ static void test(void *arg) {
         gettimeofday(&io_end, NULL);
         double latency = timeval_diff(&io->io_start, &io_end);
         p->latency_sum += latency;
+        if (io->op == YCSB_READ)
+            p->get_lat += latency;
+        else if (io->op == YCSB_INSERT || io->op == YCSB_UPDATE)
+            p->set_lat += latency;
         if (p->start_io % p->io_per_record == 0) {
             latency_records[p->start_io / p->io_per_record] = latency;
         }

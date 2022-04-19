@@ -19,16 +19,16 @@ struct ssd_q_head {
     STAILQ_HEAD(, ssd_q_entry) head;
 };
 
-enum ssd_q_type { SSD_Q_SET_0, SSD_Q_SET_1, SSD_Q_SET_2, SSD_Q_GET_0, SSD_Q_GET_1, SSD_Q_DEL_0, SSD_Q_DEL_1 };
+enum ssd_q_type { SSD_Q_GET_0, SSD_Q_GET_1, SSD_Q_SET_0, SSD_Q_SET_1, SSD_Q_SET_2, SSD_Q_DEL_0, SSD_Q_DEL_1 };
 static void ssd_q_init(struct kv_data_store *self) {
     double partion;
     uint32_t io_depth;
     FILE *f = fopen("ssd_q.conf", "r");
     if (fscanf(f, "%u", &io_depth) != 1) exit(-1);
     for (size_t i = 0; i < SSD_Q_NUM; i++) {
-        if (fscanf(f, "%lf",&partion) != 1) partion = 0;
+        if (fscanf(f, "%lf", &partion) != 1) partion = 0;
         struct ssd_q_head *queue = kv_malloc(sizeof(struct ssd_q_head));
-        *queue = (struct ssd_q_head){0, (uint32_t)round(io_depth * partion)};
+        *queue = (struct ssd_q_head){0, (uint32_t)ceil(io_depth * partion)};
         STAILQ_INIT(&queue->head);
         self->ssd_q[i] = queue;
     }
@@ -37,7 +37,13 @@ static void ssd_q_init(struct kv_data_store *self) {
 static void ssd_q_fini(struct kv_data_store *self) {
     for (size_t i = 0; i < SSD_Q_NUM; i++) kv_free(self->ssd_q[i]);
 }
+static __thread uint64_t counter = 10000;
 static inline void ssd_enqueue(struct kv_data_store *self, enum ssd_q_type q_type, kv_task_cb fn, void *ctx) {
+    if (++counter % 100000 == 0) {
+        uint32_t sum = 0;
+        for (size_t i = 0; i < SSD_Q_NUM; i++) sum += ((struct ssd_q_head *)self->ssd_q[i])->size;
+        printf("%u\n", sum);
+    }
     assert(fn);
     struct ssd_q_head *queue = self->ssd_q[(int)q_type];
     if (queue->size >= queue->cap) {
