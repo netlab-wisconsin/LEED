@@ -325,7 +325,7 @@ static void on_vid_state_change(struct vid_entry *entry) {
 
 struct ring_change_ctx {
     struct kv_etcd_vid vid;
-    char node_id[20];
+    char node_id[KV_MAX_NODEID_LEN];
     uint32_t ring_id;
     struct kv_node *node;
     _Atomic uint32_t ref_cnt;
@@ -361,18 +361,21 @@ static void on_ring_change(void *arg) {
     struct kv_ring *self = &g_ring;
     struct ring_change_ctx *ctx = arg;
     HASH_FIND_STR(self->nodes, ctx->node_id, ctx->node);
+    assert(ctx->node);
     ctx->ref_cnt = self->thread_num;
     update_ring(ctx);
     // on_vid_state_change
     for (size_t i = 1; i < self->thread_num; i++) kv_app_send(self->thread_id + i, update_ring, ctx);
 }
 
-static void ring_handler(enum kv_etcd_msg_type msg, uint32_t ring_id, const char *node_id, const void *value, uint32_t val_len) {
+static void ring_handler(enum kv_etcd_msg_type msg, uint32_t ring_id, const char *node_id, uint32_t id_len, const void *value, uint32_t val_len) {
     struct kv_ring *self = &g_ring;
     struct ring_change_ctx *ctx = kv_malloc(sizeof(*ctx));
+    assert(id_len < KV_MAX_NODEID_LEN - 1);
     assert(val_len == sizeof(ctx->vid));
+    kv_memcpy(ctx->node_id, node_id, id_len);
+    ctx->node_id[id_len] = '\0';
     kv_memcpy(&ctx->vid, value, val_len);
-    strcpy(ctx->node_id, node_id);
     ctx->ring_id = ring_id;
     if (msg == KV_ETCD_MSG_DEL) ctx->vid.state = VID_DELETING;
     kv_app_send_without_token(self->thread_id, on_ring_change, ctx);
@@ -420,10 +423,11 @@ static int kv_conn_q_poller(void *arg) {
                 rdma_disconnect_cb(node);
         } else {
             assert(!node->is_connected);
-            char ip_port[KV_MAX_NODEID_LEN];
+            char ip_port[KV_MAX_NODEID_LEN], *p = ip_port;
             strcpy(ip_port, node->node_id);
-            kv_rdma_connect(self->h, strtok(ip_port, ":"), strtok(NULL, ":"), rdma_connect_cb, node, rdma_disconnect_cb,
-                            node);
+            while (*(p++) != ':') assert(p - ip_port < KV_MAX_NODEID_LEN);
+            *(p - 1) = '\0';
+            kv_rdma_connect(self->h, ip_port, p, rdma_connect_cb, node, rdma_disconnect_cb, node);
         }
     }
     if (self->ready_cb) {
@@ -473,17 +477,19 @@ static void on_node_put(void *arg) {
     if (!node->is_local) STAILQ_INSERT_TAIL(&self->conn_q, node, next);
 }
 
-static void node_handler(enum kv_etcd_msg_type msg, const char *node_id, const void *val, uint32_t val_len) {
+static void node_handler(enum kv_etcd_msg_type msg, const char *node_id, uint32_t id_len, const void *val, uint32_t val_len) {
     struct kv_ring *self = &g_ring;
     if (msg == KV_ETCD_MSG_PUT) {
         struct kv_node *node = kv_malloc(sizeof(struct kv_node));
-        strcpy(node->node_id, node_id);
+        kv_memcpy(node->node_id, node_id, id_len);
+        node->node_id[id_len] = '\0';
         assert(val_len == sizeof(struct kv_etcd_node));
         kv_memcpy(&node->info, val, val_len);
         kv_app_send_without_token(self->thread_id, on_node_put, node);
     } else if (msg == KV_ETCD_MSG_DEL) {
         char *nodeID = kv_malloc(KV_MAX_NODEID_LEN);
-        strcpy(nodeID, node_id);
+        kv_memcpy(nodeID, node_id, id_len);
+        nodeID[id_len] = '\0';
         kv_app_send_without_token(self->thread_id, on_node_del, nodeID);
     }
 }

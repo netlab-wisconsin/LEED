@@ -4,13 +4,13 @@ package main
 //#include <stdlib.h>
 //#include <stdio.h>
 //enum kv_etcd_msg_type {KV_ETCD_MSG_PUT, KV_ETCD_MSG_DEL};
-//typedef void (*kv_etcd_node_handler)(enum kv_etcd_msg_type msg, const char * node_id, const void * val, uint32_t val_len);
-//typedef void (*kv_etcd_ring_handler)(enum kv_etcd_msg_type msg, uint32_t ring_id, const char * node_id, const void * value, uint32_t val_len);
+//typedef void (*kv_etcd_node_handler)(enum kv_etcd_msg_type msg, const char * node_id, uint32_t id_len, const void * val, uint32_t val_len);
+//typedef void (*kv_etcd_ring_handler)(enum kv_etcd_msg_type msg, uint32_t ring_id, const char * node_id, uint32_t id_len, const void * value, uint32_t val_len);
 //static void _node_hdl_wrapper(kv_etcd_node_handler h, uint32_t msg_type, _GoString_ node_id, _GoString_ val) {
-//	h((enum kv_etcd_msg_type)msg_type, node_id.p, val.p, val.n);
+//	h((enum kv_etcd_msg_type)msg_type, node_id.p, node_id.n, val.p, val.n);
 //}
 //static void _ring_hdl_wrapper(kv_etcd_ring_handler h, uint32_t msg_type, uint32_t ring_id, _GoString_ node_id, _GoString_ val) {
-//	h((enum kv_etcd_msg_type)msg_type, ring_id, node_id.p, val.p, val.n);
+//	h((enum kv_etcd_msg_type)msg_type, ring_id, node_id.p, node_id.n, val.p, val.n);
 //}
 import "C"
 import (
