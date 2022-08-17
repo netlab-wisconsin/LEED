@@ -108,8 +108,8 @@ static void test_fini(void *arg) {  // always running on producer 0
     producer_cnt = opt.producer_num;
     switch (state) {
         case INIT:
-            req_mrs = kv_rdma_alloc_bulk(rdma, KV_RDMA_MR_REQ, opt.value_size + KV_MSG_MAX_HEADER_SIZE, opt.concurrent_io_num);
-            resp_mrs = kv_rdma_alloc_bulk(rdma, KV_RDMA_MR_RESP, opt.value_size + KV_MSG_MAX_HEADER_SIZE, opt.concurrent_io_num);
+            req_mrs = kv_rdma_alloc_bulk(rdma, KV_RDMA_MR_REQ, opt.value_size + sizeof(struct kv_msg) + 16, opt.concurrent_io_num);
+            resp_mrs = kv_rdma_alloc_bulk(rdma, KV_RDMA_MR_RESP, opt.value_size + sizeof(struct kv_msg) + 16, opt.concurrent_io_num);
             for (size_t i = 0; i < opt.concurrent_io_num; i++) {
                 io_buffers[i].req = kv_rdma_mrs_get(req_mrs, i);
                 io_buffers[i].resp = kv_rdma_mrs_get(resp_mrs, i);
@@ -169,21 +169,18 @@ static void test(void *arg) {
             msg->type = KV_MSG_SET;
             *(uint128 *)KV_MSG_KEY(msg) = index_to_key(p->start_io);
             msg->key_len = 16;
-            msg->value_offset = msg->key_len;
             msg->value_len = opt.value_size;
             break;
         case READ:
             msg->type = KV_MSG_GET;
             *(uint128 *)KV_MSG_KEY(msg) = index_to_key(random() % opt.num_items);
             msg->key_len = 16;
-            msg->value_offset = msg->key_len;
             msg->value_len = 0;
             break;
         case CLEAR:
             msg->type = KV_MSG_DEL;
             *(uint128 *)KV_MSG_KEY(msg) = index_to_key(p->start_io);
             msg->key_len = 16;
-            msg->value_offset = msg->key_len;
             msg->value_len = 0;
             break;
         case INIT:

@@ -183,7 +183,7 @@ static void test_fini(void *arg) {  // always running on producer 0
             io_buffers = calloc(opt.concurrent_io_num, sizeof(struct io_buffer_t));
             for (size_t i = 0; i < opt.concurrent_io_num; i++)
                 io_buffers[i].msg = kv_storage_malloc(&workers[0].storage,
-                                                      opt.value_size + KV_MSG_MAX_HEADER_SIZE + workers[0].storage.block_size);
+                                                      opt.value_size + sizeof(struct kv_msg) + 16 + workers[0].storage.block_size);
             printf("rdma client initialized in %lf s.\n", timeval_diff(&tv_start, &tv_end));
             if (opt.fill) {
                 total_io = opt.num_items;
@@ -229,7 +229,6 @@ static void test_fini(void *arg) {  // always running on producer 0
 }
 static inline void do_transaction(struct io_buffer_t *io, struct kv_msg *msg) {
     msg->key_len = 16;
-    msg->value_offset = msg->key_len;
     enum kv_ycsb_operation op = kv_ycsb_next(workload, false, KV_MSG_KEY(msg), KV_MSG_VALUE(msg));
     switch (op) {
         case YCSB_READMODIFYWRITE:
@@ -283,14 +282,12 @@ static void test(void *arg) {
         case FILL:
             msg->type = KV_MSG_SET;
             msg->key_len = 16;
-            msg->value_offset = msg->key_len;
             msg->value_len = opt.value_size;
             kv_ycsb_next(workload, true, KV_MSG_KEY(msg), KV_MSG_VALUE(msg));
             break;
         case SEQ_READ:
             msg->type = KV_MSG_GET;
             msg->key_len = 16;
-            msg->value_offset = msg->key_len;
             msg->value_len = 0;
             kv_ycsb_next(workload, true, KV_MSG_KEY(msg), NULL);
             break;

@@ -5,11 +5,11 @@
 #include <string.h>
 #include <sys/time.h>
 
-#include "../utils/city.h"
-#include "../utils/timing.h"
 #include "../kv_app.h"
 #include "../kv_msg.h"
 #include "../kv_rdma.h"
+#include "../utils/city.h"
+#include "../utils/timing.h"
 struct {
     uint64_t num_items, read_num_items;
     uint32_t value_size;
@@ -102,7 +102,11 @@ struct producer_t {
 } * producers;
 
 static struct timeval tv_start, tv_end;
-enum { INIT, FILL, READ, CLEAR, TEST } state = INIT;
+enum { INIT,
+       FILL,
+       READ,
+       CLEAR,
+       TEST } state = INIT;
 kv_rdma_handle rdma;
 static void thread_stop(void *arg) { kv_app_stop(0); }
 static void rdma_fini_cb(void *arg) {
@@ -155,8 +159,8 @@ static void test_fini(void *arg) {  // always running on producer 0
         case INIT:
             printf("rdma client initialized in %lf s.\n", timeval_diff(&tv_start, &tv_end));
             for (size_t i = 0; i < opt.concurrent_io_num; i++) {
-                io_buffers[i].req = kv_rdma_alloc_req(rdma, opt.value_size + KV_MSG_MAX_HEADER_SIZE);
-                io_buffers[i].resp = kv_rdma_alloc_resp(rdma, opt.value_size + KV_MSG_MAX_HEADER_SIZE);
+                io_buffers[i].req = kv_rdma_alloc_req(rdma, opt.value_size + sizeof(struct kv_msg) + 16);
+                io_buffers[i].resp = kv_rdma_alloc_resp(rdma, opt.value_size + sizeof(struct kv_msg) + 16);
             }
             total_io = opt.num_items;
             state = opt.test_rdma ? TEST : FILL;
@@ -210,7 +214,6 @@ static void test(void *arg) {
             msg->type = KV_MSG_SET;
             *(uint128 *)KV_MSG_KEY(msg) = index_to_key(p->start_io);
             msg->key_len = 16;
-            msg->value_offset = msg->key_len;
             msg->value_len = opt.value_size;
             io->req_sz = KV_MSG_SIZE(msg);
             sprintf(KV_MSG_VALUE(msg), "%lu", p->start_io);
@@ -219,7 +222,6 @@ static void test(void *arg) {
             msg->type = KV_MSG_GET;
             *(uint128 *)KV_MSG_KEY(msg) = index_to_key(random() % opt.num_items);
             msg->key_len = 16;
-            msg->value_offset = msg->key_len;
             msg->value_len = 0;
             io->req_sz = KV_MSG_SIZE(msg);
             break;
@@ -227,7 +229,6 @@ static void test(void *arg) {
             msg->type = KV_MSG_DEL;
             *(uint128 *)KV_MSG_KEY(msg) = index_to_key(p->start_io);
             msg->key_len = 16;
-            msg->value_offset = msg->key_len;
             msg->value_len = 0;
             io->req_sz = KV_MSG_SIZE(msg);
             break;
@@ -235,9 +236,8 @@ static void test(void *arg) {
             msg->type = KV_MSG_TEST;
             *(uint128 *)KV_MSG_KEY(msg) = (uint128){0, 0};
             msg->key_len = 16;
-            msg->value_offset = msg->key_len;
             msg->value_len = opt.value_size;
-            io->req_sz = KV_MSG_MAX_HEADER_SIZE;
+            io->req_sz =  sizeof(struct kv_msg) + 16;
             break;
         case INIT:
             assert(false);

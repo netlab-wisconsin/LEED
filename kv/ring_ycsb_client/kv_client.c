@@ -151,9 +151,9 @@ static void test_fini(void *arg) {  // always running on producer 0
     }
     switch (state) {
         case INIT:
-            req_mrs = kv_rdma_alloc_bulk(rdma, KV_RDMA_MR_REQ, opt.value_size + KV_MSG_MAX_HEADER_SIZE, opt.concurrent_io_num);
+            req_mrs = kv_rdma_alloc_bulk(rdma, KV_RDMA_MR_REQ, opt.value_size + sizeof(struct kv_msg) + 16, opt.concurrent_io_num);
             resp_mrs =
-                kv_rdma_alloc_bulk(rdma, KV_RDMA_MR_RESP, opt.value_size + KV_MSG_MAX_HEADER_SIZE, opt.concurrent_io_num);
+                kv_rdma_alloc_bulk(rdma, KV_RDMA_MR_RESP, opt.value_size + sizeof(struct kv_msg) + 16, opt.concurrent_io_num);
             for (size_t i = 0; i < opt.concurrent_io_num; i++) {
                 io_buffers[i].req = kv_rdma_mrs_get(req_mrs, i);
                 io_buffers[i].resp = kv_rdma_mrs_get(resp_mrs, i);
@@ -208,7 +208,6 @@ static void test_fini(void *arg) {  // always running on producer 0
 
 static inline void do_transaction(struct io_buffer_t *io, struct kv_msg *msg) {
     msg->key_len = 16;
-    msg->value_offset = msg->key_len;
     enum kv_ycsb_operation op = kv_ycsb_next(workload, false, KV_MSG_KEY(msg), KV_MSG_VALUE(msg));
     switch (op) {
         case YCSB_READMODIFYWRITE:
@@ -265,21 +264,18 @@ static void test(void *arg) {
         case FILL:
             msg->type = KV_MSG_SET;
             msg->key_len = 16;
-            msg->value_offset = msg->key_len;
             msg->value_len = opt.value_size;
             kv_ycsb_next(workload, true, KV_MSG_KEY(msg), KV_MSG_VALUE(msg));
             break;
         case SEQ_READ:
             msg->type = KV_MSG_GET;
             msg->key_len = 16;
-            msg->value_offset = msg->key_len;
             msg->value_len = 0;
             kv_ycsb_next(workload, true, KV_MSG_KEY(msg), NULL);
             break;
         case DEL:
             msg->type = KV_MSG_DEL;
             msg->key_len = 16;
-            msg->value_offset = msg->key_len;
             msg->value_len = 0;
             kv_ycsb_next(workload, true, KV_MSG_KEY(msg), NULL);
             break;
