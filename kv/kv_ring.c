@@ -37,16 +37,27 @@ struct kv_etcd_vid {
 } __attribute__((packed));
 
 //---- rings ----
+#define KV_MAX_NODEID_LEN (24U)
+struct ring_change_ctx {
+    struct kv_etcd_vid vid;
+    char node_id[KV_MAX_NODEID_LEN];
+    uint32_t ring_id;
+    struct kv_node *node;
+    _Atomic uint32_t ref_cnt;
+    STAILQ_ENTRY(ring_change_ctx)
+    next;
+};
 
 struct kv_node {
-#define KV_MAX_NODEID_LEN (24U)
     char node_id[KV_MAX_NODEID_LEN];
     struct kv_etcd_node info;
     connection_handle conn;
     struct kv_ds_queue ds_queue;
-    bool is_connected, is_disconnecting, is_local;
+    bool is_connected, is_disconnecting, is_local, has_info;
     STAILQ_ENTRY(kv_node)
     next;
+    STAILQ_HEAD(, ring_change_ctx)
+    ring_updates;
     UT_hash_handle hh;
 };
 struct vid_entry {
@@ -377,14 +388,6 @@ static void on_vid_state_change(struct vid_entry *entry) {
     }
 }
 
-struct ring_change_ctx {
-    struct kv_etcd_vid vid;
-    char node_id[KV_MAX_NODEID_LEN];
-    uint32_t ring_id;
-    struct kv_node *node;
-    _Atomic uint32_t ref_cnt;
-};
-
 static void update_ring(void *arg) {
     struct kv_ring *self = &g_ring;
     struct ring_change_ctx *ctx = arg;
@@ -414,9 +417,21 @@ static void update_ring(void *arg) {
 static void on_ring_change(void *arg) {
     struct kv_ring *self = &g_ring;
     struct ring_change_ctx *ctx = arg;
-    HASH_FIND_STR(self->nodes, ctx->node_id, ctx->node);
-    assert(ctx->node);
     ctx->ref_cnt = self->thread_num;
+    HASH_FIND_STR(self->nodes, ctx->node_id, ctx->node);
+    if (ctx->node == NULL) {
+        ctx->node = kv_malloc(sizeof(struct kv_node));
+        strcpy(ctx->node->node_id, ctx->node_id);
+        ctx->node->has_info = false;
+        HASH_ADD_STR(self->nodes, node_id, ctx->node);
+        STAILQ_INIT(&ctx->node->ring_updates);
+        STAILQ_INSERT_HEAD(&ctx->node->ring_updates, ctx, next);
+        return;
+    }
+    if (ctx->node->has_info == false) {
+        STAILQ_INSERT_HEAD(&ctx->node->ring_updates, ctx, next);
+        return;
+    }
     update_ring(ctx);
     // on_vid_state_change
     for (size_t i = 1; i < self->thread_num; i++) kv_app_send(self->thread_id + i, update_ring, ctx);
@@ -516,9 +531,20 @@ static void on_node_put(void *arg) {
     ring_init(node->info.ring_num);
     HASH_FIND_STR(self->nodes, node->node_id, tmp);
     if (tmp != NULL) {  // this node already exist
+        if (tmp->has_info == true) {
+            kv_free(node);
+            return;
+        }
+        tmp->info = node->info;
         kv_free(node);
-        return;
+        node = tmp;
+        struct ring_change_ctx *ctx;
+        while ((ctx = STAILQ_FIRST(&node->ring_updates)) != NULL) {
+            STAILQ_REMOVE_HEAD(&node->ring_updates, next);
+            for (size_t i = 0; i < self->thread_num; i++) kv_app_send(self->thread_id + i, update_ring, ctx);
+        }
     }
+    node->has_info = true;
     node->is_local = !strcmp(self->local_id, node->node_id);
     node->is_disconnecting = false;
     node->is_connected = false;
@@ -591,7 +617,7 @@ static void rdma_req_handler_wrapper(void *req_h, kv_rmda_mr req, uint32_t req_s
             for (x = get_vnode(&chain, 0); x != NULL; x = get_vnode_next(&chain, x))
                 if (x->node->is_local) break;
             if (x == NULL) goto send_nak;
-            struct vid_entry *tail = get_vnode_from_chain(&chain,  -1,x, false);
+            struct vid_entry *tail = get_vnode_from_chain(&chain, -1, x, false);
             msg->hop++;
             self->req_handler(req_h, req, req_sz, x->vid.ds_id, tail->node->is_local ? NULL : tail->node->conn, arg);
             return;
