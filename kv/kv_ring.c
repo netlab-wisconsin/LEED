@@ -26,12 +26,10 @@ struct kv_etcd_node {
 
 enum { VID_COPYING,
        VID_RUNNING,
-       VID_LEAVING,
-       VID_DELETING };
+       VID_LEAVING };
 struct kv_etcd_vid {
-#define KV_VID_EMPTY UINT32_MAX
 #define KV_VID_LEN (20U)
-    uint16_t state;
+    // uint16_t state;
     uint16_t ds_id;
     uint8_t vid[KV_VID_LEN];
 } __attribute__((packed));
@@ -41,7 +39,7 @@ struct kv_etcd_vid {
 struct ring_change_ctx {
     struct kv_etcd_vid vid;
     char node_id[KV_MAX_NODEID_LEN];
-    uint32_t ring_id;
+    uint32_t ring_id, state, msg_type;
     struct kv_node *node;
     _Atomic uint32_t ref_cnt;
     STAILQ_ENTRY(ring_change_ctx)
@@ -63,6 +61,8 @@ struct kv_node {
 struct vid_entry {
     struct kv_etcd_vid vid;
     struct kv_node *node;
+    uint32_t state;
+    uint32_t cp_cnt, rm_cnt;  // only valid in the master thread
     CIRCLEQ_ENTRY(vid_entry)
     entry;
 };
@@ -97,6 +97,7 @@ struct kv_ring {
     kv_ring_cb ready_cb;
     void *arg;
     kv_ring_req_handler req_handler;
+    uint64_t node_lease, vid_lease;
 } g_ring;
 
 static void random_vid(char *vid) {
@@ -176,8 +177,9 @@ struct vnode_chain {
 };
 
 static inline bool is_vnode_valid(struct vid_entry *vnode) {
-    // return vnode->node!=NULL&& vnode->vid.state==VID_RUNNING;
-    return true;  // !!! CHANGE THIS
+    struct kv_node *node = vnode->node;
+    return vnode->state == VID_RUNNING && node != NULL && node->has_info && node->is_connected && node->is_disconnecting;
+    // return true;  // !!! CHANGE THIS
 }
 
 static struct vid_entry *get_vnode_from_chain(struct vnode_chain *chain, int32_t index, struct vid_entry *base, bool pre_copy) {
@@ -191,15 +193,19 @@ static struct vid_entry *get_vnode_from_chain(struct vnode_chain *chain, int32_t
             tail = x;
             ++i;
         } else {
+            if (invalid != NULL) {
+                fprintf(stderr, "two failed vnodes in a hash ring!\n");
+                exit(-1);
+            }
             invalid = x;
         }
         if ((x = CIRCLEQ_LOOP_NEXT(chain->ring, x, entry)) == chain->base) break;
     }
     if (index == -1) return tail;
     if (pre_copy && index == i && invalid != NULL) {
-        if (invalid->vid.state == VID_LEAVING && x != chain->base)
+        if (invalid->state == VID_LEAVING && x != chain->base)
             return x;  // pre_copy to the next vnode
-        if (invalid->vid.state == VID_COPYING)
+        if (invalid->state == VID_COPYING)
             return invalid;  // pre_copy to new vnode.
     }
     return NULL;
@@ -372,20 +378,21 @@ static void ring_init(uint32_t ring_num) {
     }
 };
 
-static void on_vid_state_change(struct vid_entry *entry) {
-    // struct kv_ring *self = &g_ring;
-    switch (entry->vid.state) {
-        case VID_COPYING:
-            // TAIL starts to copy data
-            break;
-        case VID_RUNNING:
-            break;
-        case VID_LEAVING:
-            // TAIL starts to copy data
-            break;
-        case VID_DELETING:
-            break;
+// --- hash ring: virtual nodes management ---
+static inline struct vid_entry *vnode_create(struct ring_change_ctx *ctx, struct vid_ring *ring, struct vid_entry *entry) {
+    struct vid_entry *x = kv_malloc(sizeof(*x));
+    *x = (struct vid_entry){.vid = ctx->vid, .node = ctx->node, .cp_cnt = 0, .rm_cnt = 0};
+    if (entry) {
+        CIRCLEQ_INSERT_BEFORE(ring + ctx->ring_id, entry, x, entry);
+    } else {
+        CIRCLEQ_INSERT_HEAD(ring + ctx->ring_id, x, entry);
     }
+    return x;
+}
+
+static inline void vnode_delete(struct ring_change_ctx *ctx, struct vid_ring *ring, struct vid_entry *entry) {
+    CIRCLEQ_REMOVE(ring + ctx->ring_id, entry, entry);
+    kv_free(entry);
 }
 
 static void update_ring(void *arg) {
@@ -393,24 +400,53 @@ static void update_ring(void *arg) {
     struct ring_change_ctx *ctx = arg;
     struct vid_ring *ring = self->rings[kv_app_get_thread_index() - self->thread_id];
     struct vid_entry *entry = find_vid_entry(ring + ctx->ring_id, ctx->vid.vid);
-    if (entry == NULL || kv_memcmp8(entry->vid.vid, ctx->vid.vid, KV_VID_LEN)) {
-        if (ctx->vid.state != VID_DELETING) {
-            struct vid_entry *x = kv_malloc(sizeof(*x));
-            *x = (struct vid_entry){.vid = ctx->vid, .node = ctx->node};
-            if (entry) {
-                CIRCLEQ_INSERT_BEFORE(ring + ctx->ring_id, entry, x, entry);
-            } else {
-                CIRCLEQ_INSERT_HEAD(ring + ctx->ring_id, x, entry);
+    bool master_thread = kv_app_get_thread_index() == self->thread_id;
+    bool vnode_exists = entry != NULL && !kv_memcmp8(entry->vid.vid, ctx->vid.vid, KV_VID_LEN);
+    switch ((ctx->state << 1) | ctx->msg_type) {
+        case (VID_COPYING << 1) | KV_ETCD_MSG_PUT:
+            if (!vnode_exists) entry = vnode_create(ctx, ring, entry);
+            entry->state = VID_COPYING;
+            entry->cp_cnt++;
+            if (master_thread && entry->node->is_local) {
+                static char key[128];
+                sprintf(key, "/rings/%u/1/%s/", ctx->ring_id, self->local_id);  // running
+                kvEtcdPut(key, &entry->vid, sizeof(entry->vid), &self->vid_lease);
             }
-        }
-    } else {
-        if (ctx->vid.state != VID_DELETING) {
-            CIRCLEQ_REMOVE(ring + ctx->ring_id, entry, entry);
-            kv_free(entry);
-        } else {
-            entry->vid = ctx->vid;
-        }
+            break;
+        case (VID_COPYING << 1) | KV_ETCD_MSG_DEL:
+            assert(vnode_exists);
+            assert(entry->state == VID_COPYING);
+            if (--entry->cp_cnt == 0) {
+                entry->state = VID_RUNNING;
+                if (master_thread)
+                    printf("node %s ring %u is running.\n", entry->node->node_id, ctx->ring_id);
+            }
+            break;
+        case (VID_RUNNING << 1) | KV_ETCD_MSG_PUT:
+            if (!vnode_exists) entry = vnode_create(ctx, ring, entry);
+            if (entry->cp_cnt == 0) entry->state = VID_RUNNING;
+            break;
+        case (VID_RUNNING << 1) | KV_ETCD_MSG_DEL:
+            assert(vnode_exists);
+            if (entry->rm_cnt == 0)
+                vnode_delete(ctx, ring, entry);
+            else
+                assert(entry->state == VID_LEAVING);
+            break;
+        case (VID_LEAVING << 1) | KV_ETCD_MSG_PUT:
+            assert(vnode_exists);
+            assert(entry->state != VID_COPYING);
+            entry->state = VID_LEAVING;
+            break;
+        case (VID_LEAVING << 1) | KV_ETCD_MSG_DEL:
+            assert(vnode_exists);
+            assert(entry->state == VID_LEAVING);
+            if (--entry->rm_cnt == 0) vnode_delete(ctx, ring, entry);
+            break;
+        default:
+            assert(false);
     }
+
     if (--ctx->ref_cnt == 0) kv_free(ctx);
 };
 
@@ -437,19 +473,7 @@ static void on_ring_change(void *arg) {
     for (size_t i = 1; i < self->thread_num; i++) kv_app_send(self->thread_id + i, update_ring, ctx);
 }
 
-static void ring_handler(enum kv_etcd_msg_type msg, uint32_t ring_id, const char *node_id, uint32_t id_len, const void *value, uint32_t val_len) {
-    struct kv_ring *self = &g_ring;
-    struct ring_change_ctx *ctx = kv_malloc(sizeof(*ctx));
-    assert(id_len < KV_MAX_NODEID_LEN - 1);
-    assert(val_len == sizeof(ctx->vid));
-    kv_memcpy(ctx->node_id, node_id, id_len);
-    ctx->node_id[id_len] = '\0';
-    kv_memcpy(&ctx->vid, value, val_len);
-    ctx->ring_id = ring_id;
-    if (msg == KV_ETCD_MSG_DEL) ctx->vid.state = VID_DELETING;
-    kv_app_send_without_token(self->thread_id, on_ring_change, ctx);
-}
-
+// --- hash ring: nodes management ---
 static void rdma_disconnect_cb(void *arg) {
     struct kv_ring *self = &g_ring;
     struct kv_node *node = arg;
@@ -476,7 +500,6 @@ static void rdma_connect_cb(connection_handle h, void *arg) {
     printf("client: connected to node %s.\n", node->node_id);
     node->is_connected = true;
     node->conn = h;
-    // for (size_t i = 0; i < self->thread_num; i++) kv_app_send(self->thread_id + i, add_node_to_rings, node);
 }
 
 static int kv_conn_q_poller(void *arg) {
@@ -521,6 +544,7 @@ static void on_node_del(void *arg) {
     }
     node->is_disconnecting = true;
     if (node->is_connected) STAILQ_INSERT_TAIL(&self->conn_q, node, next);
+    // tail-> write leaving ring
 finish:
     kv_free(node_id);
 }
@@ -557,20 +581,50 @@ static void on_node_put(void *arg) {
     if (!node->is_local) STAILQ_INSERT_TAIL(&self->conn_q, node, next);
 }
 
-static void node_handler(enum kv_etcd_msg_type msg, const char *node_id, uint32_t id_len, const void *val, uint32_t val_len) {
+static inline const char *key_copy(char *dst, const char *src) {
+    while (*src != '/') *(dst++) = *(src++);
+    *dst = '\0';
+    return src;
+}
+static inline bool key_cmp(const char *s1, const char *s2) {
+    while (*s1 != '\0' && *s2 != '/')
+        if (*(s1++) != *(s2++)) return false;
+    return true;
+}
+static inline const char *key_next(const char *s1) {
+    while (*(s1++) != '/')
+        ;
+    return s1 + 1;
+}
+
+static void msg_handler(enum kv_etcd_msg_type msg, const char *key, uint32_t key_len, const void *val, uint32_t val_len) {
     struct kv_ring *self = &g_ring;
-    if (msg == KV_ETCD_MSG_PUT) {
-        struct kv_node *node = kv_malloc(sizeof(struct kv_node));
-        kv_memcpy(node->node_id, node_id, id_len);
-        node->node_id[id_len] = '\0';
-        assert(val_len == sizeof(struct kv_etcd_node));
-        kv_memcpy(&node->info, val, val_len);
-        kv_app_send_without_token(self->thread_id, on_node_put, node);
-    } else if (msg == KV_ETCD_MSG_DEL) {
-        char *nodeID = kv_malloc(KV_MAX_NODEID_LEN);
-        kv_memcpy(nodeID, node_id, id_len);
-        nodeID[id_len] = '\0';
-        kv_app_send_without_token(self->thread_id, on_node_del, nodeID);
+    if (*(key++) != '/') return;
+    if (key_cmp("nodes", key)) {
+        key = key_next(key);
+        if (msg == KV_ETCD_MSG_PUT) {
+            struct kv_node *node = kv_malloc(sizeof(struct kv_node));
+            key_copy(node->node_id, key);
+            assert(val_len == sizeof(struct kv_etcd_node));
+            kv_memcpy(&node->info, val, val_len);
+            kv_app_send_without_token(self->thread_id, on_node_put, node);
+        } else if (msg == KV_ETCD_MSG_DEL) {
+            char *nodeID = kv_malloc(KV_MAX_NODEID_LEN);
+            key_copy(nodeID, key);
+            kv_app_send_without_token(self->thread_id, on_node_del, nodeID);
+        }
+    } else if (key_cmp("rings", key)) {
+        struct ring_change_ctx *ctx = kv_malloc(sizeof(*ctx));
+        key = key_next(key);
+        sscanf(key, "%u", &ctx->ring_id);
+        key = key_next(key);
+        sscanf(key, "%u", &ctx->state);
+        key = key_next(key);
+        key_copy(ctx->node_id, key);
+        assert(val_len == sizeof(ctx->vid));
+        kv_memcpy(&ctx->vid, val, val_len);
+        ctx->msg_type = msg;
+        kv_app_send_without_token(self->thread_id, on_ring_change, ctx);
     }
 }
 
@@ -585,7 +639,7 @@ kv_rdma_handle kv_ring_init(char *etcd_ip, char *etcd_port, uint32_t thread_num,
     self->thread_id = kv_app_get_thread_index();
     self->thread_num = thread_num;
     kv_rdma_init(&self->h, thread_num);
-    kvEtcdInit(etcd_ip, etcd_port, node_handler, ring_handler);
+    kvEtcdInit(etcd_ip, etcd_port, msg_handler);
     self->conn_q_poller = kv_app_poller_register(kv_conn_q_poller, self, 1000000);
     return self->h;
 }
@@ -642,23 +696,32 @@ void kv_ring_server_init(char *local_ip, char *local_port, uint32_t ring_num, ui
     assert(vid_per_ssd * ds_num <= ring_num);
     assert(local_ip && local_port);
     struct kv_ring *self = &g_ring;
-    self->req_handler = handler;
-    kv_rdma_listen(self->h, local_ip, local_port, con_req_num, max_msg_sz, rdma_req_handler_wrapper, arg, cb, cb_arg);
-
-    sprintf(self->local_id, "%s:%s", local_ip, local_port);
     ring_init(ring_num);
+    // all vnodes in the hash ring must be valid
+
+    self->req_handler = handler;
+    kv_rdma_listen(self->h, local_ip, local_port, con_req_num, max_msg_sz, rdma_req_handler_wrapper, arg, cb, cb_arg);  // TODO: change this
+    sprintf(self->local_id, "%s:%s", local_ip, local_port);
+    static char key[128];
+    sprintf(key, "/nodes/%s/", self->local_id);
+    self->node_lease = kvEtcdLeaseCreate(1, true);
     struct kv_etcd_node etcd_node = {.ds_num = ds_num, .ring_num = ring_num, .rpl_num = rpl_num};
-    kvEtcdNodeReg(self->local_id, &etcd_node, sizeof(etcd_node), 1);
+    kvEtcdPut(key, &etcd_node, sizeof(etcd_node), &self->node_lease);
 
     struct vid_ring_stat stats[ring_num];
     for (size_t i = 0; i < ring_num; i++) stats[i] = (struct vid_ring_stat){i, ring_size(self->rings[0] + i)};
     qsort(stats, ring_num, sizeof(struct vid_ring_stat), vid_ring_stat_cmp);
+    self->vid_lease = kvEtcdLeaseCreate(5, true);  // vid lease ttl must larger than node lease ttl
+    uint64_t init_lease = kvEtcdLeaseCreate(8, false);
+
     uint32_t ds_id = 0;
     for (size_t i = 0; i < vid_per_ssd * ds_num; i++) {
-        struct kv_etcd_vid vid = {.state = VID_COPYING, .ds_id = ds_id};
+        struct kv_etcd_vid vid = {.ds_id = ds_id};
         // random_vid(vid.vid);
         hash_vid(vid.vid, local_ip, local_port, i);
-        kvEtcdVidPut(self->local_id, stats[i].index, &vid, sizeof(vid));
+        sprintf(key, "/rings/%u/0/%s/", stats[i].index, self->local_id);  // copying
+        kvEtcdPut(key, &vid, sizeof(vid), &init_lease);
+
         ds_id = (ds_id + 1) % ds_num;
     }
 }
