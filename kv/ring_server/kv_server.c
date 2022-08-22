@@ -102,13 +102,13 @@ struct worker_t {
 
 kv_rdma_handle server;
 struct io_ctx {
-    void * req_h;
+    void *req_h;
     struct kv_msg *msg;
     uint32_t worker_id;
     uint32_t server_thread;
     kv_rmda_mr req;
-    bool success, is_get;
-    connection_handle next_node;
+    bool success, is_get, need_forward;
+    void *next_node;
 };
 
 struct kv_mempool *io_pool;
@@ -141,6 +141,7 @@ static void send_response(void *arg) {
     io->msg->type = io->success ? KV_MSG_OK : KV_MSG_ERR;
     io->msg->q_info = ds_queue.q_info[io->worker_id];
     kv_rdma_make_resp(io->req_h, (uint8_t *)io->msg, KV_MSG_SIZE(io->msg));
+    kv_ring_req_fini(io->next_node);
     kv_mempool_put(io_pool, io);
 }
 
@@ -159,23 +160,18 @@ static void del_key(void *arg) {
 static void forward_cb(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_mr resp, void *arg) {
     struct io_ctx *io = arg;
     io->success = success && io->msg->type == KV_MSG_OK;
-    if (io->is_get) {  
-        send_response(io);       
-    } else {  
-         kv_app_send(io->worker_id, del_key, io);
+    if (io->is_get) {
+        send_response(io);
+    } else {
+        kv_app_send(io->worker_id, del_key, io);
     }
-}
-
-static void forward_request(void *arg) {
-    struct io_ctx *io = arg;
-    kv_rmda_send_req(io->next_node, io->req, KV_MSG_SIZE(io->msg), io->req, io->msg, forward_cb, io);
 }
 
 static void io_fini(bool success, void *arg) {
     struct io_ctx *io = arg;
     io->success = success;
-    if (success && io->next_node) {
-        kv_app_send(io->server_thread, forward_request, arg);
+    if (success && io->need_forward) {
+        kv_ring_forward(io->next_node, io->req, forward_cb, io);
     } else {
         kv_app_send(io->server_thread, send_response, arg);
     }
@@ -186,22 +182,22 @@ static void io_start(void *arg) {
     struct worker_t *self = workers + io->worker_id;
     switch (io->msg->type) {
         case KV_MSG_SET:
-            if (io->next_node) put_key(self, KV_MSG_KEY(io->msg), io->msg->key_len);
+            if (io->need_forward) put_key(self, KV_MSG_KEY(io->msg), io->msg->key_len);
             kv_data_store_set(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, KV_MSG_VALUE(io->msg),
                               io->msg->value_len, io_fini, arg);
             break;
         case KV_MSG_GET:
-            if (find_key(self, KV_MSG_KEY(io->msg), io->msg->key_len) && io->next_node) {
-                kv_app_send(io->server_thread, forward_request, io);
+            if (find_key(self, KV_MSG_KEY(io->msg), io->msg->key_len) && io->need_forward) {
+                kv_ring_forward(io->next_node, io->req, forward_cb, io);
             } else {
-                io->next_node=NULL;
+                io->need_forward = NULL;
                 kv_data_store_get(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, KV_MSG_VALUE(io->msg),
                                   &io->msg->value_len, io_fini, arg);
             }
             break;
         case KV_MSG_DEL:
             assert(io->msg->value_len == 0);
-            if (io->next_node) put_key(self, KV_MSG_KEY(io->msg), io->msg->key_len);
+            if (io->need_forward) put_key(self, KV_MSG_KEY(io->msg), io->msg->key_len);
             kv_data_store_delete(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, io_fini, arg);
             break;
         case KV_MSG_TEST:
@@ -212,7 +208,7 @@ static void io_start(void *arg) {
     }
 }
 
-static void handler(void *req_h, kv_rmda_mr req, uint32_t req_sz, uint32_t ds_id, connection_handle next, void *arg) {
+static void handler(void *req_h, kv_rmda_mr req, uint32_t req_sz, uint32_t ds_id, void *next, void *arg) {
     uint32_t thread_id = kv_app_get_thread_index();
     struct io_ctx *io = kv_mempool_get(io_pool);
     assert(io);
@@ -222,6 +218,7 @@ static void handler(void *req_h, kv_rmda_mr req, uint32_t req_sz, uint32_t ds_id
     io->server_thread = thread_id;
     io->req = req;
     io->next_node = next;
+    io->need_forward = next != NULL;
     io->is_get = io->msg->type == KV_MSG_GET;
     kv_app_send(io->worker_id, io_start, io);
 }

@@ -58,20 +58,20 @@ func kvEtcdLeaseRevoke(leaseID C.uint64_t) {
 
 //export kvEtcdPut
 func kvEtcdPut(key *C.char, val unsafe.Pointer, valLen C.uint32_t, leaseID *C.uint64_t) {
-	go func() {
-		if leaseID == nil {
-			_, _ = cli.Put(ctx, C.GoString(key), C.GoStringN((*C.char)(val), C.int(valLen)))
-		} else {
-			_, _ = cli.Put(ctx, C.GoString(key), C.GoStringN((*C.char)(val), C.int(valLen)), clientv3.WithLease(clientv3.LeaseID(*leaseID)))
-		}
-	}()
+	//go func() {
+	if leaseID == nil {
+		_, _ = cli.Put(ctx, C.GoString(key), C.GoStringN((*C.char)(val), C.int(valLen)))
+	} else {
+		_, _ = cli.Put(ctx, C.GoString(key), C.GoStringN((*C.char)(val), C.int(valLen)), clientv3.WithLease(clientv3.LeaseID(*leaseID)))
+	}
+	//}()
 }
 
 //export kvEtcdDel
 func kvEtcdDel(key *C.char) {
-	go func() {
-		_, _ = cli.Delete(ctx, C.GoString(key))
-	}()
+	//go func() {
+	_, _ = cli.Delete(ctx, C.GoString(key))
+	//}()
 }
 
 func onKeyChange(kv *mvccpb.KeyValue, msgType mvccpb.Event_EventType) {

@@ -2,12 +2,12 @@
 #define _KV_RING_H_
 #include "kv_rdma.h"
 typedef void (*kv_ring_cb)(void *arg);
-typedef void (*kv_ring_req_handler)(void *req_h, kv_rmda_mr req, uint32_t req_sz, uint32_t ds_id, connection_handle next, void *arg);
+typedef void (*kv_ring_req_handler)(void *req_h, kv_rmda_mr req, uint32_t req_sz, uint32_t ds_id, void *next, void *arg);
 
 void kv_ring_dispatch(kv_rmda_mr req, kv_rmda_mr resp, void *resp_addr, kv_ring_cb cb, void *cb_arg);// for clients
-void kv_ring_forward(kv_rmda_mr req, kv_rdma_req_cb cb, void *cb_arg);// for servers
-// void kv_ring_forward(char *key, uint32_t hop, uint32_t r_num, connection_handle *h, uint16_t *ds_id);
-// connection_handle kv_ring_get_tail(char *key, uint32_t r_num);
+void kv_ring_forward(void *node, kv_rmda_mr req, kv_rdma_req_cb cb, void *cb_arg) ;// for servers
+void kv_ring_req_fini(void *_node) ;
+
 // client: kv_ring_init(kv_rdma_init)
 // server: kv_ring_init(kv_rdma_init)->kv_ring_server_init(kv_rdma_listen)
 kv_rdma_handle kv_ring_init(char *etcd_ip, char *etcd_port, uint32_t thread_num, kv_ring_cb ready_cb, void *arg);
