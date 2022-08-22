@@ -75,7 +75,7 @@ static void get_options(int argc, char **argv) {
 
 static inline uint128 index_to_key(uint64_t index) { return CityHash128((char *)&index, sizeof(uint64_t)); }
 struct io_buffer_t {
-    kv_rmda_mr req, resp;
+    kv_rdma_mr req, resp;
     uint32_t producer_id;
     bool is_finished;
 } * io_buffers;
@@ -88,7 +88,7 @@ struct producer_t {
 static struct timeval tv_start, tv_end;
 enum { INIT, FILL, READ, CLEAR } state = INIT;
 kv_rdma_handle rdma;
-kv_rmda_mrs_handle req_mrs, resp_mrs;
+kv_rdma_mrs_handle req_mrs, resp_mrs;
 
 static void thread_stop(void *arg) { kv_app_stop(0); }
 static void ring_fini_cb(void *arg) {

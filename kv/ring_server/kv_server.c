@@ -106,7 +106,7 @@ struct io_ctx {
     struct kv_msg *msg;
     uint32_t worker_id;
     uint32_t server_thread;
-    kv_rmda_mr req;
+    kv_rdma_mr req;
     bool success, is_get, need_forward;
     void *next_node;
 };
@@ -157,7 +157,7 @@ static void del_key(void *arg) {
     kv_app_send(io->server_thread, send_response, arg);
 }
 
-static void forward_cb(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_mr resp, void *arg) {
+static void forward_cb(connection_handle h, bool success, kv_rdma_mr req, kv_rdma_mr resp, void *arg) {
     struct io_ctx *io = arg;
     io->success = success && io->msg->type == KV_MSG_OK;
     if (io->is_get) {
@@ -208,7 +208,7 @@ static void io_start(void *arg) {
     }
 }
 
-static void handler(void *req_h, kv_rmda_mr req, uint32_t req_sz, uint32_t ds_id, void *next, void *arg) {
+static void handler(void *req_h, kv_rdma_mr req, uint32_t req_sz, uint32_t ds_id, void *next, void *arg) {
     uint32_t thread_id = kv_app_get_thread_index();
     struct io_ctx *io = kv_mempool_get(io_pool);
     assert(io);

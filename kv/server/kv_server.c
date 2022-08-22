@@ -65,7 +65,7 @@ struct worker_t {
 kv_rdma_handle server;
 struct kv_ds_queue ds_queue;
 struct io_ctx {
-    kv_rmda_mr req_h;
+    kv_rdma_mr req_h;
     struct kv_msg *msg;
     uint32_t worker_id;
     uint32_t server_thread;
@@ -108,7 +108,7 @@ static void io_start(void *arg) {
     }
 }
 
-static void handler(void *req_h, kv_rmda_mr req, uint32_t req_sz, void *arg) {
+static void handler(void *req_h, kv_rdma_mr req, uint32_t req_sz, void *arg) {
     struct io_ctx *ctx = malloc(sizeof(struct io_ctx));
     *ctx = (struct io_ctx){req_h, (struct kv_msg *)kv_rdma_get_req_buf(req), 0, kv_app_get_thread_index()};
     uint64_t key_frag = *(uint64_t *)(KV_MSG_KEY(ctx->msg) + 8);

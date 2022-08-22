@@ -87,7 +87,7 @@ static void get_options(int argc, char **argv) {
 }
 
 struct io_buffer_t {
-    kv_rmda_mr req, resp;
+    kv_rdma_mr req, resp;
     uint32_t producer_id;
     bool read_modify_write, is_finished;
     struct timeval io_start;
@@ -113,7 +113,7 @@ enum {
     DEL,
 } state = INIT;
 kv_rdma_handle rdma;
-kv_rmda_mrs_handle req_mrs, resp_mrs;
+kv_rdma_mrs_handle req_mrs, resp_mrs;
 kv_ycsb_handle workload;
 
 static void thread_stop(void *arg) { kv_app_stop(0); }

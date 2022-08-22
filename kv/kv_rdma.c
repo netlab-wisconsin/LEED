@@ -110,7 +110,7 @@ struct mr_bulk {
     uint8_t *buf;
     struct ibv_mr *mrs;
 };
-kv_rmda_mrs_handle kv_rdma_alloc_bulk(kv_rdma_handle h, enum kv_rmda_mr_type type, size_t size, size_t count) {
+kv_rdma_mrs_handle kv_rdma_alloc_bulk(kv_rdma_handle h, enum kv_rdma_mr_type type, size_t size, size_t count) {
     struct kv_rdma *self = h;
     struct mr_bulk *mr_h = kv_malloc(sizeof(struct mr_bulk));
     if (type != KV_RDMA_MR_RESP) size += HEADER_SIZE;
@@ -124,8 +124,8 @@ kv_rmda_mrs_handle kv_rdma_alloc_bulk(kv_rdma_handle h, enum kv_rmda_mr_type typ
     }
     return mr_h;
 }
-kv_rmda_mr kv_rdma_mrs_get(kv_rmda_mrs_handle h, size_t index) { return ((struct mr_bulk *)h)->mrs + index; }
-void kv_rdma_free_bulk(kv_rmda_mrs_handle h) {
+kv_rdma_mr kv_rdma_mrs_get(kv_rdma_mrs_handle h, size_t index) { return ((struct mr_bulk *)h)->mrs + index; }
+void kv_rdma_free_bulk(kv_rdma_mrs_handle h) {
     struct mr_bulk *mr_h = h;
     ibv_dereg_mr(mr_h->mr);
     kv_dma_free(mr_h->buf);
@@ -133,24 +133,24 @@ void kv_rdma_free_bulk(kv_rmda_mrs_handle h) {
     kv_free(mr_h);
 }
 
-kv_rmda_mr kv_rdma_alloc_req(kv_rdma_handle h, uint32_t size) {
+kv_rdma_mr kv_rdma_alloc_req(kv_rdma_handle h, uint32_t size) {
     struct kv_rdma *self = h;
     size += HEADER_SIZE;
     uint8_t *buf = kv_dma_malloc(size);
     return ibv_reg_mr(self->pd, buf, size, 0);
 }
 
-uint8_t *kv_rdma_get_req_buf(kv_rmda_mr mr) { return (uint8_t *)((struct ibv_mr *)mr)->addr + HEADER_SIZE; }
+uint8_t *kv_rdma_get_req_buf(kv_rdma_mr mr) { return (uint8_t *)((struct ibv_mr *)mr)->addr + HEADER_SIZE; }
 
-kv_rmda_mr kv_rdma_alloc_resp(kv_rdma_handle h, uint32_t size) {
+kv_rdma_mr kv_rdma_alloc_resp(kv_rdma_handle h, uint32_t size) {
     struct kv_rdma *self = h;
     uint8_t *buf = kv_dma_malloc(size);
     return ibv_reg_mr(self->pd, buf, size, IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
 }
 
-uint8_t *kv_rdma_get_resp_buf(kv_rmda_mr mr) { return (uint8_t *)((struct ibv_mr *)mr)->addr; }
+uint8_t *kv_rdma_get_resp_buf(kv_rdma_mr mr) { return (uint8_t *)((struct ibv_mr *)mr)->addr; }
 
-void kv_rdma_free_mr(kv_rmda_mr h) {
+void kv_rdma_free_mr(kv_rdma_mr h) {
     struct ibv_mr *mr = h;
     uint8_t *buf = mr->addr;
     ibv_dereg_mr(mr);
@@ -336,7 +336,7 @@ void kv_rdma_connect(kv_rdma_handle h, char *addr_str, char *port_str, kv_rdma_c
     freeaddrinfo(addr);
 }
 
-void kv_rmda_send_req(connection_handle h, kv_rmda_mr req, uint32_t req_sz, kv_rmda_mr resp, void *resp_addr, kv_rdma_req_cb cb,
+void kv_rdma_send_req(connection_handle h, kv_rdma_mr req, uint32_t req_sz, kv_rdma_mr resp, void *resp_addr, kv_rdma_req_cb cb,
                       void *cb_arg) {
     struct rdma_connection *conn = h;
     assert(conn->is_server == false);

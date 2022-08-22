@@ -72,8 +72,8 @@ struct vid_entry {
 CIRCLEQ_HEAD(vid_ring, vid_entry);
 
 struct dispatch_ctx {
-    kv_rmda_mr req;
-    kv_rmda_mr resp;
+    kv_rdma_mr req;
+    kv_rdma_mr resp;
     void *resp_addr;
     kv_ring_cb cb;
     void *cb_arg;
@@ -220,7 +220,7 @@ static void get_chain(struct vnode_chain *chain, char *key) {
 //     return entry->node->is_local ? NULL : entry->node->conn;
 // }
 
-static void dispatch_send_cb(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_mr resp, void *cb_arg) {
+static void dispatch_send_cb(connection_handle h, bool success, kv_rdma_mr req, kv_rdma_mr resp, void *cb_arg) {
     struct dispatch_ctx *ctx = cb_arg;
     struct kv_msg *msg = ctx->resp_addr;
     ctx->entry->node->ds_queue.io_cnt[ctx->entry->vid.ds_id]--;
@@ -251,7 +251,7 @@ static bool try_send_req(struct dispatch_ctx *ctx) {
         dst->node->ds_queue.io_cnt[dst->vid.ds_id]++;
         dst->node->ds_queue.q_info[dst->vid.ds_id] = *y;
         ctx->entry = dst;
-        kv_rmda_send_req(dst->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->resp, ctx->resp_addr, dispatch_send_cb, ctx);
+        kv_rdma_send_req(dst->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->resp, ctx->resp_addr, dispatch_send_cb, ctx);
         return true;
     } else {
         struct vid_entry *head = get_vnode(&chain, 0);
@@ -262,7 +262,7 @@ static bool try_send_req(struct dispatch_ctx *ctx) {
             head->node->ds_queue.io_cnt[head->vid.ds_id]++;
             head->node->ds_queue.q_info[head->vid.ds_id] = q_info;
             ctx->entry = head;
-            kv_rmda_send_req(head->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->resp, ctx->resp_addr, dispatch_send_cb, ctx);
+            kv_rdma_send_req(head->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->resp, ctx->resp_addr, dispatch_send_cb, ctx);
             return true;
         }
         return false;
@@ -283,7 +283,7 @@ static bool try_send_req(struct dispatch_ctx *ctx) {
     ctx->entry = entry;
     entry->node->ds_queue.io_cnt[entry->vid->ds_id]++;
     msg->ds_id = entry->vid->ds_id;
-    kv_rmda_send_req(entry->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->resp, ctx->resp_addr, dispatch_send_cb, ctx);
+    kv_rdma_send_req(entry->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->resp, ctx->resp_addr, dispatch_send_cb, ctx);
     return true;
 }
 #endif
@@ -307,7 +307,7 @@ static void dispatch(void *arg) {
         // kv_app_send(self->thread_id + random() % self->thread_num, dispatch, ctx);
     }
 }
-void kv_ring_dispatch(kv_rmda_mr req, kv_rmda_mr resp, void *resp_addr, kv_ring_cb cb, void *cb_arg) {
+void kv_ring_dispatch(kv_rdma_mr req, kv_rdma_mr resp, void *resp_addr, kv_ring_cb cb, void *cb_arg) {
     struct kv_ring *self = &g_ring;
     struct dispatch_ctx *ctx = kv_malloc(sizeof(*ctx));
     *ctx = (struct dispatch_ctx){req, resp, resp_addr, cb, cb_arg, kv_app_get_thread_index()};
@@ -320,7 +320,7 @@ void kv_ring_dispatch(kv_rmda_mr req, kv_rmda_mr resp, void *resp_addr, kv_ring_
 
 struct forward_ctx {
     struct kv_node *node;
-    kv_rmda_mr req;
+    kv_rdma_mr req;
     kv_rdma_req_cb cb;
     void *cb_arg;
 };
@@ -328,11 +328,11 @@ struct forward_ctx {
 static void forward(void *arg) {
     struct forward_ctx *ctx = arg;
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(ctx->req);
-    kv_rmda_send_req(ctx->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->req, msg, ctx->cb, ctx->cb_arg);
+    kv_rdma_send_req(ctx->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->req, msg, ctx->cb, ctx->cb_arg);
     free(ctx);
 }
 
-void kv_ring_forward(void *node, kv_rmda_mr req, kv_rdma_req_cb cb, void *cb_arg) {
+void kv_ring_forward(void *node, kv_rdma_mr req, kv_rdma_req_cb cb, void *cb_arg) {
     struct kv_ring *self = &g_ring;
     struct forward_ctx *ctx = kv_malloc(sizeof(*ctx));
     uint32_t thread_id = kv_app_get_thread_index();
@@ -666,7 +666,7 @@ static int vid_ring_stat_cmp(const void *_a, const void *_b) {
     if (a->size == b->size) return 0;
     return a->size < b->size ? -1 : 1;
 }
-static void rdma_req_handler_wrapper(void *req_h, kv_rmda_mr req, uint32_t req_sz, void *arg) {
+static void rdma_req_handler_wrapper(void *req_h, kv_rdma_mr req, uint32_t req_sz, void *arg) {
     struct kv_ring *self = &g_ring;
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(req);
     struct vnode_chain chain;

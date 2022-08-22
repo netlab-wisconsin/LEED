@@ -84,7 +84,7 @@ static void get_options(int argc, char **argv) {
 static inline uint128 index_to_key(uint64_t index) { return CityHash128((char *)&index, sizeof(uint64_t)); }
 
 struct io_buffer_t {
-    kv_rmda_mr req, resp;
+    kv_rdma_mr req, resp;
     uint32_t req_sz;
     uint32_t client_id;
     uint32_t producer_id;
@@ -127,7 +127,7 @@ static void stop(void) {
 }
 
 static void test(void *arg);
-static void io_fini(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_mr resp, void *arg) {
+static void io_fini(connection_handle h, bool success, kv_rdma_mr req, kv_rdma_mr resp, void *arg) {
     struct io_buffer_t *io = arg;
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_resp_buf(resp);
     if (!success || msg->type != KV_MSG_OK) {
@@ -146,7 +146,7 @@ static void io_fini(connection_handle h, bool success, kv_rmda_mr req, kv_rmda_m
 static void io_start(void *arg) {
     struct io_buffer_t *io = arg;
     struct client_t *client = clients + io->client_id;
-    kv_rmda_send_req(client->h, io->req, io->req_sz, io->resp, NULL, io_fini, arg);
+    kv_rdma_send_req(client->h, io->req, io->req_sz, io->resp, NULL, io_fini, arg);
 }
 
 static void test_fini(void *arg) {  // always running on producer 0
