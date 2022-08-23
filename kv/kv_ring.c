@@ -78,6 +78,7 @@ struct dispatch_ctx {
     kv_ring_cb cb;
     void *cb_arg;
     uint32_t thread_id;
+    uint32_t retry_num, next_retry;
     struct vid_entry *entry;
     TAILQ_ENTRY(dispatch_ctx)
     next;
@@ -196,35 +197,32 @@ static inline struct vid_entry *get_vnode_next(struct vnode_chain *chain, struct
     return get_vnode_from_chain(chain, 1, base, false);
 }
 
-static void get_chain(struct vnode_chain *chain, char *key) {
+static bool get_chain(struct vnode_chain *chain, char *key) {
     assert(chain);
     struct kv_ring *self = &g_ring;
-    if (self->rings == NULL) {
-        fprintf(stderr, "no available server!\n");
-        exit(-1);
-    }
+    if (self->rings == NULL) return false;
     struct vid_ring *ring = self->rings[kv_app_get_thread_index() - self->thread_id];
     chain->ring = ring + get_vid_part(key, self->ring_num);
     chain->base = find_vid_entry(chain->ring, key);
-    if (chain->base == NULL) {
-        fprintf(stderr, "no available server for this partition!\n");
-        exit(-1);
-    }
+    if (chain->base == NULL) return false;
     chain->rpl_num = 1;
     // get real rpl_num from head
     chain->rpl_num = get_vnode(chain, 0)->node->info.rpl_num;
+    return true;
 }
 
-// connection_handle kv_ring_get_tail(char *key, uint32_t r_num) {
-//     struct vid_entry *entry = get_vnode(key, r_num);
-//     return entry->node->is_local ? NULL : entry->node->conn;
-// }
-
 static void dispatch_send_cb(connection_handle h, bool success, kv_rdma_mr req, kv_rdma_mr resp, void *cb_arg) {
+    struct kv_ring *self = &g_ring;
     struct dispatch_ctx *ctx = cb_arg;
     struct kv_msg *msg = ctx->resp_addr;
     ctx->entry->node->ds_queue.io_cnt[ctx->entry->vid.ds_id]--;
     ctx->entry->node->ds_queue.q_info[ctx->entry->vid.ds_id] = msg->q_info;
+    ctx->entry->node->req_cnt--;
+    if (success && msg->type == KV_MSG_OUTDATED) {
+        struct dispatch_queue *dp = &self->dqs[kv_app_get_thread_index() - self->thread_id];
+        TAILQ_INSERT_TAIL(dp, ctx, next);
+        return;
+    }
     if (!success) msg->type = KV_MSG_ERR;
     if (ctx->cb) kv_app_send(ctx->thread_id, ctx->cb, ctx->cb_arg);
     kv_free(ctx);
@@ -234,7 +232,7 @@ static void dispatch_send_cb(connection_handle h, bool success, kv_rdma_mr req, 
 static bool try_send_req(struct dispatch_ctx *ctx) {
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(ctx->req);
     struct vnode_chain chain;
-    get_chain(&chain, KV_MSG_KEY(msg));
+    if (get_chain(&chain, KV_MSG_KEY(msg)) == false) return false;
     msg->hop = 1;
     if (msg->type == KV_MSG_GET) {
         struct kv_ds_q_info q_info[chain.rpl_num];
@@ -251,6 +249,7 @@ static bool try_send_req(struct dispatch_ctx *ctx) {
         dst->node->ds_queue.io_cnt[dst->vid.ds_id]++;
         dst->node->ds_queue.q_info[dst->vid.ds_id] = *y;
         ctx->entry = dst;
+        dst->node->req_cnt++;
         kv_rdma_send_req(dst->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->resp, ctx->resp_addr, dispatch_send_cb, ctx);
         return true;
     } else {
@@ -262,6 +261,7 @@ static bool try_send_req(struct dispatch_ctx *ctx) {
             head->node->ds_queue.io_cnt[head->vid.ds_id]++;
             head->node->ds_queue.q_info[head->vid.ds_id] = q_info;
             ctx->entry = head;
+            head->node->req_cnt++;
             kv_rdma_send_req(head->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->resp, ctx->resp_addr, dispatch_send_cb, ctx);
             return true;
         }
@@ -294,7 +294,13 @@ static int dispatch_dequeue(void *arg) {
     struct dispatch_queue *dp = &self->dqs[kv_app_get_thread_index() - self->thread_id];
     struct dispatch_ctx *x, *tmp;
     TAILQ_FOREACH_SAFE(x, dp, next, tmp) {
-        if (try_send_req(x)) TAILQ_REMOVE(dp, x, next);
+        if (--x->next_retry) continue;
+        if (try_send_req(x)) {
+            TAILQ_REMOVE(dp, x, next);
+        } else {
+            if (x->retry_num < 10) x->retry_num++;
+            x->next_retry = 1 << x->retry_num;
+        }
     }
     return 0;
 }
@@ -310,7 +316,7 @@ static void dispatch(void *arg) {
 void kv_ring_dispatch(kv_rdma_mr req, kv_rdma_mr resp, void *resp_addr, kv_ring_cb cb, void *cb_arg) {
     struct kv_ring *self = &g_ring;
     struct dispatch_ctx *ctx = kv_malloc(sizeof(*ctx));
-    *ctx = (struct dispatch_ctx){req, resp, resp_addr, cb, cb_arg, kv_app_get_thread_index()};
+    *ctx = (struct dispatch_ctx){req, resp, resp_addr, cb, cb_arg, kv_app_get_thread_index(), 0, 1};
     if (ctx->thread_id >= self->thread_id && ctx->thread_id < self->thread_id + self->thread_num) {
         dispatch(ctx);
     } else {
@@ -527,6 +533,7 @@ static int kv_conn_q_poller(void *arg) {
             kv_rdma_connect(self->h, ip_port, p, rdma_connect_cb, node, rdma_disconnect_cb, node);
         }
     }
+    self->conn_q = conn_q;
     if (self->ready_cb) {
         for (struct kv_node *node = self->nodes; node != NULL; node = node->hh.next)
             if (!node->is_local && !node->is_disconnecting && !node->is_connected) return 0;
@@ -670,7 +677,10 @@ static void rdma_req_handler_wrapper(void *req_h, kv_rdma_mr req, uint32_t req_s
     struct kv_ring *self = &g_ring;
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(req);
     struct vnode_chain chain;
-    get_chain(&chain, KV_MSG_KEY(msg));
+    if (get_chain(&chain, KV_MSG_KEY(msg)) == false) {
+        fprintf(stderr, "can not get the hash chain!\n");
+        exit(-1);
+    }
     if (msg->type == KV_MSG_SET || msg->type == KV_MSG_DEL) {
         struct vid_entry *local = get_vnode(&chain, msg->hop - 1);
         if (!local->node->is_local) goto send_nak;

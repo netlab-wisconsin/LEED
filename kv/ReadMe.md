@@ -2,7 +2,7 @@
 
 ### TODO List
 
-+ using mempool in data-path
++ ~~using mempool in data-path~~
 
 #### DataStore
 + ~~bucket log compact~~
@@ -21,29 +21,37 @@
 
 + don't copy during value log read
 + write small value to bucket log
-+ set: write bucket/value at the same time
-+ bucket cache
++ ~~set: write bucket/value at the same time~~
++ ~~bucket cache~~
 + dynamic queue length
-
++ optimize value log compaction
++ support commit & rollback
 
 #### RDMA
-+ RDMA_READ
 + ~~shared recieve queue~~
 + ~~multi-thread server~~
-+ flow control
++ ~~flow control~~
 
 #### replication
-+ Control-plane
++ ~~Control-plane~~
 
-    + ectd
+    + ~~ectd~~
 
-+ data-distribution
++ ~~data-distribution~~
 + node join & leave
-+ chain replication
+    + ~~operations flow~~
 
-    + set & del
+    + pre_copy
 
-    + read
+    + ~~new kv data structure in the etcd~~
+
++ ~~chain replication~~
+
+    + ~~set & del~~
+
+    + ~~read~~
+
+    + remove the requests shipping?
 
 ### spdk bugs
 
