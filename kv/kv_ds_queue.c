@@ -28,7 +28,7 @@ uint32_t kv_ds_op_cost(enum kv_ds_op op) {
 }
 
 struct kv_ds_q_info *kv_ds_queue_find(struct kv_ds_q_info *qs, uint32_t *io_cnt, uint32_t size, uint32_t cost) {
-    assert(size);
+    if (size == 0) return NULL;
     uint32_t j = 0;
     for (size_t i = 0; i < size; i++) {
         if (io_cnt && io_cnt[i] == 0) return qs + i;

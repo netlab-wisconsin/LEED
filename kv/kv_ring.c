@@ -14,8 +14,8 @@
 #include "utils/city.h"
 #include "utils/uthash.h"
 
-#define CIRCLEQ_FOREACH_SAFE(var, head, field, tvar) \
-    for ((var) = CIRCLEQ_FIRST(head); (var) != (void *)(head) && ((tvar) = CIRCLEQ_NEXT(var, field), 1); (var) = (tvar))
+#define STAILQ_FOREACH_SAFE(var, head, field, tvar) \
+    for ((var) = STAILQ_FIRST((head)); (var) && ((tvar) = STAILQ_NEXT((var), field), 1); (var) = (tvar))
 
 // etcd values
 struct kv_etcd_node {
@@ -159,7 +159,6 @@ static struct vid_entry *find_vid_by_node(struct vid_ring *ring, struct kv_node 
 struct vnode_chain {
     struct vid_ring *ring;
     struct vid_entry *base;  // may be a invalid vnode
-    uint32_t rpl_num;
 };
 
 static struct vid_entry *get_vnode_from_chain(struct vnode_chain *chain, int32_t index, struct vid_entry *base, bool pre_copy) {
@@ -167,7 +166,7 @@ static struct vid_entry *get_vnode_from_chain(struct vnode_chain *chain, int32_t
     // atmost one invalid vnode exists in a ring(chain).
     struct vid_entry *invalid = NULL, *tail = NULL, *x = base && !pre_copy ? base : chain->base;
     int32_t i = 0;
-    while (i < (int32_t)chain->rpl_num) {
+    while (i < (int32_t)chain->base->node->info.rpl_num) {
         if (x->state == VID_RUNNING) {
             if (i == index) return x;
             tail = x;
@@ -205,9 +204,6 @@ static bool get_chain(struct vnode_chain *chain, char *key) {
     chain->ring = ring + get_vid_part(key, self->ring_num);
     chain->base = find_vid_entry(chain->ring, key);
     if (chain->base == NULL) return false;
-    chain->rpl_num = 1;
-    // get real rpl_num from head
-    chain->rpl_num = get_vnode(chain, 0)->node->info.rpl_num;
     return true;
 }
 
@@ -235,8 +231,8 @@ static bool try_send_req(struct dispatch_ctx *ctx) {
     if (get_chain(&chain, KV_MSG_KEY(msg)) == false) return false;
     msg->hop = 1;
     if (msg->type == KV_MSG_GET) {
-        struct kv_ds_q_info q_info[chain.rpl_num];
-        uint32_t io_cnt[chain.rpl_num];
+        struct kv_ds_q_info q_info[chain.base->node->info.rpl_num];
+        uint32_t io_cnt[chain.base->node->info.rpl_num];
         uint32_t i = 0;
         for (struct vid_entry *x = get_vnode(&chain, 0); x != NULL; x = get_vnode_next(&chain, x)) {
             q_info[i] = x->node->ds_queue.q_info[x->vid.ds_id];
@@ -254,6 +250,7 @@ static bool try_send_req(struct dispatch_ctx *ctx) {
         return true;
     } else {
         struct vid_entry *head = get_vnode(&chain, 0);
+        if (head == NULL) return false;
         uint32_t cost = kv_ds_op_cost(msg->type == KV_MSG_SET ? KV_DS_SET : KV_DS_DEL);
         struct kv_ds_q_info q_info = head->node->ds_queue.q_info[head->vid.ds_id];
         uint32_t io_cnt = head->node->ds_queue.io_cnt[head->vid.ds_id];
@@ -310,7 +307,6 @@ static void dispatch(void *arg) {
     if (!try_send_req(ctx)) {
         struct dispatch_queue *dp = &self->dqs[kv_app_get_thread_index() - self->thread_id];
         TAILQ_INSERT_TAIL(dp, ctx, next);
-        // kv_app_send(self->thread_id + random() % self->thread_num, dispatch, ctx);
     }
 }
 void kv_ring_dispatch(kv_rdma_mr req, kv_rdma_mr resp, void *resp_addr, kv_ring_cb cb, void *cb_arg) {
@@ -391,7 +387,8 @@ static void update_ring(void *arg) {
     struct kv_ring *self = &g_ring;
     struct ring_change_ctx *ctx = arg;
     bool master_thread = kv_app_get_thread_index() == self->thread_id;
-    if (master_thread && --ctx->cnt) return;
+    if (master_thread)
+        if (--ctx->cnt) return;
     struct vid_ring *ring = self->rings[kv_app_get_thread_index() - self->thread_id];
     struct vid_entry *vnode = find_vid_by_node(ring + ctx->ring_id, ctx->node);
     switch ((ctx->state << 1) | ctx->msg_type) {
@@ -440,10 +437,20 @@ static void update_ring(void *arg) {
         kv_free(ctx);  // all the hash rings are updated
     }
 };
+static void update_rings(struct kv_node *node) {
+    struct kv_ring *self = &g_ring;
+    struct ring_change_ctx *ctx;
+    while ((ctx = STAILQ_FIRST(&node->ring_updates)) != NULL) {
+        STAILQ_REMOVE_HEAD(&node->ring_updates, next);
+        for (size_t i = 1; i < self->thread_num; i++) kv_app_send(self->thread_id + i, update_ring, ctx);
+        update_ring(ctx);
+    }
+}
 
 static void on_ring_change(void *arg) {
     struct kv_ring *self = &g_ring;
     struct ring_change_ctx *ctx = arg;
+    bool update_now = true;
     ctx->cnt = self->thread_num;
     HASH_FIND_STR(self->nodes, ctx->node_id, ctx->node);
     if (ctx->node == NULL) {
@@ -452,13 +459,12 @@ static void on_ring_change(void *arg) {
         ctx->node->has_info = false;
         HASH_ADD_STR(self->nodes, node_id, ctx->node);
         STAILQ_INIT(&ctx->node->ring_updates);
-        STAILQ_INSERT_HEAD(&ctx->node->ring_updates, ctx, next);
-    } else if (!ctx->node->has_info || !ctx->node->is_connected) {  // node not ready
-        STAILQ_INSERT_HEAD(&ctx->node->ring_updates, ctx, next);
-    } else {
-        for (size_t i = 1; i < self->thread_num; i++) kv_app_send(self->thread_id + i, update_ring, ctx);
-        update_ring(ctx);
+        update_now = false;
+    } else if (!ctx->node->has_info || (!ctx->node->is_local && !ctx->node->is_connected)) {  // node not ready
+        update_now = false;
     }
+    STAILQ_INSERT_HEAD(&ctx->node->ring_updates, ctx, next);
+    if (update_now) update_rings(ctx->node);
 }
 
 // --- hash ring: nodes management ---
@@ -479,11 +485,11 @@ static void rdma_disconnect_cb(void *arg) {
         assert(are_vnodes_leaving(node) && node->req_cnt == 0);
         printf("client: disconnected to node %s.\n", node->node_id);
         kv_ds_queue_fini(&node->ds_queue);
+        HASH_DEL(self->nodes, node);
         kv_free(node);
     } else {
-        // TODO: never retry.
-        node->is_connected = false;
-        STAILQ_INSERT_TAIL(&self->conn_q, node, next);
+        fprintf(stderr, "server %s disconnected actively, exiting\n", node->node_id);
+        exit(-1);
     }
 }
 static void rdma_connect_cb(connection_handle h, void *arg) {
@@ -499,30 +505,21 @@ static void rdma_connect_cb(connection_handle h, void *arg) {
     printf("client: connected to node %s.\n", node->node_id);
     node->is_connected = true;
     node->conn = h;
-    struct ring_change_ctx *ctx;
-    while ((ctx = STAILQ_FIRST(&node->ring_updates)) != NULL) {
-        STAILQ_REMOVE_HEAD(&node->ring_updates, next);
-        for (size_t i = 1; i < self->thread_num; i++) kv_app_send(self->thread_id + i, update_ring, ctx);
-        update_ring(ctx);
-    }
+    update_rings(node);
 }
 
 static int kv_conn_q_poller(void *arg) {
     struct kv_ring *self = arg;
-    struct kv_nodes_head conn_q = STAILQ_HEAD_INITIALIZER(conn_q);
-    while (!STAILQ_EMPTY(&self->conn_q)) {
-        struct kv_node *node = STAILQ_FIRST(&self->conn_q);
-        STAILQ_REMOVE_HEAD(&self->conn_q, next);
-        assert(!node->is_local);
+    struct kv_node *node, *tmp;
+    STAILQ_FOREACH_SAFE(node, &self->conn_q, next, tmp) {
         if (node->is_disconnecting) {
-            if (node->is_connected) {
-                if (are_vnodes_leaving(node) && node->req_cnt == 0) {
+            if (are_vnodes_leaving(node) && node->req_cnt == 0) {
+                if (node->is_connected) {
                     kv_rdma_disconnect(node->conn);
-                } else {
-                    STAILQ_INSERT_HEAD(&conn_q, node, next);
+                } else {  // local node
+                    rdma_disconnect_cb(node);
                 }
-            } else {
-                rdma_disconnect_cb(node);
+                STAILQ_REMOVE(&self->conn_q, node, kv_node, next);
             }
         } else {
             assert(!node->is_connected);
@@ -531,10 +528,11 @@ static int kv_conn_q_poller(void *arg) {
             while (*(p++) != ':') assert(p - ip_port < KV_MAX_NODEID_LEN);
             *(p - 1) = '\0';
             kv_rdma_connect(self->h, ip_port, p, rdma_connect_cb, node, rdma_disconnect_cb, node);
+            STAILQ_REMOVE(&self->conn_q, node, kv_node, next);
         }
     }
-    self->conn_q = conn_q;
     if (self->ready_cb) {
+        if (self->nodes == NULL) return 0;
         for (struct kv_node *node = self->nodes; node != NULL; node = node->hh.next)
             if (!node->is_local && !node->is_disconnecting && !node->is_connected) return 0;
         self->ready_cb(self->arg);
@@ -549,14 +547,16 @@ static void on_node_del(void *arg) {
     struct kv_node *node = NULL;
     HASH_FIND_STR(self->nodes, node_id, node);
     if (node == NULL) goto finish;
-    HASH_DEL(self->nodes, node);
     if (node->is_local) {
         fprintf(stderr, "kv_etcd keepalive timeout!\n");
-        // TODO: wait 10 seconds for the ongoing requests
-        exit(-1);
+        kvEtcdLeaseRevoke(self->node_lease);
+        kvEtcdLeaseRevoke(self->vid_lease);
+        // TODO: when there is no other node connected to this node &&
+        //  no ongoing requests send to other nodes, call kv_ring_fini
+        goto finish;
     }
     node->is_disconnecting = true;
-    if (node->is_connected) STAILQ_INSERT_TAIL(&self->conn_q, node, next);
+    if (node->is_connected || node->is_local) STAILQ_INSERT_TAIL(&self->conn_q, node, next);
     // TODO: tail-> write leaving ring
 finish:
     kv_free(node_id);
@@ -587,7 +587,10 @@ static void on_node_put(void *arg) {
         node->ds_queue.io_cnt[i] = 0;
     }
     HASH_ADD_STR(self->nodes, node_id, node);
-    if (!node->is_local) STAILQ_INSERT_TAIL(&self->conn_q, node, next);
+    if (node->is_local) {
+        update_rings(node);
+    } else
+        STAILQ_INSERT_TAIL(&self->conn_q, node, next);
 }
 
 static inline const char *key_copy(char *dst, const char *src) {
@@ -617,6 +620,7 @@ static void msg_handler(enum kv_etcd_msg_type msg, const char *key, uint32_t key
             key_copy(node->node_id, key);
             assert(val_len == sizeof(struct kv_etcd_node));
             kv_memcpy(&node->info, val, val_len);
+            STAILQ_INIT(&node->ring_updates);
             printf("PUT NODE %s\n", node->node_id);
             kv_app_send_without_token(self->thread_id, on_node_put, node);
         } else if (msg == KV_ETCD_MSG_DEL) {
@@ -677,10 +681,7 @@ static void rdma_req_handler_wrapper(void *req_h, kv_rdma_mr req, uint32_t req_s
     struct kv_ring *self = &g_ring;
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(req);
     struct vnode_chain chain;
-    if (get_chain(&chain, KV_MSG_KEY(msg)) == false) {
-        fprintf(stderr, "can not get the hash chain!\n");
-        exit(-1);
-    }
+    if (get_chain(&chain, KV_MSG_KEY(msg)) == false) goto send_nak;
     if (msg->type == KV_MSG_SET || msg->type == KV_MSG_DEL) {
         struct vid_entry *local = get_vnode(&chain, msg->hop - 1);
         if (!local->node->is_local) goto send_nak;

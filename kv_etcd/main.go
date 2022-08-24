@@ -24,16 +24,18 @@ const (
 )
 
 var (
-	ctx    context.Context
-	cli    *clientv3.Client
-	msgHdl C.kv_etcd_msg_handler
+	ctx      context.Context
+	cli      *clientv3.Client
+	msgHdl   C.kv_etcd_msg_handler
+	funcChan chan func()
+	DebugMod = false
 )
 
 //export kvEtcdLeaseCreate
-func kvEtcdLeaseCreate(ttl C.uint32_t, keepalive C.bool) C.uint64_t {
+func kvEtcdLeaseCreate(ttl C.uint32_t, keepalive C.bool) C.uint64_t { //sync
 	lease, err := cli.Grant(ctx, int64(ttl))
 	if err != nil {
-		log.Fatalln("unable to create lease")
+		log.Fatalln("unable to create the lease")
 	}
 	if keepalive {
 		leaseCh, err := cli.KeepAlive(ctx, lease.ID)
@@ -49,33 +51,43 @@ func kvEtcdLeaseCreate(ttl C.uint32_t, keepalive C.bool) C.uint64_t {
 }
 
 //export kvEtcdLeaseRevoke
-func kvEtcdLeaseRevoke(leaseID C.uint64_t) {
-	_, err := cli.Revoke(ctx, clientv3.LeaseID(leaseID))
-	if err != nil {
-		log.Fatalln("unable to revoke lease")
+func kvEtcdLeaseRevoke(leaseID C.uint64_t) { //async
+	funcChan <- func() {
+		ttl, err := cli.TimeToLive(ctx, clientv3.LeaseID(leaseID))
+		time.Sleep(time.Duration(ttl.TTL) * time.Second)
+		_, err = cli.Revoke(ctx, clientv3.LeaseID(leaseID))
+		if err != nil {
+			log.Fatalln("unable to revoke the lease")
+		}
 	}
 }
 
 //export kvEtcdPut
-func kvEtcdPut(key *C.char, val unsafe.Pointer, valLen C.uint32_t, leaseID *C.uint64_t) {
-	//go func() {
-	if leaseID == nil {
-		_, _ = cli.Put(ctx, C.GoString(key), C.GoStringN((*C.char)(val), C.int(valLen)))
-	} else {
-		_, _ = cli.Put(ctx, C.GoString(key), C.GoStringN((*C.char)(val), C.int(valLen)), clientv3.WithLease(clientv3.LeaseID(*leaseID)))
+func kvEtcdPut(key *C.char, val unsafe.Pointer, valLen C.uint32_t, leaseID *C.uint64_t) { //async
+	funcChan <- func() {
+		var err error
+		if leaseID == nil {
+			_, err = cli.Put(ctx, C.GoString(key), C.GoStringN((*C.char)(val), C.int(valLen)))
+		} else {
+			_, err = cli.Put(ctx, C.GoString(key), C.GoStringN((*C.char)(val), C.int(valLen)), clientv3.WithLease(clientv3.LeaseID(*leaseID)))
+		}
+		if err != nil {
+			log.Fatalln(err)
+		}
 	}
-	//}()
 }
 
 //export kvEtcdDel
-func kvEtcdDel(key *C.char) {
-	//go func() {
-	_, _ = cli.Delete(ctx, C.GoString(key))
-	//}()
+func kvEtcdDel(key *C.char) { //async
+	funcChan <- func() {
+		_, _ = cli.Delete(ctx, C.GoString(key))
+	}
 }
 
 func onKeyChange(kv *mvccpb.KeyValue, msgType mvccpb.Event_EventType) {
-	// println(msgType, string(kv.Key[:]))
+	if DebugMod {
+		println(msgType, string(kv.Key[:]))
+	}
 	if msgHdl == nil {
 		return
 	}
@@ -83,7 +95,15 @@ func onKeyChange(kv *mvccpb.KeyValue, msgType mvccpb.Event_EventType) {
 }
 
 //export kvEtcdInit
-func kvEtcdInit(ip, port *C.char, _msgHdl C.kv_etcd_msg_handler) C.int {
+func kvEtcdInit(ip, port *C.char, _msgHdl C.kv_etcd_msg_handler) C.int { //sync
+	funcChan = make(chan func(), 4096)
+	for i := 0; i < 8; i++ {
+		go func() {
+			for f := range funcChan {
+				f()
+			}
+		}()
+	}
 	ctx = context.Background()
 	var err error
 	cli, err = clientv3.New(clientv3.Config{
@@ -114,7 +134,8 @@ func kvEtcdInit(ip, port *C.char, _msgHdl C.kv_etcd_msg_handler) C.int {
 }
 
 //export kvEtcdFini
-func kvEtcdFini() C.int {
+func kvEtcdFini() C.int { //sync
+	close(funcChan)
 	err := cli.Close()
 	if err != nil {
 		return -1
@@ -125,6 +146,7 @@ func kvEtcdFini() C.int {
 
 func main() {
 	//tests
+	DebugMod = true
 	kvEtcdInit(C.CString("127.0.0.1"), C.CString("2379"), nil)
 	val := unsafe.Pointer(C.CString("a\x00aaaaaaaaaaaa"))
 	nodeId := C.CString("10.0.0.1:5000")
@@ -137,6 +159,6 @@ func main() {
 	time.Sleep(5 * time.Second)
 	println("revoke the lease")
 	kvEtcdLeaseRevoke(leaseID)
-	time.Sleep(5 * time.Second)
+	time.Sleep(8 * time.Second)
 	kvEtcdFini()
 }
