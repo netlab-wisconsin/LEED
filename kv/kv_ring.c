@@ -96,7 +96,7 @@ struct kv_ring {
     uint32_t ring_num;
     struct kv_nodes_head conn_q;
     void *conn_q_poller;
-    kv_ring_cb ready_cb;
+    kv_ring_cb server_online_cb;
     void *arg;
     kv_ring_req_handler req_handler;
     uint64_t node_lease, vid_lease;
@@ -471,7 +471,6 @@ static void on_ring_change(void *arg) {
 static inline bool are_vnodes_leaving(struct kv_node *node) {
     // ring 0 is the last updated ring.
     struct vid_ring *ring = g_ring.rings[0];
-    if (CIRCLEQ_EMPTY(ring)) return NULL;
     struct vid_entry *x;
     CIRCLEQ_FOREACH(x, ring, entry) {
         if (x->node == node && x->state != VID_LEAVING) return false;
@@ -506,6 +505,10 @@ static void rdma_connect_cb(connection_handle h, void *arg) {
     node->is_connected = true;
     node->conn = h;
     update_rings(node);
+    if(self->server_online_cb){
+        self->server_online_cb(self->arg);
+         self->server_online_cb = NULL;  // only call server_online_cb once
+    }
 }
 
 static int kv_conn_q_poller(void *arg) {
@@ -531,13 +534,6 @@ static int kv_conn_q_poller(void *arg) {
             STAILQ_REMOVE(&self->conn_q, node, kv_node, next);
         }
     }
-    if (self->ready_cb) {
-        if (self->nodes == NULL) return 0;
-        for (struct kv_node *node = self->nodes; node != NULL; node = node->hh.next)
-            if (!node->is_local && !node->is_disconnecting && !node->is_connected) return 0;
-        self->ready_cb(self->arg);
-        self->ready_cb = NULL;  // only call ready_cb once
-    }
     return 0;
 }
 
@@ -552,7 +548,7 @@ static void on_node_del(void *arg) {
         kvEtcdLeaseRevoke(self->node_lease);
         kvEtcdLeaseRevoke(self->vid_lease);
         // TODO: when there is no other node connected to this node &&
-        //  no ongoing requests send to other nodes, call kv_ring_fini
+        //  no ongoing requests sent to other nodes, call kv_ring_fini
         goto finish;
     }
     node->is_disconnecting = true;
@@ -647,9 +643,9 @@ static void msg_handler(enum kv_etcd_msg_type msg, const char *key, uint32_t key
     }
 }
 
-kv_rdma_handle kv_ring_init(char *etcd_ip, char *etcd_port, uint32_t thread_num, kv_ring_cb ready_cb, void *arg) {
+kv_rdma_handle kv_ring_init(char *etcd_ip, char *etcd_port, uint32_t thread_num, kv_ring_cb server_online_cb, void *arg) {
     struct kv_ring *self = &g_ring;
-    self->ready_cb = ready_cb;
+    self->server_online_cb = server_online_cb;
     self->arg = arg;
     self->nodes = NULL;
     self->rings = NULL;
@@ -684,7 +680,7 @@ static void rdma_req_handler_wrapper(void *req_h, kv_rdma_mr req, uint32_t req_s
     if (get_chain(&chain, KV_MSG_KEY(msg)) == false) goto send_nak;
     if (msg->type == KV_MSG_SET || msg->type == KV_MSG_DEL) {
         struct vid_entry *local = get_vnode(&chain, msg->hop - 1);
-        if (!local->node->is_local) goto send_nak;
+        if (local == NULL || !local->node->is_local) goto send_nak;
         struct vid_entry *next = get_vnode_next(&chain, local);
         if (next) {
             msg->hop++;

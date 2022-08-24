@@ -27,7 +27,7 @@ var (
 	ctx      context.Context
 	cli      *clientv3.Client
 	msgHdl   C.kv_etcd_msg_handler
-	funcChan chan func()
+	funcChan chan func() error
 	DebugMod = false
 )
 
@@ -52,35 +52,42 @@ func kvEtcdLeaseCreate(ttl C.uint32_t, keepalive C.bool) C.uint64_t { //sync
 
 //export kvEtcdLeaseRevoke
 func kvEtcdLeaseRevoke(leaseID C.uint64_t) { //async
-	funcChan <- func() {
-		ttl, err := cli.TimeToLive(ctx, clientv3.LeaseID(leaseID))
-		time.Sleep(time.Duration(ttl.TTL) * time.Second)
-		_, err = cli.Revoke(ctx, clientv3.LeaseID(leaseID))
+	leaseId := clientv3.LeaseID(leaseID)
+	funcChan <- func() error {
+		ttl, err := cli.TimeToLive(ctx, leaseId)
 		if err != nil {
-			log.Fatalln("unable to revoke the lease")
+			return err
 		}
+		time.Sleep(time.Duration(ttl.TTL) * time.Second)
+		_, err = cli.Revoke(ctx, leaseId)
+		return err
 	}
 }
 
 //export kvEtcdPut
 func kvEtcdPut(key *C.char, val unsafe.Pointer, valLen C.uint32_t, leaseID *C.uint64_t) { //async
-	funcChan <- func() {
-		var err error
-		if leaseID == nil {
-			_, err = cli.Put(ctx, C.GoString(key), C.GoStringN((*C.char)(val), C.int(valLen)))
-		} else {
-			_, err = cli.Put(ctx, C.GoString(key), C.GoStringN((*C.char)(val), C.int(valLen)), clientv3.WithLease(clientv3.LeaseID(*leaseID)))
+	k, v := C.GoString(key), C.GoStringN((*C.char)(val), C.int(valLen))
+	if leaseID == nil {
+		funcChan <- func() error {
+			_, err := cli.Put(ctx, k, v)
+			return err
 		}
-		if err != nil {
-			log.Fatalln(err)
+	} else {
+		lease := clientv3.WithLease(clientv3.LeaseID(*leaseID))
+		funcChan <- func() error {
+			_, err := cli.Put(ctx, k, v, lease)
+			return err
 		}
 	}
+
 }
 
 //export kvEtcdDel
 func kvEtcdDel(key *C.char) { //async
-	funcChan <- func() {
-		_, _ = cli.Delete(ctx, C.GoString(key))
+	k := C.GoString(key)
+	funcChan <- func() error {
+		_, err := cli.Delete(ctx, k)
+		return err
 	}
 }
 
@@ -96,11 +103,13 @@ func onKeyChange(kv *mvccpb.KeyValue, msgType mvccpb.Event_EventType) {
 
 //export kvEtcdInit
 func kvEtcdInit(ip, port *C.char, _msgHdl C.kv_etcd_msg_handler) C.int { //sync
-	funcChan = make(chan func(), 4096)
+	funcChan = make(chan func() error, 4096)
 	for i := 0; i < 8; i++ {
 		go func() {
 			for f := range funcChan {
-				f()
+				if err := f(); err != nil {
+					log.Fatalln(err)
+				}
 			}
 		}()
 	}

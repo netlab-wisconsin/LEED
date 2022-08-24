@@ -223,13 +223,12 @@ static void handler(void *req_h, kv_rdma_mr req, uint32_t req_sz, uint32_t ds_id
     kv_app_send(io->worker_id, io_start, io);
 }
 
-static void ring_ready_cb(void *arg) {
+static void ring_init(void *arg) {
+    server = kv_ring_init(opt.etcd_ip, opt.etcd_port, opt.thread_num, NULL, NULL);
     io_pool = kv_mempool_create(opt.concurrent_io_num, sizeof(struct io_ctx));
     kv_ring_server_init(opt.local_ip, opt.local_port, opt.vid_num, opt.vid_per_ssd, opt.ssd_num, opt.rpl_num,
                         opt.concurrent_io_num, sizeof(struct kv_msg) + 16 + opt.value_size, handler, NULL, NULL, NULL);
 }
-
-static void ring_init(void *arg) { server = kv_ring_init(opt.etcd_ip, opt.etcd_port, opt.thread_num, ring_ready_cb, NULL); }
 
 static uint32_t io_cnt;
 static void worker_init_done(bool success, void *arg) {

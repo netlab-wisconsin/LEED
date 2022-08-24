@@ -10,7 +10,7 @@ void kv_ring_req_fini(void *_node) ;
 
 // client: kv_ring_init(kv_rdma_init)
 // server: kv_ring_init(kv_rdma_init)->kv_ring_server_init(kv_rdma_listen)
-kv_rdma_handle kv_ring_init(char *etcd_ip, char *etcd_port, uint32_t thread_num, kv_ring_cb ready_cb, void *arg);
+kv_rdma_handle kv_ring_init(char *etcd_ip, char *etcd_port, uint32_t thread_num, kv_ring_cb server_online_cb, void *arg);
 void kv_ring_server_init(char *local_ip, char *local_port, uint32_t vid_num, uint32_t vid_per_ssd, uint32_t ds_num,
                          uint32_t rpl_num, uint32_t con_req_num, uint32_t max_msg_sz, kv_ring_req_handler handler, void *arg,
                          kv_rdma_server_init_cb cb, void *cb_arg);
