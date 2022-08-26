@@ -413,6 +413,15 @@ void kv_rdma_make_resp(void *req_h, uint8_t *resp, uint32_t resp_sz) {
     TEST_NZ(ibv_post_send(ctx->conn->qp, &wr, &bad_wr));
 }
 
+uint32_t kv_rdma_conn_num(kv_rdma_handle h) {
+    struct kv_rdma *self = h;
+    uint32_t num;
+    pthread_rwlock_rdlock(&self->lock);
+    num = HASH_CNT(u.s.hh, self->connections);
+    pthread_rwlock_unlock(&self->lock);
+    return num;
+}
+
 // --- cq_poller ---
 static inline void on_write_resp_done(struct ibv_wc *wc) {
     if (wc->status != IBV_WC_SUCCESS) {

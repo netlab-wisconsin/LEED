@@ -33,6 +33,7 @@ void kv_rdma_free_mr(kv_rdma_mr h);
 void kv_rdma_listen(kv_rdma_handle h, char *addr_str, char *port_str, uint32_t con_req_num, uint32_t max_msg_sz,
                     kv_rdma_req_handler handler, void *arg, kv_rdma_server_init_cb cb, void *cb_arg);
 void kv_rdma_make_resp(void *req_h, uint8_t *resp, uint32_t resp_sz);  // resp must within buf
+uint32_t kv_rdma_conn_num(kv_rdma_handle h);
 
 void kv_rdma_connect(kv_rdma_handle h, char *addr_str, char *port_str, kv_rdma_connect_cb connect_cb, void *connect_arg,
                      kv_rdma_disconnect_cb disconnect_cb, void *disconnect_arg);

@@ -101,6 +101,7 @@ struct kv_ring {
     void *arg;
     kv_ring_req_handler req_handler;
     uint64_t node_lease, vid_lease;
+    _Atomic bool is_server_exiting;
 } g_ring;
 
 static void random_vid(char *vid) {
@@ -121,7 +122,7 @@ static inline void hash_vid(char *vid, char *ip, char *port, uint32_t index) {
     uint128 hash = CityHash128((const char *)&buf, sizeof(buf));
     kv_memcpy(vid, &hash, sizeof(hash));
 }
-static inline size_t ring_size(struct vid_ring *ring) {  // TODO: only count active vids
+static inline size_t ring_size(struct vid_ring *ring) {
     struct vid_entry *x;
     size_t size = 0;
     CIRCLEQ_FOREACH(x, ring, entry)
@@ -537,9 +538,15 @@ static int kv_conn_q_poller(void *arg) {
             STAILQ_REMOVE(&self->conn_q, node, kv_node, next);
         }
     }
+    if (self->is_server_exiting) {
+        if (kv_rdma_conn_num(self->h) != 0) return 0;
+        for (struct kv_node *x = self->nodes; x != NULL; x = x->hh.next)
+            if (x->req_cnt != 0) return 0;
+        kv_ring_fini(NULL, NULL);
+        exit(0);  // TODO: call finish callback
+    }
     return 0;
 }
-
 static void on_node_del(void *arg) {
     char *node_id = arg;
     struct kv_ring *self = &g_ring;
@@ -550,8 +557,7 @@ static void on_node_del(void *arg) {
         fprintf(stderr, "kv_etcd keepalive timeout!\n");
         kvEtcdLeaseRevoke(self->node_lease);
         kvEtcdLeaseRevoke(self->vid_lease);
-        // TODO: when there is no other node connected to this node &&
-        //  no ongoing requests sent to other nodes, call kv_ring_fini
+        self->is_server_exiting = true;
         goto finish;
     }
     node->is_disconnecting = true;
@@ -680,6 +686,7 @@ static void rdma_req_handler_wrapper(void *req_h, kv_rdma_mr req, uint32_t req_s
     struct kv_ring *self = &g_ring;
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(req);
     struct vnode_chain chain;
+    if (self->is_server_exiting) goto send_nak;
     if (get_chain(&chain, KV_MSG_KEY(msg)) == false) goto send_nak;
     if (msg->type == KV_MSG_SET || msg->type == KV_MSG_DEL) {
         struct vid_entry *local = get_vnode(&chain, msg->hop - 1);
