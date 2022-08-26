@@ -209,6 +209,9 @@ static bool get_chain(struct vnode_chain *chain, char *key) {
     return true;
 }
 
+// --- dispatch ---
+#define MAX_RETRY_NUM 10
+
 static void dispatch_send_cb(connection_handle h, bool success, kv_rdma_mr req, kv_rdma_mr resp, void *cb_arg) {
     struct kv_ring *self = &g_ring;
     struct dispatch_ctx *ctx = cb_arg;
@@ -218,6 +221,8 @@ static void dispatch_send_cb(connection_handle h, bool success, kv_rdma_mr req, 
     ctx->node->req_cnt--;
     if (success && msg->type == KV_MSG_OUTDATED) {
         struct dispatch_queue *dp = &self->dqs[kv_app_get_thread_index() - self->thread_id];
+        if (ctx->retry_num < MAX_RETRY_NUM) ctx->retry_num++;
+        ctx->next_retry = 1 << ctx->retry_num;
         TAILQ_INSERT_TAIL(dp, ctx, next);
         return;
     }
@@ -295,11 +300,12 @@ static int dispatch_dequeue(void *arg) {
     struct dispatch_queue *dp = &self->dqs[kv_app_get_thread_index() - self->thread_id];
     struct dispatch_ctx *x, *tmp;
     TAILQ_FOREACH_SAFE(x, dp, next, tmp) {
+        assert(x->next_retry);
         if (--x->next_retry) continue;
         if (try_send_req(x)) {
             TAILQ_REMOVE(dp, x, next);
         } else {
-            if (x->retry_num < 10) x->retry_num++;
+            if (x->retry_num < MAX_RETRY_NUM) x->retry_num++;
             x->next_retry = 1 << x->retry_num;
         }
     }
@@ -746,7 +752,7 @@ void kv_ring_server_init(char *local_ip, char *local_port, uint32_t ring_num, ui
     for (size_t i = 0; i < ring_num; i++) stats[i] = (struct vid_ring_stat){i, ring_size(self->rings[0] + i)};
     qsort(stats, ring_num, sizeof(struct vid_ring_stat), vid_ring_stat_cmp);
     self->vid_lease = kvEtcdLeaseCreate(5, true);  // vid lease ttl must larger than node lease ttl
-    uint64_t init_lease = kvEtcdLeaseCreate(8, false);
+    uint64_t init_lease = kvEtcdLeaseCreate(5, false);
 
     uint32_t ds_id = 0;
     for (size_t i = 0; i < vid_per_ssd * ds_num; i++) {
