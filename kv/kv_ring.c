@@ -79,7 +79,8 @@ struct dispatch_ctx {
     void *cb_arg;
     uint32_t thread_id;
     uint32_t retry_num, next_retry;
-    struct vid_entry *entry;
+    struct kv_node *node;
+    uint32_t ds_id;
     TAILQ_ENTRY(dispatch_ctx)
     next;
 };
@@ -211,9 +212,9 @@ static void dispatch_send_cb(connection_handle h, bool success, kv_rdma_mr req, 
     struct kv_ring *self = &g_ring;
     struct dispatch_ctx *ctx = cb_arg;
     struct kv_msg *msg = ctx->resp_addr;
-    ctx->entry->node->ds_queue.io_cnt[ctx->entry->vid.ds_id]--;
-    ctx->entry->node->ds_queue.q_info[ctx->entry->vid.ds_id] = msg->q_info;
-    ctx->entry->node->req_cnt--;
+    ctx->node->ds_queue.io_cnt[ctx->ds_id]--;
+    ctx->node->ds_queue.q_info[ctx->ds_id] = msg->q_info;
+    ctx->node->req_cnt--;
     if (success && msg->type == KV_MSG_OUTDATED) {
         struct dispatch_queue *dp = &self->dqs[kv_app_get_thread_index() - self->thread_id];
         TAILQ_INSERT_TAIL(dp, ctx, next);
@@ -242,10 +243,11 @@ static bool try_send_req(struct dispatch_ctx *ctx) {
         struct kv_ds_q_info *y = kv_ds_queue_find(q_info, io_cnt, i, kv_ds_op_cost(KV_DS_GET));
         if (y == NULL) return false;
         struct vid_entry *dst = get_vnode(&chain, y - q_info);
-        dst->node->ds_queue.io_cnt[dst->vid.ds_id]++;
-        dst->node->ds_queue.q_info[dst->vid.ds_id] = *y;
-        ctx->entry = dst;
-        dst->node->req_cnt++;
+        ctx->ds_id = dst->vid.ds_id;
+        ctx->node = dst->node;
+        ctx->node->ds_queue.io_cnt[ctx->ds_id]++;
+        ctx->node->ds_queue.q_info[ctx->ds_id] = *y;
+        ctx->node->req_cnt++;
         kv_rdma_send_req(dst->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->resp, ctx->resp_addr, dispatch_send_cb, ctx);
         return true;
     } else {
@@ -255,10 +257,11 @@ static bool try_send_req(struct dispatch_ctx *ctx) {
         struct kv_ds_q_info q_info = head->node->ds_queue.q_info[head->vid.ds_id];
         uint32_t io_cnt = head->node->ds_queue.io_cnt[head->vid.ds_id];
         if (kv_ds_queue_find(&q_info, &io_cnt, 1, cost)) {
-            head->node->ds_queue.io_cnt[head->vid.ds_id]++;
-            head->node->ds_queue.q_info[head->vid.ds_id] = q_info;
-            ctx->entry = head;
-            head->node->req_cnt++;
+            ctx->ds_id = head->vid.ds_id;
+            ctx->node = head->node;
+            ctx->node->ds_queue.io_cnt[ctx->ds_id]++;
+            ctx->node->ds_queue.q_info[ctx->ds_id] = q_info;
+            ctx->node->req_cnt++;
             kv_rdma_send_req(head->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->resp, ctx->resp_addr, dispatch_send_cb, ctx);
             return true;
         }
@@ -505,9 +508,9 @@ static void rdma_connect_cb(connection_handle h, void *arg) {
     node->is_connected = true;
     node->conn = h;
     update_rings(node);
-    if(self->server_online_cb){
+    if (self->server_online_cb) {
         self->server_online_cb(self->arg);
-         self->server_online_cb = NULL;  // only call server_online_cb once
+        self->server_online_cb = NULL;  // only call server_online_cb once
     }
 }
 
