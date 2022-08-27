@@ -662,7 +662,8 @@ static void msg_handler(enum kv_etcd_msg_type msg, const char *key, uint32_t key
         sscanf(key, "%u", &ctx->state);
         key = key_next(key);
         key_copy(ctx->node_id, key);
-        printf("%s %uth RING: %u %s\n", msg == KV_ETCD_MSG_PUT ? "PUT" : "DEL", ctx->ring_id, ctx->state, ctx->node_id);
+        if (ctx->ring_id == 0)
+            printf("%s %uth RING: %u %s\n", msg == KV_ETCD_MSG_PUT ? "PUT" : "DEL", ctx->ring_id, ctx->state, ctx->node_id);
         if (msg == KV_ETCD_MSG_PUT) {
             assert(val_len == sizeof(ctx->vid));
             kv_memcpy(&ctx->vid, val, val_len);
@@ -720,8 +721,10 @@ static void rdma_req_handler_wrapper(void *req_h, kv_rdma_mr req, uint32_t req_s
                 if (x->node->is_local) break;
             if (x == NULL) goto send_nak;
             struct vid_entry *tail = get_vnode_from_chain(&chain, -1, x, false);
-            msg->hop++;
-            tail->node->req_cnt++;
+            if (!tail->node->is_local) {
+                msg->hop++;
+                tail->node->req_cnt++;
+            }
             self->req_handler(req_h, req, req_sz, x->vid.ds_id, tail->node->is_local ? NULL : tail->node, arg);
             return;
         } else if (msg->hop == 2) {
