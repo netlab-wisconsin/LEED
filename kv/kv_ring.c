@@ -333,23 +333,37 @@ void kv_ring_dispatch(kv_rdma_mr req, kv_rdma_mr resp, void *resp_addr, kv_ring_
 struct forward_ctx {
     struct kv_node *node;
     kv_rdma_mr req;
-    kv_rdma_req_cb cb;
+    kv_ring_cb cb;
     void *cb_arg;
+    uint32_t thread_id;
 };
+
+static void forward_cb(connection_handle h, bool success, kv_rdma_mr req, kv_rdma_mr resp, void *cb_arg) {
+    struct forward_ctx *ctx = cb_arg;
+    ctx->node->req_cnt--;
+    struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_resp_buf(resp);
+    if (!success) msg->type = KV_MSG_ERR;
+    if (ctx->cb) kv_app_send(ctx->thread_id, ctx->cb, ctx->cb_arg);
+    kv_free(ctx);
+}
 
 static void forward(void *arg) {
     struct forward_ctx *ctx = arg;
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(ctx->req);
-    kv_rdma_send_req(ctx->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->req, msg, ctx->cb, ctx->cb_arg);
-    free(ctx);
+    kv_rdma_send_req(ctx->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->req, msg, forward_cb, ctx);
 }
 
-void kv_ring_forward(void *node, kv_rdma_mr req, kv_rdma_req_cb cb, void *cb_arg) {
+void kv_ring_forward(void *_node, kv_rdma_mr req, kv_ring_cb cb, void *cb_arg) {
     struct kv_ring *self = &g_ring;
+    struct kv_node *node = _node;
+    if (req == NULL || node == NULL) {
+        if (node) node->req_cnt--;
+        if (cb) cb(cb_arg);
+        return;
+    }
     struct forward_ctx *ctx = kv_malloc(sizeof(*ctx));
-    uint32_t thread_id = kv_app_get_thread_index();
-    *ctx = (struct forward_ctx){node, req, cb, cb_arg};
-    if (thread_id >= self->thread_id && thread_id < self->thread_id + self->thread_num) {
+    *ctx = (struct forward_ctx){node, req, cb, cb_arg, kv_app_get_thread_index()};
+    if (ctx->thread_id >= self->thread_id && ctx->thread_id < self->thread_id + self->thread_num) {
         forward(ctx);
     } else {
         kv_app_send(self->thread_id + random() % self->thread_num, forward, ctx);
@@ -672,11 +686,6 @@ kv_rdma_handle kv_ring_init(char *etcd_ip, char *etcd_port, uint32_t thread_num,
     kvEtcdInit(etcd_ip, etcd_port, msg_handler);
     self->conn_q_poller = kv_app_poller_register(kv_conn_q_poller, self, 1000000);
     return self->h;
-}
-
-void kv_ring_req_fini(void *_node) {
-    struct kv_node *node = _node;
-    if (node) node->req_cnt--;
 }
 
 struct vid_ring_stat {

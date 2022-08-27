@@ -107,7 +107,7 @@ struct io_ctx {
     uint32_t worker_id;
     uint32_t server_thread;
     kv_rdma_mr req;
-    bool success, is_get, need_forward;
+    bool  is_get, need_forward;
     void *next_node;
 };
 
@@ -137,11 +137,8 @@ static void put_key(struct worker_t *worker, uint8_t *key, uint8_t key_length) {
 
 static void send_response(void *arg) {
     struct io_ctx *io = arg;
-    if (io->msg->type == KV_MSG_SET) io->msg->value_len = 0;
-    io->msg->type = io->success ? KV_MSG_OK : KV_MSG_ERR;
     io->msg->q_info = ds_queue.q_info[io->worker_id];
     kv_rdma_make_resp(io->req_h, (uint8_t *)io->msg, KV_MSG_SIZE(io->msg));
-    kv_ring_req_fini(io->next_node);
     kv_mempool_put(io_pool, io);
 }
 
@@ -157,24 +154,25 @@ static void del_key(void *arg) {
     kv_app_send(io->server_thread, send_response, arg);
 }
 
-static void forward_cb(connection_handle h, bool success, kv_rdma_mr req, kv_rdma_mr resp, void *arg) {
+static void forward_cb(void *arg) {
     struct io_ctx *io = arg;
-    io->success = success && io->msg->type == KV_MSG_OK;
-    if (io->is_get) {
-        send_response(io);
+    if (io->msg->type == KV_MSG_OK && io->need_forward && !io->is_get) {
+        del_key(io);  // commit
     } else {
-        kv_app_send(io->worker_id, del_key, io);
+        kv_app_send(io->server_thread, send_response, io);
     }
 }
 
 static void io_fini(bool success, void *arg) {
     struct io_ctx *io = arg;
-    io->success = success;
-    if (success && io->need_forward) {
-        kv_ring_forward(io->next_node, io->req, forward_cb, io);
-    } else {
-        kv_app_send(io->server_thread, send_response, arg);
+    if (!success) {
+        io->msg->type = KV_MSG_ERR;
+        io->need_forward = false;
+    } else if (io->need_forward == false) {
+        if (io->msg->type == KV_MSG_SET) io->msg->value_len = 0;
+        io->msg->type = KV_MSG_OK;
     }
+    kv_ring_forward(io->next_node, io->need_forward ? io->req : NULL, forward_cb, io);
 }
 
 static void io_start(void *arg) {
@@ -188,9 +186,9 @@ static void io_start(void *arg) {
             break;
         case KV_MSG_GET:
             if (find_key(self, KV_MSG_KEY(io->msg), io->msg->key_len) && io->need_forward) {
-                kv_ring_forward(io->next_node, io->req, forward_cb, io);
+                io_fini(true, arg);
             } else {
-                io->need_forward = NULL;
+                io->need_forward = false;
                 kv_data_store_get(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, KV_MSG_VALUE(io->msg),
                                   &io->msg->value_len, io_fini, arg);
             }
