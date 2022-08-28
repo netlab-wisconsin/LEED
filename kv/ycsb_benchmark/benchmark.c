@@ -90,6 +90,7 @@ struct io_buffer_t {
     struct kv_msg *msg;
     bool read_modify_write, is_finished;
     struct timeval io_start;
+    kv_data_store_ctx ds_ctx;
 };
 struct io_buffer_t *io_buffers;
 struct kv_ds_queue ds_queue;
@@ -126,6 +127,11 @@ static void stop(void) {
 static void test(void *arg);
 static void io_fini(bool success, void *arg) {
     struct io_buffer_t *io = arg;
+    if (io->msg->type == KV_MSG_SET) {
+        kv_data_store_set_commit(io->ds_ctx, success);
+    }else if(io->msg->type == KV_MSG_DEL){
+        kv_data_store_del_commit(io->ds_ctx, success);
+    }
     io->msg->type = success ? KV_MSG_OK : KV_MSG_ERR;
     if (!success) {
         fprintf(stderr, "io fail. \n");
@@ -140,15 +146,15 @@ static void io_start(void *arg) {
     struct kv_msg *msg = io->msg;
     switch (msg->type) {
         case KV_MSG_SET:
-            kv_data_store_set(&self->data_store, KV_MSG_KEY(msg), msg->key_len, KV_MSG_VALUE(msg), msg->value_len, io_fini,
-                              arg);
+            io->ds_ctx = kv_data_store_set(&self->data_store, KV_MSG_KEY(msg), msg->key_len, KV_MSG_VALUE(msg), msg->value_len, io_fini,
+                                        arg);
             break;
         case KV_MSG_GET:
             kv_data_store_get(&self->data_store, KV_MSG_KEY(msg), msg->key_len, KV_MSG_VALUE(msg), &msg->value_len, io_fini,
                               arg);
             break;
         case KV_MSG_DEL:
-            kv_data_store_delete(&self->data_store, KV_MSG_KEY(msg), msg->key_len, io_fini, arg);
+            io->ds_ctx = kv_data_store_delete(&self->data_store, KV_MSG_KEY(msg), msg->key_len, io_fini, arg);
             break;
         case INIT:
             assert(false);
@@ -189,14 +195,16 @@ static void test_fini(void *arg) {  // always running on producer 0
                 total_io = opt.num_items;
                 state = FILL;
             } else {
-                state = opt.seq_read ? SEQ_READ : opt.seq_write ? SEQ_WRITE : TRANSACTION;
+                state = opt.seq_read ? SEQ_READ : opt.seq_write ? SEQ_WRITE
+                                                                : TRANSACTION;
                 total_io = opt.operation_cnt;
             }
             break;
         case FILL:
             printf("Write rate: %lf\n", ((double)opt.num_items / timeval_diff(&tv_start, &tv_end)));
             printf("db created successfully in %lf s.\n", timeval_diff(&tv_start, &tv_end));
-            state = opt.seq_read ? SEQ_READ : opt.seq_write ? SEQ_WRITE : TRANSACTION;
+            state = opt.seq_read ? SEQ_READ : opt.seq_write ? SEQ_WRITE
+                                                            : TRANSACTION;
             total_io = opt.operation_cnt;
             break;
         case SEQ_WRITE:

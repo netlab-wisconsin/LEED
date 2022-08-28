@@ -28,7 +28,6 @@ struct kv_msg {
 #define KV_MSG_KEY(msg) ((msg)->data)
 #define KV_MSG_VALUE(msg) ((msg)->data + _KV_MSG_ALIGN((msg)->key_len))
 #define KV_MSG_SIZE(msg) (sizeof(struct kv_msg) + _KV_MSG_ALIGN((msg)->key_len) + (msg)->value_len)
-} __attribute__((packed));
-//#define KV_MSG_MAX_HEADER_SIZE (sizeof(struct kv_msg) + 24)  //????
+};
 
 #endif

@@ -104,6 +104,7 @@ struct kv_ring {
     _Atomic bool is_server_exiting;
 } g_ring;
 
+static void random_vid(char *vid) __attribute__((unused));
 static void random_vid(char *vid) {
     for (size_t i = 0; i < KV_VID_LEN; i++) vid[i] = random() & 0xFF;
 }

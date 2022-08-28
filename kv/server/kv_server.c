@@ -69,6 +69,7 @@ struct io_ctx {
     struct kv_msg *msg;
     uint32_t worker_id;
     uint32_t server_thread;
+    kv_data_store_ctx ctx;
 };
 
 static void send_response(void *arg) {
@@ -79,6 +80,11 @@ static void send_response(void *arg) {
 
 static void io_fini(bool success, void *arg) {
     struct io_ctx *io = arg;
+    if (io->msg->type == KV_MSG_SET) {
+        kv_data_store_set_commit(io->ctx, success);
+    } else if (io->msg->type == KV_MSG_DEL) {
+        kv_data_store_del_commit(io->ctx, success);
+    }
     io->msg->type = success ? KV_MSG_OK : KV_MSG_ERR;
     kv_app_send(io->server_thread, send_response, arg);
 }
@@ -88,8 +94,8 @@ static void io_start(void *arg) {
     struct worker_t *self = workers + io->worker_id;
     switch (io->msg->type) {
         case KV_MSG_SET:
-            kv_data_store_set(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, KV_MSG_VALUE(io->msg),
-                              io->msg->value_len, io_fini, arg);
+            io->ctx = kv_data_store_set(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, KV_MSG_VALUE(io->msg),
+                                        io->msg->value_len, io_fini, arg);
             io->msg->value_len = 0;
             break;
         case KV_MSG_GET:
@@ -98,7 +104,7 @@ static void io_start(void *arg) {
             break;
         case KV_MSG_DEL:
             assert(io->msg->value_len == 0);
-            kv_data_store_delete(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, io_fini, arg);
+            io->ctx = kv_data_store_delete(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, io_fini, arg);
             break;
         case KV_MSG_TEST:
             io_fini(true, io);
@@ -115,7 +121,6 @@ static void handler(void *req_h, kv_rdma_mr req, uint32_t req_sz, void *arg) {
     ctx->worker_id = key_frag % opt.ssd_num;
     kv_app_send(ctx->worker_id, io_start, ctx);
 }
-
 
 static void rdma_start(void *arg) {
     kv_rdma_init(&server, opt.server_num);

@@ -81,12 +81,16 @@ struct io_buffer_t {
     uint32_t worker_id;
     uint32_t producer_id;
     uint64_t index;
+    kv_data_store_ctx ctx;
 };
 struct io_buffer_t *io_buffer;
 struct kv_ds_queue ds_queue;
 
 static struct timeval tv_start, tv_end;
-enum { INIT, FILL, READ, CLEAR } state = INIT;
+enum { INIT,
+       FILL,
+       READ,
+       CLEAR } state = INIT;
 char const *op_str[] = {"INIT", "FILL", "READ", "CLEAR"};
 
 static void worker_stop(void *arg) {
@@ -107,6 +111,11 @@ static void stop(void) {
 static void test(void *arg);
 static void io_fini(bool success, void *arg) {
     struct io_buffer_t *io = arg;
+    if (state == FILL) {
+        kv_data_store_set_commit(io->ctx, success);
+    } else if (state == CLEAR) {
+        kv_data_store_del_commit(io->ctx, success);
+    }
     if (!success) {
         fprintf(stderr, "%s fail. key index: %lu\n", op_str[(int)state], io->index);
         exit(-1);
@@ -119,13 +128,13 @@ static void io_start(void *arg) {
     struct worker *self = workers + io->worker_id;
     switch (state) {
         case FILL:
-            kv_data_store_set(&self->data_store, io->key.buf, 16, io->value, io->value_length, io_fini, arg);
+            io->ctx = kv_data_store_set(&self->data_store, io->key.buf, 16, io->value, io->value_length, io_fini, arg);
             break;
         case READ:
             kv_data_store_get(&self->data_store, io->key.buf, 16, io->value, &io->value_length, io_fini, arg);
             break;
         case CLEAR:
-            kv_data_store_delete(&self->data_store, io->key.buf, 16, io_fini, arg);
+            io->ctx = kv_data_store_delete(&self->data_store, io->key.buf, 16, io_fini, arg);
             break;
         case INIT:
             assert(false);

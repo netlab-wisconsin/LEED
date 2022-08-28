@@ -43,27 +43,18 @@ struct kv_bucket_meta {
 struct kv_bucket_chain_entry {
     struct kv_bucket *bucket;
     uint8_t len;
-    TAILQ_ENTRY(kv_bucket_chain_entry) entry;
+    TAILQ_ENTRY(kv_bucket_chain_entry)
+    entry;
 };
 TAILQ_HEAD(kv_bucket_chain, kv_bucket_chain_entry);
-struct kv_bucket_pool_get_q {
-    kv_bucket_pool_get_cb cb;
-    void *cb_arg;
-    STAILQ_ENTRY(kv_bucket_pool_get_q) next;
-};
 
-struct kv_bucket_pool {
-    struct kv_bucket_log *self;
-    uint32_t index;
-    uint32_t ref_cnt;
-    bool is_valid;
-    struct kv_bucket_chain buckets;
+struct kv_bucket_segment{
+    TAILQ_HEAD(, kv_bucket_chain_entry) chain;
     uint32_t offset;
-    STAILQ_HEAD(, kv_bucket_pool_get_q) get_q;
-    STAILQ_ENTRY(kv_bucket_pool) next;
-    UT_hash_handle hh;
+    TAILQ_ENTRY(kv_bucket_segment)  entry;
 };
-STAILQ_HEAD(kv_bucket_pool_head, kv_bucket_pool);
+TAILQ_HEAD(kv_bucket_segments, kv_bucket_segment);
+
 struct kv_bucket_log {
     struct kv_circular_log log;
     uint32_t size;
@@ -73,7 +64,6 @@ struct kv_bucket_log {
     uint32_t bucket_num;
     void *waiting_queue;
     bool init;
-    struct kv_bucket_pool *pool;
 };
 
 static inline uint32_t kv_bucket_log_offset(struct kv_bucket_log *self) { return (uint32_t)self->log.tail; }
@@ -99,15 +89,15 @@ static inline void kv_bucket_log_write(struct kv_bucket_log *self, struct kv_buc
     kv_bucket_log_writev(self, &iov, 1, cb, cb_arg);
 }
 
-bool kv_bucket_alloc_extra(struct kv_bucket_pool *entry);
-void kv_bucket_free_extra(struct kv_bucket_pool *entry);
+bool kv_bucket_alloc_extra(struct kv_bucket_log *self, struct kv_bucket_segment *seg);
+void kv_bucket_free_extra(struct kv_bucket_segment *seg);
 
-void kv_bucket_pool_get(struct kv_bucket_log *self, uint32_t index, kv_bucket_pool_get_cb cb, void *cb_arg);
-void kv_bucket_pool_put(struct kv_bucket_log *self, struct kv_bucket_pool *entry, bool write_back, kv_circular_log_io_cb cb,
-                        void *cb_arg);
-void kv_bucket_pool_put_bulk(struct kv_bucket_log *self, struct kv_bucket_pool_head *pool_head, kv_circular_log_io_cb cb,
-                             void *cb_arg);
-                             
+void kv_bucket_seg_get(struct kv_bucket_log *self, uint32_t index, struct kv_bucket_segment *seg, kv_circular_log_io_cb cb, void *cb_arg);
+void kv_bucket_seg_put(struct kv_bucket_log *self, struct kv_bucket_segment *seg, kv_circular_log_io_cb cb, void *cb_arg);
+void kv_bucket_seg_put_bulk(struct kv_bucket_log *self, struct kv_bucket_segments *segs, kv_circular_log_io_cb cb, void *cb_arg);
+void kv_bucket_seg_cleanup(struct kv_bucket_log *self, struct kv_bucket_segment *seg);
+void kv_bucket_seg_commit(struct kv_bucket_log *self, struct kv_bucket_segment *seg);
+
 void kv_bucket_lock_add_index(struct kv_bucket_lock_entry **set, uint32_t index);
 void kv_bucket_lock(struct kv_bucket_log *self, struct kv_bucket_lock_entry *set, kv_task_cb cb, void *cb_arg);
 void kv_bucket_unlock(struct kv_bucket_log *self, struct kv_bucket_lock_entry **set);
