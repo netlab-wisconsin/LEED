@@ -185,10 +185,10 @@ void kv_data_store_set_commit(kv_data_store_ctx arg, bool success) {
 
 static void set_finish_cb(bool success, void *arg) {
     struct set_ctx *ctx = arg;
-    ctx->success = ctx->success && success;
+    success = ctx->success && success;
     if (--ctx->io_cnt) return;  // sync
-    if (ctx->cb) ctx->cb(ctx->success, ctx->cb_arg);
-    if (!ctx->success) kv_data_store_set_commit(arg, false);
+    if (ctx->cb) ctx->cb(success, ctx->cb_arg);
+    if (!success) kv_data_store_set_commit(arg, false);
 }
 
 static void set_seg_get_cb(bool success, void *arg) {
@@ -204,14 +204,14 @@ static void set_seg_get_cb(bool success, void *arg) {
     if (located_item) {  // update
         located_item->value_length = ctx->value_length;
         located_item->value_offset = ctx->value_offset;
-        kv_bucket_seg_put(&ctx->self->bucket_log, &ctx->seg, ctx->cb, ctx->cb_arg);
+        kv_bucket_seg_put(&ctx->self->bucket_log, &ctx->seg, set_finish_cb, ctx);
     } else {  // create
         if ((located_item = find_empty(ctx->self, &ctx->seg))) {
             located_item->key_length = ctx->key_length;
             kv_memcpy(located_item->key, ctx->key, ctx->key_length);
             located_item->value_length = ctx->value_length;
             located_item->value_offset = ctx->value_offset;
-            kv_bucket_seg_put(&ctx->self->bucket_log, &ctx->seg, ctx->cb, ctx->cb_arg);
+            kv_bucket_seg_put(&ctx->self->bucket_log, &ctx->seg, set_finish_cb, ctx);
         } else {
             fprintf(stderr, "set_find_item_cb: No more bucket available.\n");
             set_finish_cb(false, arg);
@@ -330,7 +330,7 @@ static void delete_seg_get_cb(bool success, void *arg) {
     }
     located_item->key_length = 0;
     fill_the_hole(ctx->self, &ctx->seg);
-    kv_bucket_seg_put(&ctx->self->bucket_log, &ctx->seg, ctx->cb, ctx->cb_arg);
+    kv_bucket_seg_put(&ctx->self->bucket_log, &ctx->seg, delete_finish_cb, ctx);
 }
 
 static void delete_lock_cb(void *arg) {

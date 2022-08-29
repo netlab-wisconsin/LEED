@@ -127,7 +127,6 @@ static void stop(void) {
 static void test(void *arg);
 static void io_fini(bool success, void *arg) {
     struct io_buffer_t *io = arg;
-    io->msg->type = success ? KV_MSG_OK : KV_MSG_ERR;
     if (!success) {
         fprintf(stderr, "io fail. \n");
         exit(-1);
@@ -137,6 +136,7 @@ static void io_fini(bool success, void *arg) {
     } else if (io->msg->type == KV_MSG_DEL) {
         kv_data_store_del_commit(io->ds_ctx, true);
     }
+    io->msg->type = success ? KV_MSG_OK : KV_MSG_ERR;
     kv_app_send(opt.ssd_num + io->producer_id, test, arg);
 }
 
@@ -190,7 +190,7 @@ static void test_fini(void *arg) {  // always running on producer 0
             for (size_t i = 0; i < opt.concurrent_io_num; i++)
                 io_buffers[i].msg = kv_storage_malloc(&workers[0].storage,
                                                       opt.value_size + sizeof(struct kv_msg) + 16 + workers[0].storage.block_size);
-            printf("rdma client initialized in %lf s.\n", timeval_diff(&tv_start, &tv_end));
+            printf("ycsb client initialized in %lf s.\n", timeval_diff(&tv_start, &tv_end));
             if (opt.fill) {
                 total_io = opt.num_items;
                 state = FILL;
@@ -323,7 +323,7 @@ static void send_init_done_msg(bool success, void *arg) {
 static void worker_init(void *arg) {
     struct worker *self = arg;
     kv_storage_init(&self->storage, self - workers);
-    uint32_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET;
+    uint32_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET / opt.ssd_num;
     uint64_t value_log_block_num = self->storage.num_blocks * 0.95 - 2 * bucket_num;
     kv_data_store_init(&self->data_store, &self->storage, 0, bucket_num, value_log_block_num, 512, &ds_queue, self - workers,
                        send_init_done_msg, NULL);
