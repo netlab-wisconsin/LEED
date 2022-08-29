@@ -127,15 +127,15 @@ static void stop(void) {
 static void test(void *arg);
 static void io_fini(bool success, void *arg) {
     struct io_buffer_t *io = arg;
-    if (io->msg->type == KV_MSG_SET) {
-        kv_data_store_set_commit(io->ds_ctx, success);
-    }else if(io->msg->type == KV_MSG_DEL){
-        kv_data_store_del_commit(io->ds_ctx, success);
-    }
     io->msg->type = success ? KV_MSG_OK : KV_MSG_ERR;
     if (!success) {
         fprintf(stderr, "io fail. \n");
         exit(-1);
+    }
+    if (io->msg->type == KV_MSG_SET) {
+        kv_data_store_set_commit(io->ds_ctx, true);
+    } else if (io->msg->type == KV_MSG_DEL) {
+        kv_data_store_del_commit(io->ds_ctx, true);
     }
     kv_app_send(opt.ssd_num + io->producer_id, test, arg);
 }
@@ -147,7 +147,7 @@ static void io_start(void *arg) {
     switch (msg->type) {
         case KV_MSG_SET:
             io->ds_ctx = kv_data_store_set(&self->data_store, KV_MSG_KEY(msg), msg->key_len, KV_MSG_VALUE(msg), msg->value_len, io_fini,
-                                        arg);
+                                           arg);
             break;
         case KV_MSG_GET:
             kv_data_store_get(&self->data_store, KV_MSG_KEY(msg), msg->key_len, KV_MSG_VALUE(msg), &msg->value_len, io_fini,

@@ -33,14 +33,13 @@ static void test_cb(bool success, void *cb_arg) {
             sprintf(value[0], "hello world!");
             sprintf(value[1], "hi!");
             sprintf(value[2], "bye!");
-            ds_ctx[0] = kv_data_store_set(&data_store, key[0], 8, value[0], 256, test_cb, NULL);
-            ds_ctx[1] = kv_data_store_set(&data_store, key[1], 8, value[1], 513, test_cb, NULL);
-            ds_ctx[2] = kv_data_store_set(&data_store, key[2], 8, value[2], 1000, test_cb, NULL);
+            ds_ctx[0] = kv_data_store_set(&data_store, key[0], 8, value[0], 256, test_cb, ds_ctx);
+            ds_ctx[1] = kv_data_store_set(&data_store, key[1], 8, value[1], 513, test_cb, ds_ctx + 1);
+            ds_ctx[2] = kv_data_store_set(&data_store, key[2], 8, value[2], 1000, test_cb, ds_ctx + 2);
             break;
         case SET0:
+            kv_data_store_set_commit(*(kv_data_store_ctx *)cb_arg, true);
             if (--io_cnt) return;
-            for (size_t i = 0; i < VALUE_NUM; i++)
-                kv_data_store_set_commit(ds_ctx[i], success);
             state = GET0;
             kv_memset(value[0], 0, 5 * storage.block_size);
             kv_data_store_get(&data_store, key[0], 8, value[0], &value_length, test_cb, NULL);
@@ -52,7 +51,7 @@ static void test_cb(bool success, void *cb_arg) {
             ds_ctx[0] = kv_data_store_delete(&data_store, key[0], 8, test_cb, NULL);
             break;
         case DELETE:
-            kv_data_store_del_commit(ds_ctx[0], success);
+            kv_data_store_del_commit(ds_ctx[0], true);
             kv_data_store_fini(&data_store);
             kv_storage_fini(&storage);
             for (size_t i = 0; i < VALUE_NUM; i++) kv_storage_free(value[i]);

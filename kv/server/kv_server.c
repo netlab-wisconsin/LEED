@@ -80,10 +80,12 @@ static void send_response(void *arg) {
 
 static void io_fini(bool success, void *arg) {
     struct io_ctx *io = arg;
-    if (io->msg->type == KV_MSG_SET) {
-        kv_data_store_set_commit(io->ctx, success);
-    } else if (io->msg->type == KV_MSG_DEL) {
-        kv_data_store_del_commit(io->ctx, success);
+    if (success) {
+        if (io->msg->type == KV_MSG_SET) {
+            kv_data_store_set_commit(io->ctx, true);
+        } else if (io->msg->type == KV_MSG_DEL) {
+            kv_data_store_del_commit(io->ctx, true);
+        }
     }
     io->msg->type = success ? KV_MSG_OK : KV_MSG_ERR;
     kv_app_send(io->server_thread, send_response, arg);

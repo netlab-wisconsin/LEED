@@ -171,8 +171,13 @@ static void io_fini(bool success, void *arg) {
     struct io_ctx *io = arg;
     if (!success) {
         io->msg->type = KV_MSG_ERR;
-        io->need_forward = false;
-    } else if (io->need_forward == false) {
+        if (io->need_forward && (io->msg_type == KV_MSG_SET || io->msg_type == KV_MSG_DEL)) {
+            del_key(io);
+        }
+        kv_app_send(io->server_thread, send_response, arg);
+        return;
+    }
+    if (io->need_forward == false) {// is the last node
         if (io->msg->type == KV_MSG_SET) io->msg->value_len = 0;
         io->msg->type = KV_MSG_OK;
     }

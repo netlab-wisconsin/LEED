@@ -183,12 +183,21 @@ void kv_data_store_set_commit(kv_data_store_ctx arg, bool success) {
     kv_free(ctx);
 }
 
-static void set_lock_cb(void *arg) {
+static void set_finish_cb(bool success, void *arg) {
     struct set_ctx *ctx = arg;
+    ctx->success = ctx->success && success;
     if (--ctx->io_cnt) return;  // sync
+    if (ctx->cb) ctx->cb(ctx->success, ctx->cb_arg);
+    if (!ctx->success) kv_data_store_set_commit(arg, false);
+}
+
+static void set_seg_get_cb(bool success, void *arg) {
+    struct set_ctx *ctx = arg;
+    if (!success) fprintf(stderr, "set_seg_get_cb: IO error.\n");
+    ctx->success = ctx->success && success;
     if (ctx->success == false) {
-        fprintf(stderr, "set_start_cb: IO error.\n");
-        goto set_failed;
+        set_finish_cb(false, arg);
+        return;
     }
     struct kv_item *located_item;
     find_item_plus(ctx->self, &ctx->seg, ctx->key, ctx->key_length, &located_item);
@@ -205,30 +214,22 @@ static void set_lock_cb(void *arg) {
             kv_bucket_seg_put(&ctx->self->bucket_log, &ctx->seg, ctx->cb, ctx->cb_arg);
         } else {
             fprintf(stderr, "set_find_item_cb: No more bucket available.\n");
-            goto set_failed;
+            set_finish_cb(false, arg);
         }
     }
-    return;
-set_failed:
-    kv_bucket_seg_cleanup(&ctx->self->bucket_log, &ctx->seg);
-    kv_bucket_unlock(&ctx->self->bucket_log, &ctx->index_set);
-    if (ctx->cb) ctx->cb(false, ctx->cb_arg);
-    kv_free(ctx);
 }
 
-static void set_start_cb(bool success, void *arg) {
+static void set_lock_cb(void *arg) {
     struct set_ctx *ctx = arg;
-    ctx->success = ctx->success && success;
-    set_lock_cb(ctx);
+    kv_bucket_seg_get(&ctx->self->bucket_log, ctx->bucket_index, &ctx->seg, set_seg_get_cb, ctx);
 }
 
 static void set_start(void *arg) {
     struct set_ctx *ctx = arg;
-    ctx->io_cnt = 3;
+    ctx->io_cnt = 2;
     ctx->success = true;
-    kv_bucket_seg_get(&ctx->self->bucket_log, ctx->bucket_index, &ctx->seg, set_start_cb, ctx);
     ctx->value_offset = kv_value_log_offset(&ctx->self->value_log);
-    kv_value_log_write(&ctx->self->value_log, ctx->bucket_index, ctx->value, ctx->value_length, set_start_cb, ctx);
+    kv_value_log_write(&ctx->self->value_log, ctx->bucket_index, ctx->value, ctx->value_length, set_finish_cb, ctx);
     kv_bucket_lock_add_index(&ctx->index_set, ctx->bucket_index);
     kv_bucket_lock(&ctx->self->bucket_log, ctx->index_set, set_lock_cb, ctx);
 }
@@ -296,7 +297,6 @@ struct delete_ctx {
     void *cb_arg;
     uint32_t bucket_index;
     struct kv_bucket_lock_entry *index_set;
-    uint32_t io_cnt;
     struct kv_bucket_segment seg;
     bool success;
 };
@@ -309,34 +309,37 @@ void kv_data_store_del_commit(kv_data_store_ctx arg, bool success) {
     kv_free(ctx);
 }
 
-static void delete_lock_cb(void *arg) {
+static void delete_finish_cb(bool success, void *arg) {
     struct delete_ctx *ctx = arg;
-    if (--ctx->io_cnt) return;  // sync
-    if (!ctx->success) {
+    if (ctx->cb) ctx->cb(success, ctx->cb_arg);
+    if (!success) kv_data_store_del_commit(arg, false);
+}
+
+static void delete_seg_get_cb(bool success, void *arg) {
+    struct delete_ctx *ctx = arg;
+    if (!success) {
         fprintf(stderr, "delete_find_item_cb: IO error.\n");
-        kv_bucket_seg_cleanup(&ctx->self->bucket_log, &ctx->seg);
-        kv_bucket_unlock(&ctx->self->bucket_log, &ctx->index_set);
-        if (ctx->cb) ctx->cb(false, ctx->cb_arg);
-        kv_free(ctx);
+        delete_finish_cb(false, arg);
         return;
     }
-    struct kv_item *located_item;
+    struct kv_item *located_item = NULL;
     find_item_plus(ctx->self, &ctx->seg, ctx->key, ctx->key_length, &located_item);
+    if (!located_item) {
+        delete_finish_cb(false, arg);
+        return;
+    }
     located_item->key_length = 0;
     fill_the_hole(ctx->self, &ctx->seg);
     kv_bucket_seg_put(&ctx->self->bucket_log, &ctx->seg, ctx->cb, ctx->cb_arg);
 }
 
-static void delete_seg_get_cb(bool success, void *arg) {
+static void delete_lock_cb(void *arg) {
     struct delete_ctx *ctx = arg;
-    ctx->success = success;
-    delete_lock_cb(ctx);
+    kv_bucket_seg_get(&ctx->self->bucket_log, ctx->bucket_index, &ctx->seg, delete_seg_get_cb, ctx);
 }
 
 static void delete_lock(void *arg) {
     struct delete_ctx *ctx = arg;
-    ctx->io_cnt = 2;
-    kv_bucket_seg_get(&ctx->self->bucket_log, ctx->bucket_index, &ctx->seg, delete_seg_get_cb, ctx);
     kv_bucket_lock_add_index(&ctx->index_set, ctx->bucket_index);
     kv_bucket_lock(&ctx->self->bucket_log, ctx->index_set, delete_lock_cb, ctx);
 }

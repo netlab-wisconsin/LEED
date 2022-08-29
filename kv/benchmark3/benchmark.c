@@ -111,14 +111,14 @@ static void stop(void) {
 static void test(void *arg);
 static void io_fini(bool success, void *arg) {
     struct io_buffer_t *io = arg;
-    if (state == FILL) {
-        kv_data_store_set_commit(io->ctx, success);
-    } else if (state == CLEAR) {
-        kv_data_store_del_commit(io->ctx, success);
-    }
     if (!success) {
         fprintf(stderr, "%s fail. key index: %lu\n", op_str[(int)state], io->index);
         exit(-1);
+    }
+    if (state == FILL) {
+        kv_data_store_set_commit(io->ctx, true);
+    } else if (state == CLEAR) {
+        kv_data_store_del_commit(io->ctx, true);
     }
     kv_app_send(opt.ssd_num + io->producer_id, test, arg);
 }
