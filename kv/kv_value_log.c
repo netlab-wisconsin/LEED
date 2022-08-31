@@ -43,12 +43,93 @@ void kv_value_log_read(struct kv_value_log *self, uint64_t offset, uint8_t *valu
         if (value_length > ctx->len_in_buf) {
             struct iovec iov[2] = {{ctx->buf, 1}, {value + ctx->len_in_buf, align(self, value_length - ctx->len_in_buf)}};
             kv_circular_log_readv(&self->log, offset >> self->blk_shift, iov, 2, read_cb, ctx);
-        }else{
-            ctx->len_in_buf=value_length;
+        } else {
+            ctx->len_in_buf = value_length;
             kv_circular_log_read(&self->log, offset >> self->blk_shift, ctx->buf, 1, read_cb, ctx);
         }
     } else
         kv_circular_log_read(&self->log, offset >> self->blk_shift, value, align(self, value_length), cb, cb_arg);
+}
+
+// --- bucket ids log ---
+#define BUCKET_ID_DUMP_BLKS (128u)
+#define BUCKET_ID_PER_BLK (85u)
+struct uint48_t {
+    uint64_t val : 48;
+} __attribute__((packed));
+
+struct bucket_ids_block {
+    struct uint48_t ids[BUCKET_ID_PER_BLK];
+    uint16_t reserved;
+};
+static inline uint64_t offset_to_block(uint64_t val_offset) {
+    return (val_offset >> KV_VALUE_LOG_UNIT_SHIFT) / BUCKET_ID_PER_BLK;
+}
+
+static inline struct uint48_t *get_bucket_id_from_blk(struct bucket_ids_block *blk, uint64_t val_offset) {
+    return &blk->ids[(val_offset >> KV_VALUE_LOG_UNIT_SHIFT) % BUCKET_ID_PER_BLK];
+}
+static struct uint48_t *get_bucket_id(struct kv_value_log *self, uint64_t val_offset) {
+    struct kv_circular_log *id_log = &self->index_log;
+    uint64_t offset = (id_log->size + offset_to_block(val_offset) - id_log->head) % id_log->size;
+    struct bucket_ids_block *blk;
+    kv_circular_log_fetch_one(id_log, offset, (void **)&blk);
+    return get_bucket_id_from_blk(blk, val_offset);
+}
+struct bucket_ids_ctx {
+    struct kv_circular_log log;
+    struct bucket_ids_block *blk_buf[2];
+    uint32_t blk_index;
+    bool is_dumping;
+};
+
+static void dump_bucket_id_cb(bool success, void *arg) {
+    if (!success) {
+        fprintf(stderr, "value log: dumping bucket ids has failed.");
+        exit(-1);
+    }
+    struct bucket_ids_ctx *ctx = arg;
+    ctx->is_dumping = false;
+}
+
+// on_val_log_head_move
+
+static void append_bucket_id(struct kv_value_log *self, uint64_t val_offset, uint64_t bucket_id) {
+    struct bucket_ids_ctx *ctx = self->bucket_id_log;
+    uint64_t blk_i = (ctx->log.size - ctx->log.tail + offset_to_block(val_offset)) % ctx->log.size;
+    assert(blk_i < 2 * BUCKET_ID_DUMP_BLKS);
+    if (blk_i >= BUCKET_ID_DUMP_BLKS) {
+        if (ctx->is_dumping) {
+            fprintf(stderr, "value log: dumping bucket ids is too slow.");
+            exit(-1);
+        }
+        ctx->is_dumping = true;
+        kv_circular_log_append(&ctx->log, ctx->blk_buf[ctx->blk_index], BUCKET_ID_DUMP_BLKS, dump_bucket_id_cb, ctx);
+        ctx->blk_index = !ctx->blk_index;
+        blk_i -= BUCKET_ID_DUMP_BLKS;
+    }
+    get_bucket_id_from_blk(&ctx->blk_buf[ctx->blk_index][blk_i], val_offset)->val = bucket_id;
+}
+
+static void bucket_id_log_init(struct kv_value_log *self) {
+    struct bucket_ids_ctx *ctx = kv_malloc(sizeof(*ctx));
+    assert(sizeof(struct bucket_ids_block) == 1 << self->blk_shift);
+    uint64_t blk_num = offset_to_block(self->log.size << self->blk_shift) + 1;
+    uint64_t base = self->log.base + self->log.size;
+    kv_circular_log_init(&ctx->log, self->log.storage, base, blk_num, 0, 0, BUCKET_ID_DUMP_BLKS * 2, BUCKET_ID_DUMP_BLKS / 8);
+    ctx->blk_buf[0] = kv_storage_blk_alloc(ctx->log.storage, BUCKET_ID_DUMP_BLKS);
+    ctx->blk_buf[1] = kv_storage_blk_alloc(ctx->log.storage, BUCKET_ID_DUMP_BLKS);
+    ctx->blk_index = 0;
+    ctx->is_dumping = false;
+    self->bucket_id_log = ctx;
+}
+
+static void bucket_id_log_fini(struct kv_value_log *self) {
+    struct bucket_ids_ctx *ctx = self->bucket_id_log;
+    kv_storage_free(ctx->blk_buf[0]);
+    kv_storage_free(ctx->blk_buf[1]);
+    kv_circular_log_fini(&ctx->log);
+    kv_free(ctx);
 }
 
 // --- index log write ---
@@ -97,12 +178,14 @@ static void index_log_write(struct kv_value_log *self, uint64_t offset, uint32_t
 struct offset_list_entry {
     uint64_t offset;
     struct kv_item *item;
-    STAILQ_ENTRY(offset_list_entry) next;
+    STAILQ_ENTRY(offset_list_entry)
+    next;
 };
 struct bucket_entry {
     uint32_t index, offset;
     struct kv_bucket *buckets;
-    STAILQ_HEAD(, offset_list_entry) offsets;
+    STAILQ_HEAD(, offset_list_entry)
+    offsets;
     UT_hash_handle hh;
 };
 
@@ -163,7 +246,7 @@ static void append_val_iov(struct kv_value_log *self, struct iovec *iov, uint32_
     if (tail) {
         uint8_t *dst = last_buf(self, iov, *cnt) + tail;
         uint64_t n = (1 << self->blk_shift) - tail;
-        //dst and src may overlap
+        // dst and src may overlap
         if (len <= n) {
             kv_memmove(dst, src, len);
         } else {
@@ -178,7 +261,7 @@ static void append_val_iov(struct kv_value_log *self, struct iovec *iov, uint32_
 }
 // value log compression have 2 restrictions:
 // value offset must be dword aligned
-// each KV_VALUE_LOG_UNIT only have one value offset point to it. 
+// each KV_VALUE_LOG_UNIT only have one value offset point to it.
 static void value_compact(struct compact_ctx *ctx) {
     struct kv_value_log *self = ctx->self;
 
@@ -277,7 +360,7 @@ static void compact_read_bucket_cb(bool success, void *arg) {
             HASH_FIND_INT(ctx->index_set, &read_ctx->bucket->index, lock_entry);
             assert(lock_entry);
             HASH_DEL(ctx->index_set, lock_entry);
-            HASH_ADD_INT(unlock_set, index, lock_entry);
+            HASH_ADD_INT(unlock_set, bucket_id, lock_entry);
             kv_bucket_unlock(self->bucket_log, &unlock_set);
 
             kv_storage_free(buckets);
@@ -341,7 +424,7 @@ static void compact(struct kv_value_log *self) {
                     entry->index = index_buf[i];
                     STAILQ_INIT(&entry->offsets);
                     HASH_ADD_INT(ctx->map, index, entry);
-                    kv_bucket_lock_add_index(&ctx->index_set, entry->index);
+                    kv_bucket_lock_add(&ctx->index_set, entry->index);
                 }
                 struct offset_list_entry *list_entry = kv_malloc(sizeof(struct offset_list_entry));
                 list_entry->offset = (offset_base + (i << KV_VALUE_LOG_UNIT_SHIFT)) % (self->log.size << self->blk_shift);
@@ -356,9 +439,9 @@ static void compact(struct kv_value_log *self) {
 //--- write ---
 void kv_value_log_write(struct kv_value_log *self, int32_t bucket_index, uint8_t *value, uint32_t value_length,
                         kv_circular_log_io_cb cb, void *cb_arg) {
-    index_log_write(self, kv_value_log_offset(self), bucket_index);
+    // index_log_write(self, kv_value_log_offset(self), bucket_index);
     kv_circular_log_append(&self->log, value, align(self, value_length), cb, cb_arg);
-    compact(self);
+    // compact(self);
 }
 
 // --- init & fini ---

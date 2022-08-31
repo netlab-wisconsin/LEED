@@ -18,6 +18,7 @@ struct kv_value_log {
     uint64_t blk_mask, blk_shift;
     uint32_t *index_buf,index_buf_len;
     uint64_t compact_head;
+    void *bucket_id_log;
 };
 
 static inline uint64_t kv_value_log_offset(struct kv_value_log *self) { return self->log.tail << self->blk_shift; }
