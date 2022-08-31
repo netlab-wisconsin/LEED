@@ -47,6 +47,7 @@ struct kv_bucket_chain_entry {
 TAILQ_HEAD(kv_bucket_chain, kv_bucket_chain_entry);
 
 struct kv_bucket_segment {
+    uint64_t bucket_id;
     TAILQ_HEAD(, kv_bucket_chain_entry)
     chain;
     uint32_t offset;
@@ -76,11 +77,6 @@ void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, 
                         uint32_t compact_buf_len, kv_circular_log_io_cb cb, void *cb_arg);
 void kv_bucket_log_fini(struct kv_bucket_log *self);
 
-static inline void kv_bucket_log_read(struct kv_bucket_log *self, uint64_t bucket_id, struct kv_bucket *buckets,
-                                      kv_circular_log_io_cb cb, void *cb_arg) {
-    struct kv_bucket_meta *meta = kv_bucket_get_meta(self, bucket_id);
-    kv_circular_log_read(&self->log, meta->bucket_offset, buckets, meta->chain_length, cb, cb_arg);
-}
 void kv_bucket_log_writev(struct kv_bucket_log *self, struct iovec *buckets, int iovcnt, kv_circular_log_io_cb cb,
                           void *cb_arg);
 static inline void kv_bucket_log_write(struct kv_bucket_log *self, struct kv_bucket *buckets, uint32_t n,

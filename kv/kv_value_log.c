@@ -372,7 +372,7 @@ static void compact_read_bucket_cb(bool success, void *arg) {
         read_ctx->bucket = ctx->map_tail;
         struct kv_bucket_meta *meta = kv_bucket_get_meta(self->bucket_log, read_ctx->bucket->index);
         read_ctx->bucket->buckets = kv_storage_blk_alloc(self->bucket_log->log.storage, meta->chain_length);
-        kv_bucket_log_read(self->bucket_log, read_ctx->bucket->index, read_ctx->bucket->buckets, compact_read_bucket_cb, arg);
+        // kv_bucket_log_read(self->bucket_log, read_ctx->bucket->index, read_ctx->bucket->buckets, compact_read_bucket_cb, arg);
         ctx->map_tail = ctx->map_tail->hh.next;
     } else {
         // sync all tasks

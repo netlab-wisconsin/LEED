@@ -167,73 +167,6 @@ static void compact(struct kv_bucket_log *self) {
 }
 
 // --- init & fini ---
-#define INIT_CON_IO_NUM 32
-
-struct init_ctx {
-    struct kv_bucket_log *self;
-    kv_circular_log_io_cb cb;
-    void *cb_arg;
-    uint32_t io_num;
-    bool success;
-};
-
-struct init_write_ctx {
-    struct init_ctx *init_ctx;
-    struct kv_bucket buckets[0];
-};
-
-static void init(struct kv_bucket_log *self, kv_circular_log_io_cb cb, void *cb_arg) {
-    for (size_t i = 0; i < self->log.fetch.size - 1; i++) ((struct kv_bucket *)self->log.fetch.buffer)[i].id = i;
-    self->bucket_meta = kv_calloc(self->bucket_num, sizeof(struct kv_bucket_meta));
-    kv_memset(self->bucket_meta, 0, sizeof(struct kv_bucket_meta) * self->bucket_num);
-    for (size_t i = 0; i < self->bucket_num; i++) {
-        self->bucket_meta[i].bucket_offset = self->log.head + i;
-        self->bucket_meta[i].chain_length = 1;
-    }
-    self->waiting_queue = kv_malloc(sizeof(struct bucket_lock_q_head));
-    TAILQ_INIT((struct bucket_lock_q_head *)self->waiting_queue);
-
-    self->init = false;
-    if (cb) cb(true, cb_arg);
-}
-
-static void init_write_cb(bool success, void *arg) {
-    struct init_write_ctx *ctx = arg;
-    struct kv_bucket_log *self = ctx->init_ctx->self;
-    if (!(ctx->init_ctx->success = ctx->init_ctx->success && success)) {
-        if (--ctx->init_ctx->io_num == 0) {
-            if (ctx->init_ctx->cb) ctx->init_ctx->cb(false, ctx->init_ctx->cb_arg);
-            kv_free(ctx->init_ctx);
-        }
-        kv_storage_free(ctx);
-        return;
-    }
-    uint32_t n = self->log.size - self->tail - 1;
-    uint32_t head = self->log.size - 1 - self->bucket_num;
-    if (n == 0) {
-        if (--ctx->init_ctx->io_num == 0) {
-            init(self, ctx->init_ctx->cb, ctx->init_ctx->cb_arg);
-            kv_free(ctx->init_ctx);
-        }
-        kv_storage_free(ctx);
-        return;
-    }
-    if (n <= self->compact_len) {
-        self->head = head;
-        self->log.head = head;
-        self->compact_head = head;
-    } else
-        n = self->compact_len;
-    for (size_t i = 0; i < n; i++) {
-        if (self->tail + i < head)
-            ctx->buckets[i].id = KV_BUCKET_ID_EMPTY;
-        else
-            ctx->buckets[i].id = self->tail + i - head;
-        ctx->buckets[i].chain_length = 1;
-    }
-    kv_bucket_log_write(self, ctx->buckets, n, init_write_cb, ctx);
-}
-
 void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets,
                         uint32_t compact_buf_len, kv_circular_log_io_cb cb, void *cb_arg) {
     assert(storage->block_size == sizeof(struct kv_bucket));
@@ -245,20 +178,14 @@ void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, 
     self->bucket_num = 1U << log_num_buckets;
     self->size = self->log.size << 1;
     self->compact_len = compact_buf_len;
-    self->init = true;  // disable compact while init
 
-    struct init_ctx *ctx = kv_malloc(sizeof(struct init_ctx));
-    ctx->self = self;
-    ctx->cb = cb;
-    ctx->cb_arg = cb_arg;
-    ctx->io_num = INIT_CON_IO_NUM;
-    ctx->success = true;
-    for (size_t i = 0; i < ctx->io_num; i++) {
-        struct init_write_ctx *buf =
-            kv_storage_zmalloc(storage, sizeof(struct init_write_ctx) + compact_buf_len * sizeof(struct kv_bucket));
-        buf->init_ctx = ctx;
-        init_write_cb(true, buf);
-    }
+    self->bucket_meta = kv_calloc(self->bucket_num, sizeof(struct kv_bucket_meta));
+    kv_memset(self->bucket_meta, 0, sizeof(struct kv_bucket_meta) * self->bucket_num);
+
+    self->waiting_queue = kv_malloc(sizeof(struct bucket_lock_q_head));
+    TAILQ_INIT((struct bucket_lock_q_head *)self->waiting_queue);
+    self->init = false;
+    if (cb) cb(true, cb_arg);
 }
 
 void kv_bucket_log_fini(struct kv_bucket_log *self) {
@@ -284,14 +211,14 @@ void kv_bucket_log_writev(struct kv_bucket_log *self, struct iovec *buckets, int
 
 // bucket alloc & free
 bool kv_bucket_alloc_extra(struct kv_bucket_log *self, struct kv_bucket_segment *seg) {
-    uint8_t length = TAILQ_FIRST(&seg->chain)->bucket->chain_length;
+    uint8_t length = TAILQ_EMPTY(&seg->chain) ? 0 : TAILQ_FIRST(&seg->chain)->bucket->chain_length;
     if (length == 0x7F) return false;
     struct kv_bucket_chain_entry *ce = kv_malloc(sizeof(*ce));
     ce->len = 1;
     ce->bucket = kv_storage_zblk_alloc(self->log.storage, ce->len);
     TAILQ_INSERT_TAIL(&seg->chain, ce, entry);
 
-    ce->bucket->id = TAILQ_FIRST(&seg->chain)->bucket->id;
+    ce->bucket->id = seg->bucket_id;
     ce->bucket->chain_index = length;
     length++;
     TAILQ_FOREACH(ce, &seg->chain, entry) {
@@ -303,8 +230,8 @@ bool kv_bucket_alloc_extra(struct kv_bucket_log *self, struct kv_bucket_segment 
 }
 
 void kv_bucket_free_extra(struct kv_bucket_segment *seg) {
+    assert(!TAILQ_EMPTY(&seg->chain));
     uint8_t length = TAILQ_FIRST(&seg->chain)->bucket->chain_length;
-    assert(length > 1);
     struct kv_bucket_chain_entry *ce = TAILQ_LAST(&seg->chain, kv_bucket_chain);
     if (ce->len > 1) {
         ce->len--;
@@ -344,12 +271,18 @@ static inline void verify_buckets(struct kv_bucket_log *self, struct kv_bucket_s
 }
 // --- bucket segment ---
 void kv_bucket_seg_get(struct kv_bucket_log *self, uint64_t bucket_id, struct kv_bucket_segment *seg, kv_circular_log_io_cb cb, void *cb_arg) {
-    struct kv_bucket_chain_entry *chain_entry = kv_malloc(sizeof(*chain_entry));
-    chain_entry->len = kv_bucket_get_meta(self, bucket_id)->chain_length;
-    chain_entry->bucket = kv_storage_blk_alloc(self->log.storage, chain_entry->len);
+    struct kv_bucket_meta *meta = kv_bucket_get_meta(self, bucket_id);
     TAILQ_INIT(&seg->chain);
-    TAILQ_INSERT_HEAD(&seg->chain, chain_entry, entry);
-    kv_bucket_log_read(self, bucket_id, chain_entry->bucket, cb, cb_arg);
+    seg->bucket_id = bucket_id;
+    if (meta->chain_length != 0) {
+        struct kv_bucket_chain_entry *chain_entry = kv_malloc(sizeof(*chain_entry));
+        chain_entry->len = meta->chain_length;
+        chain_entry->bucket = kv_storage_blk_alloc(self->log.storage, chain_entry->len);
+        TAILQ_INSERT_HEAD(&seg->chain, chain_entry, entry);
+        kv_circular_log_read(&self->log, meta->bucket_offset, chain_entry->bucket, meta->chain_length, cb, cb_arg);
+    } else {
+        if (cb) cb(true, cb_arg);
+    }
 }
 
 void kv_bucket_seg_put_bulk(struct kv_bucket_log *self, struct kv_bucket_segments *segs, kv_circular_log_io_cb cb, void *cb_arg) {
@@ -360,6 +293,10 @@ void kv_bucket_seg_put_bulk(struct kv_bucket_log *self, struct kv_bucket_segment
         TAILQ_FOREACH(chain_entry, &seg->chain, entry) {
             iovcnt++;
         }
+    }
+    if (iovcnt == 0) {
+        if (cb) cb(true, cb_arg);
+        return;
     }
     struct iovec buckets[iovcnt], *p = buckets;
     uint32_t len = 0;
@@ -395,8 +332,13 @@ void kv_bucket_seg_commit(struct kv_bucket_log *self, struct kv_bucket_segment *
     struct kv_bucket_chain_entry *chain_entry;
     TAILQ_FOREACH(chain_entry, &seg->chain, entry) {
         verify_buckets(self, seg);
-        struct kv_bucket *bucket = chain_entry->bucket;        
-        kv_bucket_get_meta(self, bucket->id)->bucket_offset = seg->offset;
-        kv_bucket_get_meta(self, bucket->id)->chain_length = bucket->chain_length;
+    }
+
+    struct kv_bucket_meta *meta = kv_bucket_get_meta(self, seg->bucket_id);
+    if (TAILQ_EMPTY(&seg->chain)) {
+        meta->chain_length = 0;
+    } else {
+        meta->bucket_offset = seg->offset;
+        meta->chain_length = TAILQ_FIRST(&seg->chain)->bucket->chain_length;
     }
 }
