@@ -74,8 +74,8 @@ void kv_bucket_unlock(struct kv_bucket_log *self, struct kv_bucket_lock_entry **
 }
 
 // --- compact ---
-#define COMPACTION_CONCURRENCY 16
-#define COMPACTION_LENGTH 128
+#define COMPACTION_CONCURRENCY 4
+#define COMPACTION_LENGTH 512
 static void compact_move_head(struct kv_bucket_log *self) {
     struct kv_bucket *bucket;
     uint32_t i;
@@ -108,6 +108,7 @@ static void compact_write_cb(bool success, void *arg) {
         TAILQ_REMOVE(&ctx->segments, seg, entry);
         kv_bucket_seg_commit(self, seg);
         kv_bucket_seg_cleanup(self, seg);
+        kv_free(seg);
     }
     kv_bucket_unlock(self, &ctx->bucket_id_set);
     compact_move_head(self);
