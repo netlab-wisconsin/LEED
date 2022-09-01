@@ -61,7 +61,7 @@ struct kv_bucket_log {
     struct kv_circular_log log;
     uint32_t size;
     uint32_t head, tail;
-    uint32_t compact_head, compact_len;
+    uint32_t compact_head;
     struct kv_bucket_meta *bucket_meta;
     uint64_t bucket_num;
     void *waiting_queue;
@@ -75,7 +75,7 @@ static inline struct kv_bucket_meta *kv_bucket_get_meta(struct kv_bucket_log *se
 }
 
 void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets,
-                        uint32_t compact_buf_len, kv_circular_log_io_cb cb, void *cb_arg);
+                        kv_circular_log_io_cb cb, void *cb_arg);
 void kv_bucket_log_fini(struct kv_bucket_log *self);
 
 bool kv_bucket_alloc_extra(struct kv_bucket_log *self, struct kv_bucket_segment *seg);

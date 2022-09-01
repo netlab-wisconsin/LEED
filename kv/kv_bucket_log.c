@@ -74,7 +74,8 @@ void kv_bucket_unlock(struct kv_bucket_log *self, struct kv_bucket_lock_entry **
 }
 
 // --- compact ---
-#define COMPACT_CIO_NUM 4
+#define COMPACTION_CONCURRENCY 8
+#define COMPACTION_LENGTH 128
 static void compact_move_head(struct kv_bucket_log *self) {
     struct kv_bucket *bucket;
     uint32_t i;
@@ -143,8 +144,8 @@ static void compact_lock_cb(void *arg) {
 }
 
 static void compact(struct kv_bucket_log *self) {
-    if (kv_circular_log_empty_space(&self->log) >= self->compact_len * COMPACT_CIO_NUM * 4) return;
-    if ((self->log.size - self->log.head + self->compact_head) % self->log.size > self->compact_len * COMPACT_CIO_NUM) return;
+    if (kv_circular_log_empty_space(&self->log) >= COMPACTION_LENGTH * COMPACTION_CONCURRENCY * 6) return;
+    if ((self->log.size - self->log.head + self->compact_head) % self->log.size > COMPACTION_LENGTH * COMPACTION_CONCURRENCY) return;
     struct compact_ctx *ctx = kv_malloc(sizeof(struct compact_ctx));
     ctx->self = self;
     ctx->bucket_id_set = NULL;
@@ -152,7 +153,7 @@ static void compact(struct kv_bucket_log *self) {
     TAILQ_INIT(&ctx->segments);
 
     struct kv_bucket *bucket;
-    for (ctx->len = 0; ctx->len < self->compact_len; ctx->len += bucket->chain_length) {
+    for (ctx->len = 0; ctx->len < COMPACTION_LENGTH; ctx->len += bucket->chain_length) {
         uint32_t bucket_offset = (self->compact_head + ctx->len) % self->log.size;
         kv_circular_log_fetch_one(&self->log, bucket_offset, (void **)&bucket);
         assert(bucket->chain_index == 0 && bucket->chain_length);
@@ -167,16 +168,16 @@ static void compact(struct kv_bucket_log *self) {
 
 // --- init & fini ---
 void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets,
-                        uint32_t compact_buf_len, kv_circular_log_io_cb cb, void *cb_arg) {
+                        kv_circular_log_io_cb cb, void *cb_arg) {
+    num_buckets = num_buckets > COMPACTION_LENGTH << 4 ? num_buckets : COMPACTION_LENGTH << 4;
     assert(storage->block_size == sizeof(struct kv_bucket));
     kv_memset(self, 0, sizeof(struct kv_bucket_log));
-    kv_circular_log_init(&self->log, storage, base, num_buckets << 1, 0, 0, compact_buf_len * COMPACT_CIO_NUM * 4, 256);
+    kv_circular_log_init(&self->log, storage, base, num_buckets << 1, 0, 0, COMPACTION_LENGTH * COMPACTION_CONCURRENCY * 4, 256);
 
     uint64_t log_num_buckets = 31;
     while ((1U << log_num_buckets) > num_buckets) log_num_buckets--;
     self->bucket_num = 1U << log_num_buckets;
     self->size = self->log.size << 1;
-    self->compact_len = compact_buf_len;
 
     self->bucket_meta = kv_calloc(self->bucket_num, sizeof(struct kv_bucket_meta));
     kv_memset(self->bucket_meta, 0, sizeof(struct kv_bucket_meta) * self->bucket_num);
@@ -195,7 +196,7 @@ void kv_bucket_log_fini(struct kv_bucket_log *self) {
 
 // --- writev ---
 static void kv_bucket_log_writev(struct kv_bucket_log *self, struct iovec *buckets, int iovcnt, kv_circular_log_io_cb cb,
-                          void *cb_arg) {
+                                 void *cb_arg) {
     for (int i = 0; i < iovcnt; i++) {
         for (size_t j = 0; j < buckets[i].iov_len; j++) {
             struct kv_bucket *bucket = (struct kv_bucket *)buckets[i].iov_base + j;

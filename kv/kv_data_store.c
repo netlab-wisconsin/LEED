@@ -60,9 +60,8 @@ static inline bool compare_keys(const uint8_t *key1, size_t key1_len, const uint
 
 void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets,
                         uint64_t value_log_block_num, uint32_t compact_buf_len, struct kv_ds_queue *ds_queue, uint32_t ds_id,
-                        kv_data_store_cb cb, void *cb_arg) {
-    num_buckets = num_buckets > compact_buf_len << 4 ? num_buckets : compact_buf_len << 4;
-    kv_bucket_log_init(&self->bucket_log, storage, base, num_buckets, compact_buf_len, cb, cb_arg);
+                        kv_data_store_cb cb, void *cb_arg) {    
+    kv_bucket_log_init(&self->bucket_log, storage, base, num_buckets, cb, cb_arg);
     kv_value_log_init(&self->value_log, storage, &self->bucket_log, (base + self->bucket_log.log.size) * storage->block_size,
                       value_log_block_num * storage->block_size, compact_buf_len);
     uint64_t value_log_size = self->value_log.log.size + self->value_log.index_log.size;
