@@ -319,7 +319,7 @@ static void value_compact(struct compact_ctx *ctx) {
 
     if (bkt_iocnt) {
         ctx->iocnt = 2;
-        kv_bucket_log_writev(self->bucket_log, bkt_iov, bkt_iocnt, compact_write, ctx);
+        // kv_bucket_log_writev(self->bucket_log, bkt_iov, bkt_iocnt, compact_write, ctx);
         kv_circular_log_appendv(&self->log, val_iov, val_iocnt, compact_write, ctx);
     } else {
         kv_free(ctx);

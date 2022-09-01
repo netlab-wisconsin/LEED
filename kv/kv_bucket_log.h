@@ -41,6 +41,7 @@ struct kv_bucket_meta {
 struct kv_bucket_chain_entry {
     struct kv_bucket *bucket;
     uint8_t len;
+    bool pre_alloc_bucket;
     TAILQ_ENTRY(kv_bucket_chain_entry)
     entry;
 };
@@ -76,14 +77,6 @@ static inline struct kv_bucket_meta *kv_bucket_get_meta(struct kv_bucket_log *se
 void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets,
                         uint32_t compact_buf_len, kv_circular_log_io_cb cb, void *cb_arg);
 void kv_bucket_log_fini(struct kv_bucket_log *self);
-
-void kv_bucket_log_writev(struct kv_bucket_log *self, struct iovec *buckets, int iovcnt, kv_circular_log_io_cb cb,
-                          void *cb_arg);
-static inline void kv_bucket_log_write(struct kv_bucket_log *self, struct kv_bucket *buckets, uint32_t n,
-                                       kv_circular_log_io_cb cb, void *cb_arg) {
-    struct iovec iov = {.iov_base = buckets, .iov_len = n};
-    kv_bucket_log_writev(self, &iov, 1, cb, cb_arg);
-}
 
 bool kv_bucket_alloc_extra(struct kv_bucket_log *self, struct kv_bucket_segment *seg);
 void kv_bucket_free_extra(struct kv_bucket_segment *seg);
