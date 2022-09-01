@@ -238,7 +238,8 @@ void kv_bucket_free_extra(struct kv_bucket_segment *seg) {
         ce->len--;
     } else {
         TAILQ_REMOVE(&seg->chain, ce, entry);
-        kv_storage_free(ce->bucket);
+        if (!ce->pre_alloc_bucket)
+            kv_storage_free(ce->bucket);
         kv_free(ce);
     }
     length--;
@@ -336,6 +337,17 @@ void kv_bucket_seg_cleanup(struct kv_bucket_log *self, struct kv_bucket_segment 
         kv_free(chain_entry);
     }
 }
+
+static bool is_empty_seg(struct kv_bucket_segment *seg) {
+    if (TAILQ_EMPTY(&seg->chain)) return true;
+    struct kv_bucket *first_bucket = TAILQ_FIRST(&seg->chain)->bucket;
+    if (first_bucket->chain_length > 1) return false;
+    for (struct kv_item *item = first_bucket->items; item - first_bucket->items < KV_ITEM_PER_BUCKET; ++item)
+        if (!KV_EMPTY_ITEM(item))
+            return false;
+    return true;
+}
+
 void kv_bucket_seg_commit(struct kv_bucket_log *self, struct kv_bucket_segment *seg) {
     struct kv_bucket_chain_entry *chain_entry;
     TAILQ_FOREACH(chain_entry, &seg->chain, entry) {
@@ -343,7 +355,7 @@ void kv_bucket_seg_commit(struct kv_bucket_log *self, struct kv_bucket_segment *
     }
 
     struct kv_bucket_meta *meta = kv_bucket_get_meta(self, seg->bucket_id);
-    if (TAILQ_EMPTY(&seg->chain)) {
+    if (is_empty_seg(seg)) {
         meta->chain_length = 0;
     } else {
         meta->bucket_offset = seg->offset;

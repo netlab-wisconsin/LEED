@@ -136,15 +136,8 @@ static struct kv_item *find_empty(struct kv_data_store *self, struct kv_bucket_s
 }
 
 static void fill_the_hole(struct kv_data_store *self, struct kv_bucket_segment *seg) {
-    struct kv_bucket *first_bucket = TAILQ_FIRST(&seg->chain)->bucket;
-    if (first_bucket->chain_length == 1) {
-        for (struct kv_item *item = first_bucket->items; item - first_bucket->items < KV_ITEM_PER_BUCKET; ++item)
-            if (!KV_EMPTY_ITEM(item))
-                return;
-        kv_bucket_free_extra(seg);
-        return;
-    }
-
+    if (TAILQ_FIRST(&seg->chain)->bucket->chain_length == 1) return;
+    
     struct kv_bucket_chain_entry *ce = TAILQ_LAST(&seg->chain, kv_bucket_chain);
     struct kv_bucket *last_bucket = &ce->bucket[ce->len - 1];
     struct kv_item *item_to_move = last_bucket->items;
