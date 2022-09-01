@@ -74,7 +74,7 @@ void kv_bucket_unlock(struct kv_bucket_log *self, struct kv_bucket_lock_entry **
 }
 
 // --- compact ---
-#define COMPACTION_CONCURRENCY 8
+#define COMPACTION_CONCURRENCY 16
 #define COMPACTION_LENGTH 128
 static void compact_move_head(struct kv_bucket_log *self) {
     struct kv_bucket *bucket;
@@ -216,6 +216,7 @@ bool kv_bucket_alloc_extra(struct kv_bucket_log *self, struct kv_bucket_segment 
     struct kv_bucket_chain_entry *ce = kv_malloc(sizeof(*ce));
     ce->len = 1;
     ce->bucket = kv_storage_zblk_alloc(self->log.storage, ce->len);
+    ce->pre_alloc_bucket = false;
     TAILQ_INSERT_TAIL(&seg->chain, ce, entry);
 
     ce->bucket->id = seg->bucket_id;
