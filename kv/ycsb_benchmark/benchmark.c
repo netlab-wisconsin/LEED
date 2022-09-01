@@ -18,7 +18,7 @@ struct {
     uint32_t ssd_num;
     uint32_t producer_num;
     uint32_t concurrent_io_num;
-    bool seq_read, fill, seq_write;
+    bool seq_read, fill, seq_write, del;
     char json_config_file[1024];
     char workload_file[1024];
 
@@ -31,6 +31,7 @@ struct {
          .json_config_file = "config.json",
          .seq_read = false,
          .seq_write = false,
+         .del = false,
          .fill = false};
 static void help(void) {
     // TODO: HELP TEXT
@@ -39,7 +40,7 @@ static void help(void) {
 }
 static void get_options(int argc, char **argv) {
     int ch;
-    while ((ch = getopt(argc, argv, "hd:w:c:i:P:RWF")) != -1) switch (ch) {
+    while ((ch = getopt(argc, argv, "hd:w:c:i:P:RWFD")) != -1) switch (ch) {
             case 'h':
                 help();
                 break;
@@ -63,6 +64,9 @@ static void get_options(int argc, char **argv) {
                 break;
             case 'W':
                 opt.seq_write = true;
+                break;
+            case 'D':
+                opt.del = true;
                 break;
             case 'F':
                 opt.fill = true;
@@ -105,6 +109,7 @@ enum {
     TRANSACTION,
     SEQ_READ,
     SEQ_WRITE,
+    DEL,
 } state = INIT;
 
 kv_ycsb_handle workload;
@@ -195,16 +200,18 @@ static void test_fini(void *arg) {  // always running on producer 0
                 total_io = opt.num_items;
                 state = FILL;
             } else {
-                state = opt.seq_read ? SEQ_READ : opt.seq_write ? SEQ_WRITE
-                                                                : TRANSACTION;
+                state = opt.del ? DEL : opt.seq_read ? SEQ_READ
+                                    : opt.seq_write  ? SEQ_WRITE
+                                                     : TRANSACTION;
                 total_io = opt.operation_cnt;
             }
             break;
         case FILL:
             printf("Write rate: %lf\n", ((double)opt.num_items / timeval_diff(&tv_start, &tv_end)));
             printf("db created successfully in %lf s.\n", timeval_diff(&tv_start, &tv_end));
-            state = opt.seq_read ? SEQ_READ : opt.seq_write ? SEQ_WRITE
-                                                            : TRANSACTION;
+            state = opt.del ? DEL : opt.seq_read ? SEQ_READ
+                                : opt.seq_write  ? SEQ_WRITE
+                                                 : TRANSACTION;
             total_io = opt.operation_cnt;
             break;
         case SEQ_WRITE:
@@ -213,6 +220,10 @@ static void test_fini(void *arg) {  // always running on producer 0
             return;
         case SEQ_READ:
             printf("SEQ_READ rate: %lf\n", ((double)opt.operation_cnt / timeval_diff(&tv_start, &tv_end)));
+            stop();
+            return;
+        case DEL:
+            printf("DEL rate: %lf\n", ((double)opt.operation_cnt / timeval_diff(&tv_start, &tv_end)));
             stop();
             return;
         case TRANSACTION:
@@ -295,6 +306,12 @@ static void test(void *arg) {
             break;
         case SEQ_READ:
             msg->type = KV_MSG_GET;
+            msg->key_len = 16;
+            msg->value_len = 0;
+            kv_ycsb_next(workload, true, KV_MSG_KEY(msg), NULL);
+            break;
+        case DEL:
+            msg->type = KV_MSG_DEL;
             msg->key_len = 16;
             msg->value_len = 0;
             kv_ycsb_next(workload, true, KV_MSG_KEY(msg), NULL);
