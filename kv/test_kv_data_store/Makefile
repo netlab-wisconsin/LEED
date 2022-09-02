@@ -4,7 +4,7 @@ include $(SPDK_ROOT_DIR)/mk/spdk.modules.mk
 
 APP = test_kv_data_store
 SYS_LIBS += -lm -lstdc++
-CXX_SRCS := ../utils/concurrentqueue.cpp
+CXX_SRCS := ../utils/concurrentqueue.cpp ../kv_bucket.cpp
 C_SRCS := ../kv_app.c ../kv_storage.c ../kv_circular_log.c ../kv_value_log.c ../kv_bucket_log.c ../kv_data_store.c ../kv_ds_queue.c kv_data_store_test.c
 
 SPDK_LIB_LIST = $(ALL_MODULES_LIST)

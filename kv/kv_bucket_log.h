@@ -3,19 +3,14 @@
 #include <sys/queue.h>
 
 #include "kv_circular_log.h"
-#include "utils/uthash.h"
 
 #define KV_MAX_KEY_LENGTH 20
 #define KV_MIN_KEY_LENGTH 8
 #define KV_ITEM_PER_BUCKET 16
 
 typedef void (*kv_task_cb)(void *);
+typedef void *kv_bucket_lock_set;
 
-struct kv_bucket_lock_entry {
-    uint64_t bucket_id;
-    uint32_t ref_cnt;
-    UT_hash_handle hh;
-};
 
 struct kv_item {
     uint8_t key_length;
@@ -33,8 +28,7 @@ struct kv_bucket {
     struct kv_item items[KV_ITEM_PER_BUCKET];
 };
 struct kv_bucket_meta {
-    uint8_t lock : 1;
-    uint8_t chain_length : 7;
+    uint8_t chain_length;
     uint32_t bucket_offset;
 } __attribute__((packed));
 
@@ -62,17 +56,13 @@ struct kv_bucket_log {
     uint32_t size;
     uint32_t head, tail;
     uint32_t compact_head;
-    struct kv_bucket_meta *bucket_meta;
     uint64_t bucket_num;
-    void *waiting_queue;
     bool init;
+    void *meta, *bucket_lock;
 };
 
 static inline uint32_t kv_bucket_log_offset(struct kv_bucket_log *self) { return (uint32_t)self->log.tail; }
 
-static inline struct kv_bucket_meta *kv_bucket_get_meta(struct kv_bucket_log *self, uint64_t bucket_id) {
-    return self->bucket_meta + bucket_id;
-}
 
 void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets,
                         kv_circular_log_io_cb cb, void *cb_arg);
@@ -87,7 +77,15 @@ void kv_bucket_seg_put_bulk(struct kv_bucket_log *self, struct kv_bucket_segment
 void kv_bucket_seg_cleanup(struct kv_bucket_log *self, struct kv_bucket_segment *seg);
 void kv_bucket_seg_commit(struct kv_bucket_log *self, struct kv_bucket_segment *seg);
 
-void kv_bucket_lock_add(struct kv_bucket_lock_entry **set, uint64_t bucket_id);
-void kv_bucket_lock(struct kv_bucket_log *self, struct kv_bucket_lock_entry *set, kv_task_cb cb, void *cb_arg);
-void kv_bucket_unlock(struct kv_bucket_log *self, struct kv_bucket_lock_entry **set);
+void kv_bucket_meta_init(struct kv_bucket_log *self);
+void kv_bucket_meta_fini(struct kv_bucket_log *self);
+struct kv_bucket_meta kv_bucket_meta_get(struct kv_bucket_log *self, uint64_t bucket_id);
+void kv_bucket_meta_put(struct kv_bucket_log *self, uint64_t bucket_id, struct kv_bucket_meta data);
+
+void kv_bucket_lock_set_add(kv_bucket_lock_set *lock_set, uint64_t bucket_id);
+void kv_bucket_lock_set_del(kv_bucket_lock_set *lock_set, uint64_t bucket_id);
+void kv_bucket_lock(struct kv_bucket_log *self, kv_bucket_lock_set _lock_set, kv_task_cb cb, void *cb_arg);
+void kv_bucket_unlock(struct kv_bucket_log *self, kv_bucket_lock_set *_lock_set);
+void kv_bucket_lock_init(struct kv_bucket_log *self);
+void kv_bucket_lock_fini(struct kv_bucket_log *self);
 #endif

@@ -6,7 +6,7 @@ include $(SPDK_ROOT_DIR)/mk/spdk.modules.mk
 APP = kv_ring_server
 SYS_LIBS += -lm -lstdc++ -libverbs -lrdmacm -lkv_etcd
 
-CXX_SRCS := ../utils/concurrentqueue.cpp
+CXX_SRCS := ../utils/concurrentqueue.cpp ../kv_bucket.cpp
 C_SRCS := ../kv_app.c ../kv_storage.c ../kv_circular_log.c ../kv_value_log.c ../kv_bucket_log.c ../kv_data_store.c ../kv_ds_queue.c ../kv_memory.c ../kv_rdma.c ../kv_ring.c ../utils/city.c ../utils/timing.c kv_server.c
 
 SPDK_LIB_LIST = $(ALL_MODULES_LIST)

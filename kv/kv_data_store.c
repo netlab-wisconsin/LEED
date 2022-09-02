@@ -137,7 +137,7 @@ static struct kv_item *find_empty(struct kv_data_store *self, struct kv_bucket_s
 
 static void fill_the_hole(struct kv_data_store *self, struct kv_bucket_segment *seg) {
     if (TAILQ_FIRST(&seg->chain)->bucket->chain_length == 1) return;
-    
+
     struct kv_bucket_chain_entry *ce = TAILQ_LAST(&seg->chain, kv_bucket_chain);
     struct kv_bucket *last_bucket = &ce->bucket[ce->len - 1];
     struct kv_item *item_to_move = last_bucket->items;
@@ -167,7 +167,7 @@ struct set_ctx {
     kv_data_store_cb cb;
     void *cb_arg;
     uint64_t bucket_id;
-    struct kv_bucket_lock_entry *id_set;
+    kv_bucket_lock_set id_set;
     uint32_t io_cnt;
     struct kv_bucket_segment seg;
     uint64_t value_offset;
@@ -229,7 +229,7 @@ static void set_start(void *arg) {
     ctx->success = true;
     ctx->value_offset = kv_value_log_offset(&ctx->self->value_log);
     kv_value_log_write(&ctx->self->value_log, ctx->bucket_id, ctx->value, ctx->value_length, set_finish_cb, ctx);
-    kv_bucket_lock_add(&ctx->id_set, ctx->bucket_id);
+    kv_bucket_lock_set_add(&ctx->id_set, ctx->bucket_id);
     kv_bucket_lock(&ctx->self->bucket_log, ctx->id_set, set_lock_cb, ctx);
 }
 
@@ -295,7 +295,7 @@ struct delete_ctx {
     kv_data_store_cb cb;
     void *cb_arg;
     uint64_t bucket_id;
-    struct kv_bucket_lock_entry *id_set;
+    kv_bucket_lock_set id_set;
     struct kv_bucket_segment seg;
     bool success;
 };
@@ -339,7 +339,7 @@ static void delete_lock_cb(void *arg) {
 
 static void delete_lock(void *arg) {
     struct delete_ctx *ctx = arg;
-    kv_bucket_lock_add(&ctx->id_set, ctx->bucket_id);
+    kv_bucket_lock_set_add(&ctx->id_set, ctx->bucket_id);
     kv_bucket_lock(&ctx->self->bucket_log, ctx->id_set, delete_lock_cb, ctx);
 }
 
