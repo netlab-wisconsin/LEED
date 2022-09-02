@@ -1,8 +1,5 @@
-#include <algorithm>
 #include <cstdint>
-#include <iterator>
 #include <list>
-#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 extern "C" {
@@ -46,6 +43,7 @@ void kv_bucket_meta_put(struct kv_bucket_log *self, uint64_t bucket_id, struct k
     if (p == meta->end()) {
         if (is_meta_empty(data)) return;
         (*meta)[bucket_id >> META_BLOCK_SHIFT] = {{}, 0};
+        p = meta->find(bucket_id >> META_BLOCK_SHIFT);
     }
     bool empty = is_meta_empty(p->second.meta[bucket_id & META_BLOCK_MASK]);
     p->second.meta[bucket_id & META_BLOCK_MASK] = data;
@@ -87,9 +85,9 @@ void kv_bucket_lock_set_del(kv_bucket_lock_set *lock_set, uint64_t bucket_id) {
 }
 
 static inline bool lockable(struct bucket_lock *ctx, lock_set_t *lock_set) {
-    lock_set_t r;
-    set_intersection(ctx->locked.begin(), ctx->locked.end(), lock_set->begin(), lock_set->end(), inserter(r, r.begin()));
-    return r.empty();
+    for (auto i = lock_set->begin(); i != lock_set->end(); ++i)
+        if (ctx->locked.find(*i) != ctx->locked.end()) return false;
+    return true;
 }
 
 void kv_bucket_lock(struct kv_bucket_log *self, kv_bucket_lock_set _lock_set, kv_task_cb cb, void *cb_arg) {
@@ -106,7 +104,8 @@ void kv_bucket_unlock(struct kv_bucket_log *self, kv_bucket_lock_set *_lock_set)
     struct bucket_lock *ctx = (struct bucket_lock *)self->bucket_lock;
     lock_set_t *lock_set = (lock_set_t *)*_lock_set;
     if (lock_set == nullptr) return;
-    ctx->locked.erase(lock_set->begin(), lock_set->end());
+    for (auto i = lock_set->begin(); i != lock_set->end(); ++i)
+        ctx->locked.erase(*i);
     for (auto i = lock_set->begin(); i != lock_set->end(); ++i)
         for (auto j = ctx->queue.begin(); j != ctx->queue.end(); ++j)
             if (j->ids->find(*i) != j->ids->end() && lockable(ctx, j->ids)) {

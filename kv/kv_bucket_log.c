@@ -64,8 +64,8 @@ static void compact_lock_cb(void *arg) {
         struct kv_bucket_meta meta = kv_bucket_meta_get(self, seg->bucket_id);
         if ((self->log.size - ctx->compact_head + meta.bucket_offset) % self->log.size >= ctx->len || meta.chain_length == 0) {
             TAILQ_REMOVE(&ctx->segments, seg, entry);
-            kv_bucket_lock_set_add(unlock_set, seg->bucket_id);
-            kv_bucket_lock_set_del(ctx->bucket_id_set, seg->bucket_id);
+            kv_bucket_lock_set_add(&unlock_set, seg->bucket_id);
+            kv_bucket_lock_set_del(&ctx->bucket_id_set, seg->bucket_id);
             kv_bucket_seg_cleanup(self, seg);
             kv_free(seg);
         }
