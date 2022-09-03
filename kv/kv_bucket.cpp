@@ -93,6 +93,10 @@ static inline bool lockable(struct bucket_lock *ctx, lock_set_t *lock_set) {
 void kv_bucket_lock(struct kv_bucket_log *self, kv_bucket_lock_set _lock_set, kv_task_cb cb, void *cb_arg) {
     struct bucket_lock *ctx = (struct bucket_lock *)self->bucket_lock;
     lock_set_t *lock_set = (lock_set_t *)_lock_set;
+    if (lock_set == nullptr) {
+        if (cb) kv_app_send(self->log.thread_index, cb, cb_arg);
+        return;
+    }
     if (lockable(ctx, lock_set)) {
         ctx->locked.insert(lock_set->begin(), lock_set->end());
         if (cb) kv_app_send(self->log.thread_index, cb, cb_arg);

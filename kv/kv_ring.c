@@ -136,11 +136,11 @@ static inline uint32_t get_ring_id(uint8_t *vid, uint32_t log_ring_num) {
     return get_vid_64(vid) >> (64 - log_ring_num);
 }
 static inline void set_ring_id(uint8_t *vid, uint32_t log_ring_num, uint32_t ring_id) {
-    *(uint64_t *)vid &= ((1 << (64 - log_ring_num)) - 1);
-    *(uint64_t *)vid |= ring_id << (64 - log_ring_num);
+    *(uint64_t *)vid &= ((1ULL << (64 - log_ring_num)) - 1);
+    *(uint64_t *)vid |= (uint64_t)ring_id << (64 - log_ring_num);
 }
 static inline void mask_vnode_id(uint8_t *vid, uint32_t log_bkt_num) {
-    uint64_t mask = ~((1 << (64 - log_bkt_num)) - 1);
+    uint64_t mask = ~((1ULL << (64 - log_bkt_num)) - 1);
     *(uint64_t *)vid &= mask;
 }
 static struct vid_entry *find_vid_entry(struct vid_ring *ring, char *vid) {
@@ -475,7 +475,7 @@ static void update_rings(struct kv_node *node) {
     while ((ctx = STAILQ_FIRST(&node->ring_updates)) != NULL) {
         STAILQ_REMOVE_HEAD(&node->ring_updates, next);
         mask_vnode_id(ctx->vid.vid, node->info.log_bkt_num);
-        assert(ctx->ring_id == get_ring_id(ctx->vid.vid, self->log_ring_num));
+        assert(ctx->msg_type == KV_ETCD_MSG_DEL || ctx->ring_id == get_ring_id(ctx->vid.vid, self->log_ring_num));
         for (size_t i = 1; i < self->thread_num; i++) kv_app_send(self->thread_id + i, update_ring, ctx);
         update_ring(ctx);
     }
@@ -760,8 +760,8 @@ void kv_ring_server_init(char *local_ip, char *local_port, uint32_t ring_num, ui
     struct kv_ring *self = &g_ring;
 
     uint32_t log_ring_num = 31;
-    while (1U << log_ring_num > ring_num) log_ring_num--;
-    ring_init(log_ring_num);
+    while (1U << log_ring_num >= ring_num) log_ring_num--;
+    ring_init(++log_ring_num);
     ring_num = 1U << log_ring_num;
 
     self->req_handler = handler;

@@ -230,23 +230,14 @@ static void handler(void *req_h, kv_rdma_mr req, uint32_t req_sz, uint32_t ds_id
     kv_app_send(io->worker_id, io_start, io);
 }
 
+static uint32_t io_cnt;
 static void ring_init(void *arg) {
+    if (--io_cnt) return;
     server = kv_ring_init(opt.etcd_ip, opt.etcd_port, opt.thread_num, NULL, NULL);
     io_pool = kv_mempool_create(opt.concurrent_io_num, sizeof(struct io_ctx));
     kv_ring_server_init(opt.local_ip, opt.local_port, opt.ring_num, opt.vid_per_ssd, opt.ssd_num, opt.rpl_num,
                         workers->data_store.bucket_log.log_bucket_num, opt.concurrent_io_num,
                         sizeof(struct kv_msg) + 16 + opt.value_size, handler, NULL, NULL, NULL);
-}
-
-static uint32_t io_cnt;
-static void worker_init_done(bool success, void *arg) {
-    if (!success) {
-        fprintf(stderr, "init fail!\n");
-        exit(-1);
-    }
-    if (--io_cnt == 0) {
-        kv_app_send(opt.ssd_num, ring_init, NULL);
-    }
 }
 
 static void worker_init(void *arg) {
@@ -255,8 +246,8 @@ static void worker_init(void *arg) {
     kv_storage_init(&self->storage, self - workers);
     uint32_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET;
     uint64_t value_log_block_num = self->storage.num_blocks * 0.95 - 2 * bucket_num;
-    kv_data_store_init(&self->data_store, &self->storage, 0, bucket_num, value_log_block_num, 512, &ds_queue, self - workers,
-                       worker_init_done, NULL);
+    kv_data_store_init(&self->data_store, &self->storage, 0, bucket_num, value_log_block_num, 512, &ds_queue, self - workers);
+    kv_app_send(opt.ssd_num, ring_init, NULL);
 }
 
 int main(int argc, char **argv) {

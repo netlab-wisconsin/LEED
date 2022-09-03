@@ -14,8 +14,7 @@ struct kv_data_store {
 typedef void * kv_data_store_ctx;
 typedef kv_storage_io_cb kv_data_store_cb;
 void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets,
-                        uint64_t value_log_block_num, uint32_t compact_buf_len, struct kv_ds_queue *ds_queue, uint32_t ds_id,
-                        kv_data_store_cb cb, void *cb_arg);
+                        uint64_t value_log_block_num, uint32_t compact_buf_len, struct kv_ds_queue *ds_queue, uint32_t ds_id);
 void kv_data_store_fini(struct kv_data_store *self);
 kv_data_store_ctx kv_data_store_set(struct kv_data_store *self, uint8_t *key, uint8_t key_length, uint8_t *value, uint32_t value_length,
                        kv_data_store_cb cb, void *cb_arg);

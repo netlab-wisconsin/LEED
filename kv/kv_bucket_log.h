@@ -11,7 +11,6 @@
 typedef void (*kv_task_cb)(void *);
 typedef void *kv_bucket_lock_set;
 
-
 struct kv_item {
     uint8_t key_length;
     uint8_t key[KV_MAX_KEY_LENGTH];
@@ -58,15 +57,12 @@ struct kv_bucket_log {
     uint32_t compact_head;
     uint32_t log_bucket_num;
     uint64_t bucket_num;
-    bool init;
     void *meta, *bucket_lock;
 };
 
 static inline uint32_t kv_bucket_log_offset(struct kv_bucket_log *self) { return (uint32_t)self->log.tail; }
 
-
-void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets,
-                        kv_circular_log_io_cb cb, void *cb_arg);
+void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets);
 void kv_bucket_log_fini(struct kv_bucket_log *self);
 
 bool kv_bucket_alloc_extra(struct kv_bucket_log *self, struct kv_bucket_segment *seg);

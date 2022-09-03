@@ -112,8 +112,7 @@ static void compact(struct kv_bucket_log *self) {
 }
 
 // --- init & fini ---
-void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets,
-                        kv_circular_log_io_cb cb, void *cb_arg) {
+void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets) {
     num_buckets = num_buckets > COMPACTION_LENGTH << 4 ? num_buckets : COMPACTION_LENGTH << 4;
     assert(storage->block_size == sizeof(struct kv_bucket));
     kv_memset(self, 0, sizeof(struct kv_bucket_log));
@@ -123,9 +122,7 @@ void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, 
     self->bucket_num = 1U <<  self->log_bucket_num;
     self->size = self->log.size << 1;
     kv_bucket_meta_init(self);
-    kv_bucket_lock_init(self);
-    self->init = false;
-    if (cb) cb(true, cb_arg);
+    kv_bucket_lock_init(self); 
 }
 
 void kv_bucket_log_fini(struct kv_bucket_log *self) {
@@ -146,7 +143,7 @@ static void kv_bucket_log_writev(struct kv_bucket_log *self, struct iovec *bucke
         }
     }
     kv_circular_log_appendv(&self->log, buckets, iovcnt, cb, cb_arg);
-    if (!self->init) compact(self);
+    compact(self);
 }
 
 // bucket alloc & free

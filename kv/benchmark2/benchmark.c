@@ -163,13 +163,12 @@ static void fill_db(bool success, void* arg) {
     kv_data_store_set(&data_store, io->key.buf, 8, io->value, opt.value_size, fill_db, arg);
 }
 
-static void start(bool success, void* arg) {
-    if (!success) {
-        fprintf(stderr, "data store init fail.\n");
-        kv_storage_fini(&storage);
-        kv_app_stop(-1);
-        return;
-    }
+static void init(void* arg) {
+    kv_storage_init(&storage, 0);
+    uint32_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET;
+    uint64_t value_log_block_num = opt.value_size * opt.num_items * 1.5 / storage.block_size;
+    gettimeofday(&tv_start, NULL);
+    kv_data_store_init(&data_store, &storage, 0, bucket_num, value_log_block_num, opt.compact_buf_len, &ds_queue, 0);
     gettimeofday(&tv_end, NULL);
     printf("database initialized in %lf s.\n", timeval_diff(&tv_start, &tv_end));
     io_buffer = calloc(opt.concurrent_io_num, sizeof(struct io_buffer_t));
@@ -178,14 +177,6 @@ static void start(bool success, void* arg) {
     total_io = opt.num_items;
     gettimeofday(&tv_start, NULL);
     for (concurrent_io = 0; concurrent_io != opt.concurrent_io_num; ++concurrent_io) fill_db(true, io_buffer + concurrent_io);
-}
-static void init(void* arg) {
-    kv_storage_init(&storage, 0);
-    uint32_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET;
-    uint64_t value_log_block_num = opt.value_size * opt.num_items * 1.5 / storage.block_size;
-    gettimeofday(&tv_start, NULL);
-    kv_data_store_init(&data_store, &storage, 0, bucket_num, value_log_block_num, opt.compact_buf_len, &ds_queue, 0, start,
-                       NULL);
 }
 int main(int argc, char** argv) {
 #ifdef NDEBUG
