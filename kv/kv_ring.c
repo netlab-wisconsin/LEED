@@ -19,7 +19,8 @@
 
 // etcd values
 struct kv_etcd_node {
-    uint32_t ring_num;
+    uint32_t log_ring_num;
+    uint32_t log_bkt_num;
     uint16_t rpl_num;
     uint16_t ds_num;
 } __attribute__((packed));
@@ -29,7 +30,6 @@ enum { VID_COPYING,
        VID_LEAVING };
 struct kv_etcd_vid {
 #define KV_VID_LEN (20U)
-    // uint16_t state;
     uint16_t ds_id;
     uint8_t vid[KV_VID_LEN];
 } __attribute__((packed));
@@ -94,7 +94,7 @@ struct kv_ring {
     struct vid_ring **rings;
     struct dispatch_queue *dqs;
     void **dq_pollers;
-    uint32_t ring_num;
+    uint32_t log_ring_num;
     struct kv_nodes_head conn_q;
     void *conn_q_poller;
     kv_ring_cb server_online_cb;
@@ -131,11 +131,18 @@ static inline size_t ring_size(struct vid_ring *ring) {
     return size;
 }
 
-// key:
-// |-- 4 bytes --|-- 8 bytes --|-- 4 bytes --|-- 4 bytes --|
-// |bucket index |  64bit vid  |   ring id   |   reserved  |
-static inline uint32_t get_vid_part(uint8_t *vid, uint32_t ring_num) { return *(uint32_t *)(vid + 12) % ring_num; }
-static inline uint64_t get_vid_64(uint8_t *vid) { return *(uint64_t *)(vid + 4); }
+static inline uint64_t get_vid_64(uint8_t *vid) { return *(uint64_t *)vid; }
+static inline uint32_t get_ring_id(uint8_t *vid, uint32_t log_ring_num) {
+    return get_vid_64(vid) >> (64 - log_ring_num);
+}
+static inline void set_ring_id(uint8_t *vid, uint32_t log_ring_num, uint32_t ring_id) {
+    *(uint64_t *)vid &= ((1 << (64 - log_ring_num)) - 1);
+    *(uint64_t *)vid |= ring_id << (64 - log_ring_num);
+}
+static inline void mask_vnode_id(uint8_t *vid, uint32_t log_bkt_num) {
+    uint64_t mask = ~((1 << (64 - log_bkt_num)) - 1);
+    *(uint64_t *)vid &= mask;
+}
 static struct vid_entry *find_vid_entry(struct vid_ring *ring, char *vid) {
     if (CIRCLEQ_EMPTY(ring)) return NULL;
     uint64_t base_vid = get_vid_64(CIRCLEQ_LAST(ring)->vid.vid) + 1;
@@ -204,7 +211,7 @@ static bool get_chain(struct vnode_chain *chain, char *key) {
     struct kv_ring *self = &g_ring;
     if (self->rings == NULL) return false;
     struct vid_ring *ring = self->rings[kv_app_get_thread_index() - self->thread_id];
-    chain->ring = ring + get_vid_part(key, self->ring_num);
+    chain->ring = ring + get_ring_id(key, self->log_ring_num);
     chain->base = find_vid_entry(chain->ring, key);
     if (chain->base == NULL) return false;
     return true;
@@ -371,14 +378,14 @@ void kv_ring_forward(void *_node, kv_rdma_mr req, kv_ring_cb cb, void *cb_arg) {
     }
 }
 
-static void ring_init(uint32_t ring_num) {
+static void ring_init(uint32_t log_ring_num) {
     struct kv_ring *self = &g_ring;
     if (self->rings == NULL) {
-        self->ring_num = ring_num;
+        self->log_ring_num = log_ring_num;
         self->rings = kv_calloc(self->thread_num, sizeof(struct vid_ring *));
         for (size_t i = 0; i < self->thread_num; i++) {
-            self->rings[i] = kv_calloc(self->ring_num, sizeof(struct vid_ring));
-            for (size_t j = 0; j < ring_num; j++) CIRCLEQ_INIT(self->rings[i] + j);
+            self->rings[i] = kv_calloc(1u << self->log_ring_num, sizeof(struct vid_ring));
+            for (size_t j = 0; j < 1u << self->log_ring_num; j++) CIRCLEQ_INIT(self->rings[i] + j);
         }
     }
     if (self->dqs == NULL) {
@@ -467,6 +474,8 @@ static void update_rings(struct kv_node *node) {
     struct ring_change_ctx *ctx;
     while ((ctx = STAILQ_FIRST(&node->ring_updates)) != NULL) {
         STAILQ_REMOVE_HEAD(&node->ring_updates, next);
+        mask_vnode_id(ctx->vid.vid, node->info.log_bkt_num);
+        assert(ctx->ring_id == get_ring_id(ctx->vid.vid, self->log_ring_num));
         for (size_t i = 1; i < self->thread_num; i++) kv_app_send(self->thread_id + i, update_ring, ctx);
         update_ring(ctx);
     }
@@ -591,7 +600,7 @@ finish:
 static void on_node_put(void *arg) {
     struct kv_node *node = arg, *tmp = NULL;
     struct kv_ring *self = &g_ring;
-    ring_init(node->info.ring_num);
+    ring_init(node->info.log_ring_num);
     HASH_FIND_STR(self->nodes, node->node_id, tmp);
     if (tmp != NULL) {  // this node already exist
         if (tmp->has_info == true) {
@@ -742,15 +751,18 @@ send_nak:
     kv_rdma_make_resp(req_h, (uint8_t *)msg, KV_MSG_SIZE(msg));
 }
 
-void kv_ring_server_init(char *local_ip, char *local_port, uint32_t ring_num, uint32_t vid_per_ssd, uint32_t ds_num,
-                         uint32_t rpl_num, uint32_t con_req_num, uint32_t max_msg_sz, kv_ring_req_handler handler, void *arg,
+void kv_ring_server_init(char *local_ip, char *local_port, uint32_t ring_num, uint32_t vid_per_ssd, uint32_t ds_num, uint32_t rpl_num,
+                         uint32_t log_bkt_num, uint32_t con_req_num, uint32_t max_msg_sz, kv_ring_req_handler handler, void *arg,
                          kv_rdma_server_init_cb cb, void *cb_arg) {
     assert(ds_num != 0);
     assert(vid_per_ssd * ds_num <= ring_num);
     assert(local_ip && local_port);
     struct kv_ring *self = &g_ring;
-    ring_init(ring_num);
-    // all vnodes in the hash ring must be valid
+
+    uint32_t log_ring_num = 31;
+    while (1U << log_ring_num > ring_num) log_ring_num--;
+    ring_init(log_ring_num);
+    ring_num = 1U << log_ring_num;
 
     self->req_handler = handler;
     kv_rdma_listen(self->h, local_ip, local_port, con_req_num, max_msg_sz, rdma_req_handler_wrapper, arg, cb, cb_arg);  // TODO: change this
@@ -758,7 +770,7 @@ void kv_ring_server_init(char *local_ip, char *local_port, uint32_t ring_num, ui
     static char key[128];
     sprintf(key, "/nodes/%s/", self->local_id);
     self->node_lease = kvEtcdLeaseCreate(1, true);
-    struct kv_etcd_node etcd_node = {.ds_num = ds_num, .ring_num = ring_num, .rpl_num = rpl_num};
+    struct kv_etcd_node etcd_node = {.ds_num = ds_num, .log_ring_num = log_ring_num, .log_bkt_num = log_bkt_num, .rpl_num = rpl_num};
     kvEtcdPut(key, &etcd_node, sizeof(etcd_node), &self->node_lease);
 
     struct vid_ring_stat stats[ring_num];
@@ -772,6 +784,7 @@ void kv_ring_server_init(char *local_ip, char *local_port, uint32_t ring_num, ui
         struct kv_etcd_vid vid = {.ds_id = ds_id};
         // random_vid(vid.vid);
         hash_vid(vid.vid, local_ip, local_port, i);
+        set_ring_id(vid.vid, log_ring_num, stats[i].index);
         sprintf(key, "/rings/%u/0/%s/", stats[i].index, self->local_id);  // copying
         kvEtcdPut(key, &vid, sizeof(vid), &init_lease);
 

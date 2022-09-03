@@ -17,7 +17,7 @@ struct {
     uint32_t ssd_num;
     uint32_t thread_num;
     uint32_t concurrent_io_num;
-    uint32_t vid_num, vid_per_ssd, rpl_num;
+    uint32_t ring_num, vid_per_ssd, rpl_num;
     char json_config_file[1024];
     char etcd_ip[32];
     char etcd_port[16];
@@ -75,7 +75,7 @@ static void get_options(int argc, char **argv) {
                 strcpy(opt.local_port, optarg);
                 break;
             case 'M':
-                opt.vid_num = atol(optarg);
+                opt.ring_num = atol(optarg);
                 break;
             case 'm':
                 opt.vid_per_ssd = atol(optarg);
@@ -177,7 +177,7 @@ static void io_fini(bool success, void *arg) {
         kv_app_send(io->server_thread, send_response, arg);
         return;
     }
-    if (io->need_forward == false) {// is the last node
+    if (io->need_forward == false) {  // is the last node
         if (io->msg->type == KV_MSG_SET) io->msg->value_len = 0;
         io->msg->type = KV_MSG_OK;
     }
@@ -233,8 +233,9 @@ static void handler(void *req_h, kv_rdma_mr req, uint32_t req_sz, uint32_t ds_id
 static void ring_init(void *arg) {
     server = kv_ring_init(opt.etcd_ip, opt.etcd_port, opt.thread_num, NULL, NULL);
     io_pool = kv_mempool_create(opt.concurrent_io_num, sizeof(struct io_ctx));
-    kv_ring_server_init(opt.local_ip, opt.local_port, opt.vid_num, opt.vid_per_ssd, opt.ssd_num, opt.rpl_num,
-                        opt.concurrent_io_num, sizeof(struct kv_msg) + 16 + opt.value_size, handler, NULL, NULL, NULL);
+    kv_ring_server_init(opt.local_ip, opt.local_port, opt.ring_num, opt.vid_per_ssd, opt.ssd_num, opt.rpl_num,
+                        workers->data_store.bucket_log.log_bucket_num, opt.concurrent_io_num,
+                        sizeof(struct kv_msg) + 16 + opt.value_size, handler, NULL, NULL, NULL);
 }
 
 static uint32_t io_cnt;

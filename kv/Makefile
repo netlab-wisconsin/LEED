@@ -15,7 +15,6 @@ DIRS-y += test_kv_rdma
 DIRS-y += test_kv_app
 DIRS-y += client
 DIRS-y += server
-DIRS-y += test_kv_ring
 DIRS-y += ring_client
 DIRS-y += ring_server
 DIRS-y += ring_ycsb_client

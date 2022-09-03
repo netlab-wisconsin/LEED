@@ -52,15 +52,17 @@ static void dequeue(bool success, void *arg) {
 }
 
 // --- init & fini ---
+static inline uint64_t kv_data_store_bucket_id(struct kv_data_store *self, uint8_t *key) {
+    return  *(uint64_t *)key >> (64 - self->bucket_log.log_bucket_num);
+}
 
-#define kv_data_store_bucket_index(self, key) (*(uint32_t *)(key) & ((self)->bucket_log.bucket_num - 1))
 static inline bool compare_keys(const uint8_t *key1, size_t key1_len, const uint8_t *key2, size_t key2_len) {
     return key1_len == key2_len && !kv_memcmp8(key1, key2, key1_len);
 }
 
 void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets,
                         uint64_t value_log_block_num, uint32_t compact_buf_len, struct kv_ds_queue *ds_queue, uint32_t ds_id,
-                        kv_data_store_cb cb, void *cb_arg) {    
+                        kv_data_store_cb cb, void *cb_arg) {
     kv_bucket_log_init(&self->bucket_log, storage, base, num_buckets, cb, cb_arg);
     kv_value_log_init(&self->value_log, storage, &self->bucket_log, (base + self->bucket_log.log.size) * storage->block_size,
                       value_log_block_num * storage->block_size, compact_buf_len);
@@ -237,7 +239,7 @@ kv_data_store_ctx kv_data_store_set(struct kv_data_store *self, uint8_t *key, ui
                                     kv_data_store_cb cb, void *cb_arg) {
     struct set_ctx *ctx = kv_malloc(sizeof(struct set_ctx));
     *ctx = (struct set_ctx){self, key, key_length, value, value_length, cb, cb_arg};
-    ctx->bucket_id = kv_data_store_bucket_index(self, key);
+    ctx->bucket_id = kv_data_store_bucket_id(self, key);
     ctx->id_set = NULL;
     ctx->cb = dequeue;
     ctx->cb_arg = enqueue(self, KV_DS_SET, set_start, ctx, cb, cb_arg);
@@ -275,7 +277,7 @@ static void get_seg_cb(bool success, void *arg) {
 
 static void get_read_bucket(void *arg) {
     struct get_ctx *ctx = arg;
-    uint64_t bucket_id = kv_data_store_bucket_index(ctx->self, ctx->key);
+    uint64_t bucket_id = kv_data_store_bucket_id(ctx->self, ctx->key);
     kv_bucket_seg_get(&ctx->self->bucket_log, bucket_id, &ctx->seg, get_seg_cb, ctx);
 }
 
@@ -346,7 +348,7 @@ static void delete_lock(void *arg) {
 kv_data_store_ctx kv_data_store_delete(struct kv_data_store *self, uint8_t *key, uint8_t key_length, kv_data_store_cb cb, void *cb_arg) {
     struct delete_ctx *ctx = kv_malloc(sizeof(struct delete_ctx));
     *ctx = (struct delete_ctx){self, key, key_length, cb, cb_arg};
-    ctx->bucket_id = kv_data_store_bucket_index(self, key);
+    ctx->bucket_id = kv_data_store_bucket_id(self, key);
     ctx->id_set = NULL;
     ctx->cb = dequeue;
     ctx->cb_arg = enqueue(self, KV_DS_DEL, delete_lock, ctx, cb, cb_arg);
