@@ -116,13 +116,14 @@ void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, 
     num_buckets = num_buckets > COMPACTION_LENGTH << 4 ? num_buckets : COMPACTION_LENGTH << 4;
     assert(storage->block_size == sizeof(struct kv_bucket));
     kv_memset(self, 0, sizeof(struct kv_bucket_log));
-    kv_circular_log_init(&self->log, storage, base, num_buckets << 1, 0, 0, COMPACTION_LENGTH * COMPACTION_CONCURRENCY * 4, 256);
+
     self->log_bucket_num = 31;
-    while ((1U <<  self->log_bucket_num) > num_buckets)  self->log_bucket_num--;
-    self->bucket_num = 1U <<  self->log_bucket_num;
+    while ((1U << self->log_bucket_num) >= num_buckets) self->log_bucket_num--;
+    self->bucket_num = 1U << ++self->log_bucket_num;
+    kv_circular_log_init(&self->log, storage, base, num_buckets << 1, 0, 0, COMPACTION_LENGTH * COMPACTION_CONCURRENCY * 4, 256);
     self->size = self->log.size << 1;
     kv_bucket_meta_init(self);
-    kv_bucket_lock_init(self); 
+    kv_bucket_lock_init(self);
 }
 
 void kv_bucket_log_fini(struct kv_bucket_log *self) {

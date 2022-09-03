@@ -12,7 +12,7 @@
 #include "../kv_ring.h"
 #include "../utils/uthash.h"
 struct {
-    uint64_t num_items;
+    uint64_t bucket_num;
     uint32_t value_size;
     uint32_t ssd_num;
     uint32_t thread_num;
@@ -45,7 +45,7 @@ static void get_options(int argc, char **argv) {
                 help();
                 break;
             case 'n':
-                opt.num_items = atoll(optarg);
+                opt.bucket_num = atoll(optarg);
                 break;
             case 'v':
                 opt.value_size = atol(optarg);
@@ -244,9 +244,8 @@ static void worker_init(void *arg) {
     struct worker_t *self = arg;
     self->dirty_keys = NULL;
     kv_storage_init(&self->storage, self - workers);
-    uint32_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET;
-    uint64_t value_log_block_num = self->storage.num_blocks * 0.95 - 2 * bucket_num;
-    kv_data_store_init(&self->data_store, &self->storage, 0, bucket_num, value_log_block_num, 512, &ds_queue, self - workers);
+    uint64_t value_log_block_num = self->storage.num_blocks * 0.95 - 2 * opt.bucket_num;
+    kv_data_store_init(&self->data_store, &self->storage, 0, opt.bucket_num, value_log_block_num, 512, &ds_queue, self - workers);
     kv_app_send(opt.ssd_num, ring_init, NULL);
 }
 

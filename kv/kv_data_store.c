@@ -53,7 +53,7 @@ static void dequeue(bool success, void *arg) {
 
 // --- init & fini ---
 static inline uint64_t kv_data_store_bucket_id(struct kv_data_store *self, uint8_t *key) {
-    return  *(uint64_t *)key >> (64 - self->bucket_log.log_bucket_num);
+    return *(uint64_t *)key >> (64 - self->bucket_log.log_bucket_num);
 }
 
 static inline bool compare_keys(const uint8_t *key1, size_t key1_len, const uint8_t *key2, size_t key2_len) {
@@ -70,7 +70,8 @@ void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, 
         fprintf(stderr, "kv_data_store_init: Not enough space.\n");
         exit(-1);
     }
-    printf("bucket log size: %lf GB\n", ((double)self->bucket_log.log.size) * storage->block_size / (1 << 30));
+    printf("bucket log size: %lf GB, bucket_num: %lu\n", ((double)self->bucket_log.log.size) * storage->block_size / (1 << 30),
+           self->bucket_log.bucket_num);
     printf("value log size: %lf GB\n", ((double)value_log_size) * storage->block_size / (1 << 30));
     self->ds_queue = ds_queue;
     self->ds_id = ds_id;
