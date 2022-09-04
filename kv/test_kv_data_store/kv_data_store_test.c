@@ -62,7 +62,7 @@ static void test_cb(bool success, void *cb_arg) {
 static void start(void *arg) {
     kv_storage_init(&storage, 0);
     for (size_t i = 0; i < VALUE_NUM; i++) value[i] = kv_storage_blk_alloc(&storage, 5);
-    kv_data_store_init(&data_store, &storage, 0, 1 << 10, 14 << 10, 256, &ds_queue, 0);
+    kv_data_store_init(&data_store, &storage, 0, 1 << 10, 10, 14 << 10, 256, &ds_queue, 0);
     test_cb(true, NULL);
 }
 

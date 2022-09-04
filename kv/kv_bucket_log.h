@@ -55,7 +55,6 @@ struct kv_bucket_log {
     uint32_t size;
     uint32_t head, tail;
     uint32_t compact_head;
-    uint32_t log_bucket_num;
     uint64_t bucket_num;
     void *meta, *bucket_lock;
 };

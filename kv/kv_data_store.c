@@ -53,15 +53,16 @@ static void dequeue(bool success, void *arg) {
 
 // --- init & fini ---
 static inline uint64_t kv_data_store_bucket_id(struct kv_data_store *self, uint8_t *key) {
-    return *(uint64_t *)key >> (64 - self->bucket_log.log_bucket_num);
+    return *(uint64_t *)key >> (64 - self->log_bucket_num);
 }
 
 static inline bool compare_keys(const uint8_t *key1, size_t key1_len, const uint8_t *key2, size_t key2_len) {
     return key1_len == key2_len && !kv_memcmp8(key1, key2, key1_len);
 }
 
-void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets,
+void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets, uint64_t log_bucket_num,
                         uint64_t value_log_block_num, uint32_t compact_buf_len, struct kv_ds_queue *ds_queue, uint32_t ds_id) {
+    self->log_bucket_num = log_bucket_num;
     kv_bucket_log_init(&self->bucket_log, storage, base, num_buckets);
     kv_value_log_init(&self->value_log, storage, &self->bucket_log, (base + self->bucket_log.log.size) * storage->block_size,
                       value_log_block_num * storage->block_size, compact_buf_len);

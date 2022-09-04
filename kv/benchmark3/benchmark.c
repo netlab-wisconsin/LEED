@@ -219,9 +219,12 @@ static void test(void *arg) {
 static void worker_init(void *arg) {
     struct worker *self = arg;
     kv_storage_init(&self->storage, self - workers);
-    uint32_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET;
+    uint32_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET / opt.ssd_num;
+    uint64_t log_bucket_num = 48;
+    while ((1ULL << log_bucket_num) >= opt.num_items / KV_ITEM_PER_BUCKET) log_bucket_num--;
+    ++log_bucket_num;
     uint64_t value_log_block_num = opt.value_size * opt.num_items * 1.4 / self->storage.block_size;
-    kv_data_store_init(&self->data_store, &self->storage, 0, bucket_num, value_log_block_num, 512, &ds_queue, self - workers);
+    kv_data_store_init(&self->data_store, &self->storage, 0, bucket_num, log_bucket_num, value_log_block_num, 512, &ds_queue, self - workers);
     kv_app_send(opt.ssd_num, test, NULL);
 }
 
