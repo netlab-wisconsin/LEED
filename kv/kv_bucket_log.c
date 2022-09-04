@@ -52,7 +52,6 @@ static void compact_write_cb(bool success, void *arg) {
     kv_free(arg);
 }
 
-
 static void compact(struct kv_bucket_log *self) {
     if (kv_circular_log_empty_space(&self->log) >= COMPACTION_LENGTH * COMPACTION_CONCURRENCY * 6) return;
     if ((self->log.size - self->log.head + self->compact_head) % self->log.size > COMPACTION_LENGTH * COMPACTION_CONCURRENCY) return;
@@ -89,15 +88,12 @@ static void compact(struct kv_bucket_log *self) {
 }
 
 // --- init & fini ---
-void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets) {
-    num_buckets = num_buckets > COMPACTION_LENGTH << 4 ? num_buckets : COMPACTION_LENGTH << 4;
+void kv_bucket_log_init(struct kv_bucket_log *self, struct kv_storage *storage, uint64_t base, uint64_t size) {
+    size = size > COMPACTION_LENGTH << 4 ? size : COMPACTION_LENGTH << 4;
     assert(storage->block_size == sizeof(struct kv_bucket));
     kv_memset(self, 0, sizeof(struct kv_bucket_log));
 
-    uint32_t log_bucket_num = 31;
-    while ((1U << log_bucket_num) >= num_buckets)log_bucket_num--;
-    self->bucket_num = 1U << ++log_bucket_num;
-    kv_circular_log_init(&self->log, storage, base, num_buckets << 1, 0, 0, COMPACTION_LENGTH * COMPACTION_CONCURRENCY * 4, 256);
+    kv_circular_log_init(&self->log, storage, base, size * 4, 0, 0, COMPACTION_LENGTH * COMPACTION_CONCURRENCY * 4, 256);
     self->size = self->log.size << 1;
     kv_bucket_meta_init(self);
     kv_bucket_lock_init(self);
@@ -173,7 +169,6 @@ static inline void verify_buckets(struct kv_bucket_log *self, struct kv_bucket_s
         for (struct kv_bucket *bucket = ce->bucket; bucket - ce->bucket < ce->len; ++bucket) {
             if (bucket_id == KV_BUCKET_ID_EMPTY) {
                 bucket_id = bucket->id;
-                assert(bucket_id < self->bucket_num);
                 len = bucket->chain_length;
             } else {
                 assert(bucket->chain_index == i);

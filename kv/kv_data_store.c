@@ -72,7 +72,7 @@ void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, 
         exit(-1);
     }
     printf("bucket log size: %lf GB, bucket_num: %lu\n", ((double)self->bucket_log.log.size) * storage->block_size / (1 << 30),
-           self->bucket_log.bucket_num);
+           num_buckets);
     printf("value log size: %lf GB\n", ((double)value_log_size) * storage->block_size / (1 << 30));
     self->ds_queue = ds_queue;
     self->ds_id = ds_id;
