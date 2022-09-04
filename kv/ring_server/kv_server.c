@@ -12,7 +12,7 @@
 #include "../kv_ring.h"
 #include "../utils/uthash.h"
 struct {
-    uint64_t bucket_num;
+    uint64_t num_items;
     uint32_t value_size;
     uint32_t ssd_num;
     uint32_t thread_num;
@@ -45,7 +45,7 @@ static void get_options(int argc, char **argv) {
                 help();
                 break;
             case 'n':
-                opt.bucket_num = atoll(optarg);
+                opt.num_items = atoll(optarg);
                 break;
             case 'v':
                 opt.value_size = atol(optarg);
@@ -231,21 +231,22 @@ static void handler(void *req_h, kv_rdma_mr req, uint32_t req_sz, uint32_t ds_id
 }
 
 static uint32_t io_cnt;
+uint64_t log_bucket_num = 48;
 static void ring_init(void *arg) {
     if (--io_cnt) return;
     server = kv_ring_init(opt.etcd_ip, opt.etcd_port, opt.thread_num, NULL, NULL);
     io_pool = kv_mempool_create(opt.concurrent_io_num, sizeof(struct io_ctx));
     kv_ring_server_init(opt.local_ip, opt.local_port, opt.ring_num, opt.vid_per_ssd, opt.ssd_num, opt.rpl_num,
-                        workers->data_store.bucket_log.log_bucket_num, opt.concurrent_io_num,
-                        sizeof(struct kv_msg) + 16 + opt.value_size, handler, NULL, NULL, NULL);
+                        log_bucket_num, opt.concurrent_io_num, sizeof(struct kv_msg) + 16 + opt.value_size, handler, NULL, NULL, NULL);
 }
 
 static void worker_init(void *arg) {
     struct worker_t *self = arg;
     self->dirty_keys = NULL;
     kv_storage_init(&self->storage, self - workers);
-    uint64_t value_log_block_num = self->storage.num_blocks * 0.95 - 2 * opt.bucket_num;
-    kv_data_store_init(&self->data_store, &self->storage, 0, opt.bucket_num, value_log_block_num, 512, &ds_queue, self - workers);
+    uint64_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET / opt.ssd_num;
+    uint64_t value_log_block_num = self->storage.num_blocks * 0.95 - 2 * bucket_num;
+    kv_data_store_init(&self->data_store, &self->storage, 0, bucket_num, log_bucket_num, value_log_block_num, 512, &ds_queue, self - workers);
     kv_app_send(opt.ssd_num, ring_init, NULL);
 }
 
@@ -256,6 +257,8 @@ int main(int argc, char **argv) {
     printf("DEBUG (low performance)\n");
 #endif
     get_options(argc, argv);
+    while ((1ULL << log_bucket_num) >= opt.num_items / KV_ITEM_PER_BUCKET) log_bucket_num--;
+    ++log_bucket_num;
     struct kv_app_task *task = calloc(opt.ssd_num + opt.thread_num, sizeof(struct kv_app_task));
     workers = calloc(opt.ssd_num, sizeof(struct worker_t));
     for (size_t i = 0; i < opt.ssd_num; i++) {
