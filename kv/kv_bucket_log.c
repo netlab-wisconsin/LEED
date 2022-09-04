@@ -27,15 +27,14 @@ static void compact_move_head(struct kv_bucket_log *self) {
 
 struct compact_ctx {
     struct kv_bucket_log *self;
-    kv_bucket_lock_set bucket_id_set;
     uint32_t compact_head, len;
     struct kv_bucket_segments segments;
 };
-static void compact_lock_cb(void *arg);
+
 static void compact_write_cb(bool success, void *arg) {
     if (!success) {
-        fprintf(stderr, "compact_write_cb: IO error, retrying ...");
-        compact_lock_cb(arg);
+        fprintf(stderr, "compact_write_cb: IO error, exiting ...");
+        exit(-1);
         return;
     }
     struct compact_ctx *ctx = arg;
@@ -43,43 +42,22 @@ static void compact_write_cb(bool success, void *arg) {
     struct kv_bucket_segment *seg;
     while ((seg = TAILQ_FIRST(&ctx->segments)) != NULL) {
         TAILQ_REMOVE(&ctx->segments, seg, entry);
-        kv_bucket_seg_commit(self, seg);
+        struct kv_bucket_meta meta = kv_bucket_meta_get(self, seg->bucket_id);
+        if ((self->log.size - ctx->compact_head + meta.bucket_offset) % self->log.size < ctx->len && meta.chain_length != 0)
+            kv_bucket_seg_commit(self, seg);
         kv_bucket_seg_cleanup(self, seg);
         kv_free(seg);
     }
-    kv_bucket_unlock(self, &ctx->bucket_id_set);
     compact_move_head(self);
     kv_free(arg);
 }
 
-#define TAILQ_FOREACH_SAFE(var, head, field, tvar) \
-    for ((var) = TAILQ_FIRST((head)); (var) && ((tvar) = TAILQ_NEXT((var), field), 1); (var) = (tvar))
-
-static void compact_lock_cb(void *arg) {
-    struct compact_ctx *ctx = arg;
-    struct kv_bucket_log *self = ctx->self;
-    kv_bucket_lock_set unlock_set = NULL;
-    struct kv_bucket_segment *seg, *tmp;
-    TAILQ_FOREACH_SAFE(seg, &ctx->segments, entry, tmp) {
-        struct kv_bucket_meta meta = kv_bucket_meta_get(self, seg->bucket_id);
-        if ((self->log.size - ctx->compact_head + meta.bucket_offset) % self->log.size >= ctx->len || meta.chain_length == 0) {
-            TAILQ_REMOVE(&ctx->segments, seg, entry);
-            kv_bucket_lock_set_add(&unlock_set, seg->bucket_id);
-            kv_bucket_lock_set_del(&ctx->bucket_id_set, seg->bucket_id);
-            kv_bucket_seg_cleanup(self, seg);
-            kv_free(seg);
-        }
-    }
-    kv_bucket_unlock(self, &unlock_set);
-    kv_bucket_seg_put_bulk(self, &ctx->segments, compact_write_cb, ctx);
-}
 
 static void compact(struct kv_bucket_log *self) {
     if (kv_circular_log_empty_space(&self->log) >= COMPACTION_LENGTH * COMPACTION_CONCURRENCY * 6) return;
     if ((self->log.size - self->log.head + self->compact_head) % self->log.size > COMPACTION_LENGTH * COMPACTION_CONCURRENCY) return;
     struct compact_ctx *ctx = kv_malloc(sizeof(struct compact_ctx));
     ctx->self = self;
-    ctx->bucket_id_set = NULL;
     ctx->compact_head = self->compact_head;
     TAILQ_INIT(&ctx->segments);
 
@@ -104,11 +82,10 @@ static void compact(struct kv_bucket_log *self) {
                 TAILQ_INSERT_TAIL(&seg->chain, chain_entry, entry);
             }
             TAILQ_INSERT_TAIL(&ctx->segments, seg, entry);
-            kv_bucket_lock_set_add(&ctx->bucket_id_set, bucket->id);
         }
     }
     self->compact_head = (self->compact_head + ctx->len) % self->log.size;
-    kv_bucket_lock(self, ctx->bucket_id_set, compact_lock_cb, ctx);
+    kv_bucket_seg_put_bulk(self, &ctx->segments, compact_write_cb, ctx);
 }
 
 // --- init & fini ---
