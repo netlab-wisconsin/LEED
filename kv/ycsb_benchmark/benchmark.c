@@ -325,16 +325,17 @@ static void test(void *arg) {
     io->is_finished = true;
     p->start_io++;
     gettimeofday(&io->io_start, NULL);
-    io->worker_id = *(uint64_t *)(KV_MSG_KEY(msg) + 8) % opt.ssd_num;
+    io->worker_id = (*(uint64_t *)KV_MSG_KEY(msg) >> (64 - 3)) % opt.ssd_num;
     kv_app_send(io->worker_id, io_start, io);
 }
-
+#define KEY_PER_BKT_SEGMENT (KV_ITEM_PER_BUCKET)
+// memory usage per key: 5/KEY_PER_BKT_SEGMENT bytes
 static void worker_init(void *arg) {
     struct worker *self = arg;
     kv_storage_init(&self->storage, self - workers);
     uint32_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET / opt.ssd_num;
     uint64_t log_bucket_num = 48;
-    while ((1ULL << log_bucket_num) >= opt.num_items / KV_ITEM_PER_BUCKET) log_bucket_num--;
+    while ((1ULL << log_bucket_num) >= opt.num_items / KEY_PER_BKT_SEGMENT) log_bucket_num--;
     ++log_bucket_num;
     uint64_t value_log_block_num = self->storage.num_blocks * 0.95 - 2 * bucket_num;
     kv_data_store_init(&self->data_store, &self->storage, 0, bucket_num, log_bucket_num, value_log_block_num, 512, &ds_queue, self - workers);

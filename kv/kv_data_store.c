@@ -180,7 +180,6 @@ void kv_data_store_set_commit(kv_data_store_ctx arg, bool success) {
     struct set_ctx *ctx = arg;
     if (success) kv_bucket_seg_commit(&ctx->self->bucket_log, &ctx->seg);
     kv_bucket_unlock(&ctx->self->bucket_log, &ctx->segs);
-    kv_bucket_seg_cleanup(&ctx->self->bucket_log, &ctx->seg);
     kv_free(ctx);
 }
 
@@ -226,6 +225,7 @@ static void set_start(void *arg) {
     kv_value_log_write(&ctx->self->value_log, ctx->bucket_id, ctx->value, ctx->value_length, set_finish_cb, ctx);
 
     TAILQ_INIT(&ctx->segs);
+    TAILQ_INIT(&ctx->seg.chain);
     TAILQ_INSERT_HEAD(&ctx->segs, &ctx->seg, entry);
     ctx->seg.bucket_id = ctx->bucket_id;
     kv_bucket_lock(&ctx->self->bucket_log, &ctx->segs, set_lock_cb, ctx);
@@ -301,7 +301,6 @@ void kv_data_store_del_commit(kv_data_store_ctx arg, bool success) {
     struct delete_ctx *ctx = arg;
     if (success) kv_bucket_seg_commit(&ctx->self->bucket_log, &ctx->seg);
     kv_bucket_unlock(&ctx->self->bucket_log, &ctx->segs);
-    kv_bucket_seg_cleanup(&ctx->self->bucket_log, &ctx->seg);
     kv_free(ctx);
 }
 
@@ -327,6 +326,7 @@ static void delete_lock_cb(void *arg) {
 static void delete_lock(void *arg) {
     struct delete_ctx *ctx = arg;
     TAILQ_INIT(&ctx->segs);
+    TAILQ_INIT(&ctx->seg.chain);
     TAILQ_INSERT_HEAD(&ctx->segs, &ctx->seg, entry);
     ctx->seg.bucket_id = ctx->bucket_id;
     kv_bucket_lock(&ctx->self->bucket_log, &ctx->segs, delete_lock_cb, ctx);
