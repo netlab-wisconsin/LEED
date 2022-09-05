@@ -1,3 +1,4 @@
+#include <cassert>
 #include <cstdint>
 #include <list>
 #include <unordered_map>
@@ -57,69 +58,123 @@ void kv_bucket_meta_put(struct kv_bucket_log *self, uint64_t bucket_id, struct k
 }
 
 // --- bucket lock ---
-typedef unordered_set<uint64_t> lock_set_t;
-struct lock_entry {
-    lock_set_t *ids;
+
+struct lock_ctx {
+    struct kv_bucket_segments *segs;
+    uint32_t io_cnt;
     kv_task_cb cb;
     void *cb_arg;
 };
 
-struct bucket_lock {
-    lock_set_t locked;
-    list<struct lock_entry> queue;
+struct lock_segment {
+    struct kv_bucket_segment *seg;
+    bool get_finished;
+    struct lock_ctx *ctx;
 };
-void kv_bucket_lock_set_add(kv_bucket_lock_set *lock_set, uint64_t bucket_id) {
-    if (*lock_set == nullptr) {
-        *lock_set = new lock_set_t();
+
+struct bucket_lock {
+    unordered_set<uint64_t> locked;
+    unordered_map<uint64_t, struct lock_segment> segments;
+    list<struct lock_ctx *> queue;
+};
+
+static inline void segment_move(struct kv_bucket_segment *src, struct kv_bucket_segment *dst) {
+    assert(dst->bucket_id == src->bucket_id);
+    struct kv_bucket_chain_entry *chain_entry;
+    while ((chain_entry = TAILQ_FIRST(&src->chain)) != NULL) {
+        TAILQ_REMOVE(&src->chain, chain_entry, entry);
+        TAILQ_INSERT_TAIL(&dst->chain, chain_entry, entry);
     }
-    ((lock_set_t *)*lock_set)->insert(bucket_id);
 }
 
-void kv_bucket_lock_set_del(kv_bucket_lock_set *lock_set, uint64_t bucket_id) {
-    lock_set_t *p = (lock_set_t *)*lock_set;
-    p->erase(bucket_id);
-    if (p->empty()) {
-        delete p;
-        *lock_set = nullptr;
+static void lock_get_seg_cb(bool success, void *cb_arg) {
+    if (success == false) {
+        fprintf(stderr, "lock_get_seg failed.\n");
+        exit(-1);
+    }
+    struct lock_segment *l_seg = (struct lock_segment *)cb_arg;
+    l_seg->get_finished = true;
+    if (l_seg->ctx) {
+        struct lock_ctx *ctx = l_seg->ctx;
+        if (--ctx->io_cnt == 0) {
+            if (ctx->cb)
+                kv_app_send(kv_app_get_thread_index(), ctx->cb, ctx->cb_arg);
+            delete ctx;
+        }
     }
 }
-
-static inline bool lockable(struct bucket_lock *ctx, lock_set_t *lock_set) {
-    for (auto i = lock_set->begin(); i != lock_set->end(); ++i)
-        if (ctx->locked.find(*i) != ctx->locked.end()) return false;
+static inline bool lockable(struct bucket_lock *lock, struct kv_bucket_segments *segs) {
+    struct kv_bucket_segment *seg;
+    TAILQ_FOREACH(seg, segs, entry) {
+        if (lock->locked.find(seg->bucket_id) != lock->locked.end()) return false;
+    }
+    return true;
+}
+static bool try_lock(struct kv_bucket_log *self, struct lock_ctx *ctx) {
+    struct bucket_lock *lock = (struct bucket_lock *)self->bucket_lock;
+    if (!lockable(lock, ctx->segs)) return false;
+    struct kv_bucket_segment *seg;
+    TAILQ_FOREACH(seg, ctx->segs, entry) {
+        lock->locked.insert(seg->bucket_id);
+        ctx->io_cnt++;
+    }
+    TAILQ_FOREACH(seg, ctx->segs, entry) {
+        auto p = lock->segments.find(seg->bucket_id);
+        if (p != lock->segments.end()) {
+            p->second.ctx = ctx;
+            if (p->second.get_finished) {
+                if (p->second.seg != seg) segment_move(p->second.seg, seg);
+                lock_get_seg_cb(true, &lock->segments[seg->bucket_id]);
+            }
+        } else {
+            lock->segments[seg->bucket_id] = {seg, false, ctx};
+            kv_bucket_seg_get(self, seg->bucket_id, seg, lock_get_seg_cb, &lock->segments[seg->bucket_id]);
+        }
+    }
     return true;
 }
 
-void kv_bucket_lock(struct kv_bucket_log *self, kv_bucket_lock_set _lock_set, kv_task_cb cb, void *cb_arg) {
-    struct bucket_lock *ctx = (struct bucket_lock *)self->bucket_lock;
-    lock_set_t *lock_set = (lock_set_t *)_lock_set;
-    if (lock_set == nullptr) {
-        if (cb) kv_app_send(self->log.thread_index, cb, cb_arg);
-        return;
-    }
-    if (lockable(ctx, lock_set)) {
-        ctx->locked.insert(lock_set->begin(), lock_set->end());
-        if (cb) kv_app_send(self->log.thread_index, cb, cb_arg);
-    } else {
-        ctx->queue.push_back({lock_set, cb, cb_arg});
+void kv_bucket_lock(struct kv_bucket_log *self, struct kv_bucket_segments *segs, kv_task_cb cb, void *cb_arg) {
+    struct bucket_lock *lock = (struct bucket_lock *)self->bucket_lock;
+    struct lock_ctx *ctx = new lock_ctx{.segs = segs, .io_cnt = 0, .cb = cb, .cb_arg = cb_arg};
+    if (try_lock(self, ctx) == false) {
+        lock->queue.push_back(ctx);
+        struct kv_bucket_segment *seg;
+        TAILQ_FOREACH(seg, segs, entry) {
+            if (lock->segments.find(seg->bucket_id) == lock->segments.end()) {
+                // prefetch the bucket segment
+                lock->segments[seg->bucket_id] = {seg, false, nullptr};
+                kv_bucket_seg_get(self, seg->bucket_id, seg, lock_get_seg_cb, &lock->segments[seg->bucket_id]);
+            }
+        }
     }
 }
-void kv_bucket_unlock(struct kv_bucket_log *self, kv_bucket_lock_set *_lock_set) {
-    struct bucket_lock *ctx = (struct bucket_lock *)self->bucket_lock;
-    lock_set_t *lock_set = (lock_set_t *)*_lock_set;
-    if (lock_set == nullptr) return;
-    for (auto i = lock_set->begin(); i != lock_set->end(); ++i)
-        ctx->locked.erase(*i);
-    for (auto i = lock_set->begin(); i != lock_set->end(); ++i)
-        for (auto j = ctx->queue.begin(); j != ctx->queue.end(); ++j)
-            if (j->ids->find(*i) != j->ids->end() && lockable(ctx, j->ids)) {
-                ctx->locked.insert(j->ids->begin(), j->ids->end());
-                if (j->cb) kv_app_send(self->log.thread_index, j->cb, j->cb_arg);
-                ctx->queue.erase(j);
-                break;
+void kv_bucket_unlock(struct kv_bucket_log *self, struct kv_bucket_segments *segs) {
+    struct bucket_lock *lock = (struct bucket_lock *)self->bucket_lock;
+    struct kv_bucket_segment *seg, *i;
+
+    TAILQ_FOREACH(seg, segs, entry) {
+        lock->locked.erase(seg->bucket_id);
+        for (auto p = lock->queue.begin(); p != lock->queue.end(); ++p)
+            TAILQ_FOREACH(i, (*p)->segs, entry) {
+                if (i->bucket_id == seg->bucket_id) {
+                    segment_move(seg, i);
+                    lock->segments[seg->bucket_id].seg = i;
+                    assert(lock->segments[seg->bucket_id].get_finished);
+                    goto next_seg;
+                }
             }
-    delete lock_set;
-    *_lock_set = nullptr;
+        lock->segments.erase(seg->bucket_id);
+        kv_bucket_seg_cleanup(self, seg);
+    next_seg:;
+    }
+
+    for (auto p = lock->queue.begin(); p != lock->queue.end();)
+        if (try_lock(self, *p)) {
+            p = lock->queue.erase(p);
+        } else {
+            ++p;
+        }
 }
 
 void kv_bucket_lock_init(struct kv_bucket_log *self) {

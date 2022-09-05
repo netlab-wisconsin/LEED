@@ -249,7 +249,8 @@ static void worker_init(void *arg) {
     kv_data_store_init(&self->data_store, &self->storage, 0, bucket_num, log_bucket_num, value_log_block_num, 512, &ds_queue, self - workers);
     kv_app_send(opt.ssd_num, ring_init, NULL);
 }
-
+#define KEY_PER_BKT_SEGMENT (KV_ITEM_PER_BUCKET)
+// memory usage per key: 5/KEY_PER_BKT_SEGMENT bytes
 int main(int argc, char **argv) {
 #ifdef NDEBUG
     printf("NDEBUG\n");
@@ -257,7 +258,7 @@ int main(int argc, char **argv) {
     printf("DEBUG (low performance)\n");
 #endif
     get_options(argc, argv);
-    while ((1ULL << log_bucket_num) >= opt.num_items / KV_ITEM_PER_BUCKET) log_bucket_num--;
+    while ((1ULL << log_bucket_num) >= opt.num_items / KEY_PER_BKT_SEGMENT) log_bucket_num--;
     ++log_bucket_num;
     struct kv_app_task *task = calloc(opt.ssd_num + opt.thread_num, sizeof(struct kv_app_task));
     workers = calloc(opt.ssd_num, sizeof(struct worker_t));
