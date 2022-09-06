@@ -68,7 +68,6 @@ struct lock_ctx {
 
 struct lock_segment {
     struct kv_bucket_segment *seg;
-    bool get_finished;
     struct lock_ctx *ctx;
 };
 
@@ -80,11 +79,15 @@ struct bucket_lock {
 
 static inline void segment_move(struct kv_bucket_segment *src, struct kv_bucket_segment *dst) {
     assert(dst->bucket_id == src->bucket_id);
+    assert(TAILQ_EMPTY(&dst->chain) && dst->empty && !dst->dirty);
+    assert(!src->empty && !src->dirty);
     struct kv_bucket_chain_entry *chain_entry;
     while ((chain_entry = TAILQ_FIRST(&src->chain)) != NULL) {
         TAILQ_REMOVE(&src->chain, chain_entry, entry);
         TAILQ_INSERT_TAIL(&dst->chain, chain_entry, entry);
     }
+    src->empty = true;
+    dst->empty = false;
 }
 
 static void lock_get_seg_cb(bool success, void *cb_arg) {
@@ -92,15 +95,23 @@ static void lock_get_seg_cb(bool success, void *cb_arg) {
         fprintf(stderr, "lock_get_seg failed.\n");
         exit(-1);
     }
-    struct lock_segment *l_seg = (struct lock_segment *)cb_arg;
-    l_seg->get_finished = true;
-    if (l_seg->ctx) {
-        struct lock_ctx *ctx = l_seg->ctx;
-        if (--ctx->io_cnt == 0) {
-            if (ctx->cb)
-                kv_app_send(kv_app_get_thread_index(), ctx->cb, ctx->cb_arg);
-            delete ctx;
+    struct lock_segment *lock_seg = (struct lock_segment *)cb_arg;
+    if (lock_seg->ctx == nullptr) return;
+    struct lock_ctx *ctx = lock_seg->ctx;
+    struct kv_bucket_segment *seg;
+    TAILQ_FOREACH(seg, ctx->segs, entry) {
+        if (seg->bucket_id == lock_seg->seg->bucket_id) {
+            if (lock_seg->seg != seg) {
+                segment_move(lock_seg->seg, seg);
+                lock_seg->seg = seg;
+            }
+            break;
         }
+    }
+    lock_seg->ctx = nullptr;
+    if (--ctx->io_cnt == 0) {
+        if (ctx->cb) kv_app_send(kv_app_get_thread_index(), ctx->cb, ctx->cb_arg);
+        delete ctx;
     }
 }
 static inline bool lockable(struct bucket_lock *lock, struct kv_bucket_segments *segs) {
@@ -121,14 +132,14 @@ static bool try_lock(struct kv_bucket_log *self, struct lock_ctx *ctx) {
     TAILQ_FOREACH(seg, ctx->segs, entry) {
         auto p = lock->segments.find(seg->bucket_id);
         if (p != lock->segments.end()) {
+            assert(p->second.ctx == nullptr);
             p->second.ctx = ctx;
-            if (p->second.get_finished) {
-                if (p->second.seg != seg) segment_move(p->second.seg, seg);
+            if (p->second.seg->empty == false) {
                 lock_get_seg_cb(true, &lock->segments[seg->bucket_id]);
             }
         } else {
-            lock->segments[seg->bucket_id] = {seg, false, ctx};
-            kv_bucket_seg_get(self, seg->bucket_id, seg, lock_get_seg_cb, &lock->segments[seg->bucket_id]);
+            lock->segments[seg->bucket_id] = {seg, ctx};
+            kv_bucket_seg_get(self, seg, false, lock_get_seg_cb, &lock->segments[seg->bucket_id]);
         }
     }
     return true;
@@ -143,8 +154,8 @@ void kv_bucket_lock(struct kv_bucket_log *self, struct kv_bucket_segments *segs,
         TAILQ_FOREACH(seg, segs, entry) {
             if (lock->segments.find(seg->bucket_id) == lock->segments.end()) {
                 // prefetch the bucket segment
-                lock->segments[seg->bucket_id] = {seg, false, nullptr};
-                kv_bucket_seg_get(self, seg->bucket_id, seg, lock_get_seg_cb, &lock->segments[seg->bucket_id]);
+                lock->segments[seg->bucket_id] = {seg, nullptr};
+                kv_bucket_seg_get(self, seg, false, lock_get_seg_cb, &lock->segments[seg->bucket_id]);
             }
         }
     }
@@ -154,13 +165,14 @@ void kv_bucket_unlock(struct kv_bucket_log *self, struct kv_bucket_segments *seg
     struct kv_bucket_segment *seg, *i;
 
     TAILQ_FOREACH(seg, segs, entry) {
+        auto &lock_seg = lock->segments[seg->bucket_id];
+        assert(lock_seg.seg == seg);
         lock->locked.erase(seg->bucket_id);
         for (auto p = lock->queue.begin(); p != lock->queue.end(); ++p)
             TAILQ_FOREACH(i, (*p)->segs, entry) {
-                if (i->bucket_id == seg->bucket_id) {
+                if (i->bucket_id == seg->bucket_id && seg->dirty == false) {
                     segment_move(seg, i);
-                    lock->segments[seg->bucket_id].seg = i;
-                    assert(lock->segments[seg->bucket_id].get_finished);
+                    lock_seg.seg = i;
                     goto next_seg;
                 }
             }

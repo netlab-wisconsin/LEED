@@ -200,11 +200,13 @@ static void set_lock_cb(void *arg) {
     struct kv_item *located_item;
     find_item_plus(ctx->self, &ctx->seg, ctx->key, ctx->key_length, &located_item);
     if (located_item) {  // update
+        ctx->seg.dirty = true;
         located_item->value_length = ctx->value_length;
         located_item->value_offset = ctx->value_offset;
         kv_bucket_seg_put(&ctx->self->bucket_log, &ctx->seg, set_finish_cb, ctx);
     } else {  // create
         if ((located_item = find_empty(ctx->self, &ctx->seg))) {
+            ctx->seg.dirty = true;
             located_item->key_length = ctx->key_length;
             kv_memcpy(located_item->key, ctx->key, ctx->key_length);
             located_item->value_length = ctx->value_length;
@@ -225,9 +227,8 @@ static void set_start(void *arg) {
     kv_value_log_write(&ctx->self->value_log, ctx->bucket_id, ctx->value, ctx->value_length, set_finish_cb, ctx);
 
     TAILQ_INIT(&ctx->segs);
-    TAILQ_INIT(&ctx->seg.chain);
+    kv_bucket_seg_init(&ctx->seg, ctx->bucket_id);
     TAILQ_INSERT_HEAD(&ctx->segs, &ctx->seg, entry);
-    ctx->seg.bucket_id = ctx->bucket_id;
     kv_bucket_lock(&ctx->self->bucket_log, &ctx->segs, set_lock_cb, ctx);
 }
 
@@ -272,8 +273,8 @@ static void get_seg_cb(bool success, void *arg) {
 
 static void get_read_bucket(void *arg) {
     struct get_ctx *ctx = arg;
-    uint64_t bucket_id = kv_data_store_bucket_id(ctx->self, ctx->key);
-    kv_bucket_seg_get(&ctx->self->bucket_log, bucket_id, &ctx->seg, get_seg_cb, ctx);
+    kv_bucket_seg_init(&ctx->seg, kv_data_store_bucket_id(ctx->self, ctx->key));
+    kv_bucket_seg_get(&ctx->self->bucket_log, &ctx->seg, true, get_seg_cb, ctx);
 }
 
 void kv_data_store_get(struct kv_data_store *self, uint8_t *key, uint8_t key_length, uint8_t *value, uint32_t *value_length,
@@ -318,6 +319,7 @@ static void delete_lock_cb(void *arg) {
         delete_finish_cb(false, arg);
         return;
     }
+    ctx->seg.dirty = true;
     located_item->key_length = 0;
     fill_the_hole(ctx->self, &ctx->seg);
     kv_bucket_seg_put(&ctx->self->bucket_log, &ctx->seg, delete_finish_cb, ctx);
@@ -326,9 +328,8 @@ static void delete_lock_cb(void *arg) {
 static void delete_lock(void *arg) {
     struct delete_ctx *ctx = arg;
     TAILQ_INIT(&ctx->segs);
-    TAILQ_INIT(&ctx->seg.chain);
+    kv_bucket_seg_init(&ctx->seg, ctx->bucket_id);
     TAILQ_INSERT_HEAD(&ctx->segs, &ctx->seg, entry);
-    ctx->seg.bucket_id = ctx->bucket_id;
     kv_bucket_lock(&ctx->self->bucket_log, &ctx->segs, delete_lock_cb, ctx);
 }
 

@@ -264,13 +264,16 @@ static void compact_lock_cb(void *arg) {
     struct kv_bucket_segment *seg, *tmp1;
     TAILQ_FOREACH_SAFE(seg, &ctx->segments, entry, tmp1) {
         TAILQ_FOREACH(entry, &ctx->items, entry) {
-            if (entry->seg == seg) goto next_seg;
+            if (entry->seg == seg) {
+                seg->dirty = true;
+                goto next_seg;
+            }
         }
         TAILQ_REMOVE(&ctx->segments, seg, entry);
         TAILQ_INSERT_TAIL(&unlock_segs, seg, entry);
     next_seg:;
     }
-    kv_bucket_unlock(self->bucket_log, &unlock_segs);
+    if (!TAILQ_EMPTY(&unlock_segs)) kv_bucket_unlock(self->bucket_log, &unlock_segs);
     while ((seg = TAILQ_FIRST(&unlock_segs)) != NULL) {
         TAILQ_REMOVE(&unlock_segs, seg, entry);
         kv_free(seg);
@@ -321,13 +324,16 @@ static void compact_lock_cb(void *arg) {
 static void compact(struct kv_value_log *self) {
     if (!self->bucket_log || kv_circular_log_empty_space(&self->log) >= COMPACTION_LENGTH * COMPACTION_CONCURRENCY * 8) return;
     if ((self->log.size - self->log.head + self->compact_head) % self->log.size > COMPACTION_LENGTH * COMPACTION_CONCURRENCY) return;
+    if (self->is_compaction_started == false) {
+        puts("kv_value_log: the compaction has started.");
+        self->is_compaction_started = true;
+    }
     struct compact_ctx *ctx = kv_malloc(sizeof(struct compact_ctx));
     ctx->self = self;
     TAILQ_INIT(&ctx->segments);
     TAILQ_INIT(&ctx->items);
-    uint64_t val_offset = 0;
-    for (size_t i = 0; i < (COMPACTION_LENGTH << self->blk_shift) - KV_VALUE_LOG_UNIT_SIZE; i += KV_VALUE_LOG_UNIT_SIZE) {
-        val_offset = ((self->compact_head << self->blk_shift) + i) % (self->log.size << self->blk_shift);
+    for (size_t i = 0; i < (COMPACTION_LENGTH << self->blk_shift); i += KV_VALUE_LOG_UNIT_SIZE) {
+        uint64_t val_offset = ((self->compact_head << self->blk_shift) + i) % (self->log.size << self->blk_shift);
         uint64_t bucket_id = get_bucket_id(self, val_offset)->val;
         if (bucket_id == KV_BUCKET_ID_EMPTY) continue;
         struct kv_bucket_segment *seg = NULL;
@@ -336,8 +342,7 @@ static void compact(struct kv_value_log *self) {
         }
         if (seg == NULL) {
             seg = kv_malloc(sizeof(*seg));
-            seg->bucket_id = bucket_id;
-            TAILQ_INIT(&seg->chain);
+            kv_bucket_seg_init(seg, bucket_id);
             TAILQ_INSERT_TAIL(&ctx->segments, seg, entry);
         }
 
@@ -345,8 +350,7 @@ static void compact(struct kv_value_log *self) {
         *entry = (struct item_list_entry){self, seg, val_offset, NULL};
         TAILQ_INSERT_TAIL(&ctx->items, entry, entry);
     }
-    assert((val_offset & self->blk_mask) == 0);
-    self->compact_head = val_offset >> self->blk_shift;
+    self->compact_head = (self->compact_head + COMPACTION_LENGTH) % self->log.size;
     if (TAILQ_EMPTY(&ctx->segments)) {
         compact_move_head(self);
         kv_free(ctx);

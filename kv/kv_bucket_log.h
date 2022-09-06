@@ -44,6 +44,7 @@ struct kv_bucket_segment {
     TAILQ_HEAD(, kv_bucket_chain_entry)
     chain;
     uint32_t offset;
+    bool dirty, empty;
     TAILQ_ENTRY(kv_bucket_segment)
     entry;
 };
@@ -65,7 +66,8 @@ void kv_bucket_log_fini(struct kv_bucket_log *self);
 bool kv_bucket_alloc_extra(struct kv_bucket_log *self, struct kv_bucket_segment *seg);
 void kv_bucket_free_extra(struct kv_bucket_segment *seg);
 
-void kv_bucket_seg_get(struct kv_bucket_log *self, uint64_t bucket_id, struct kv_bucket_segment *seg, kv_circular_log_io_cb cb, void *cb_arg);
+void kv_bucket_seg_init(struct kv_bucket_segment *seg, uint64_t bucket_id);
+void kv_bucket_seg_get(struct kv_bucket_log *self, struct kv_bucket_segment *seg, bool strict, kv_circular_log_io_cb cb, void *cb_arg);
 void kv_bucket_seg_put(struct kv_bucket_log *self, struct kv_bucket_segment *seg, kv_circular_log_io_cb cb, void *cb_arg);
 void kv_bucket_seg_put_bulk(struct kv_bucket_log *self, struct kv_bucket_segments *segs, kv_circular_log_io_cb cb, void *cb_arg);
 void kv_bucket_seg_cleanup(struct kv_bucket_log *self, struct kv_bucket_segment *seg);

@@ -13,6 +13,7 @@ struct kv_value_log {
     struct kv_bucket_log *bucket_log;
     uint64_t blk_mask, blk_shift;
     uint64_t compact_head;
+    bool is_compaction_started;
     void *bucket_id_log;
     uint64_t id_log_size;
 };
