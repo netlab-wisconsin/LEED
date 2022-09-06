@@ -1,51 +1,16 @@
 package main
 
 //#include <stdint.h>
-//#include <string.h>
-//#include <stdlib.h>
-//struct kv_vid {
-//#define KV_VID_EMPTY UINT32_MAX
-//#define KV_VID_LEN (20U)
-//    uint32_t ds_id;
-//    char vid[KV_VID_LEN];
-//} __attribute__((packed));
-//
-//struct kv_node_info {
-//    char rdma_ip[16];
-//    char rdma_port[8];
-//    uint32_t msg_type;
-//    uint32_t vid_num;
-//    uint16_t rpl_num;
-//    uint16_t ds_num;
-//    struct kv_vid vids[0];
-//#define KV_NODE_INFO_READ (0)
-//#define KV_NODE_INFO_CREATE (1)
-//#define KV_NODE_INFO_DELETE (2)
-//} __attribute__((packed));
-//
-//// free *info in handler
-//typedef void (*kv_etcd_node_handler)(struct kv_node_info *info);              // create or delete
-//typedef void (*kv_etcd_vid_handler)(uint32_t vid_index, struct kv_vid *vid);  // update
-//
-//static inline struct kv_vid *kv_etcd_get_vid(struct kv_node_info *info, uint32_t index) { return info->vids + index; }
-//static inline struct kv_node_info *kv_node_info_alloc(char *rdma_ip, char *rdma_port, uint32_t vid_num) {
-//    struct kv_node_info *info = malloc(sizeof(struct kv_node_info) + vid_num * sizeof(struct kv_vid));
-//    memset(info, 0, 24);
-//    strcpy(info->rdma_ip, rdma_ip);
-//    strcpy(info->rdma_port, rdma_port);
-//    info->vid_num = vid_num;
-//    memset(info->vids, 0xFF, vid_num * sizeof(struct kv_vid));
-//    return info;
+//#include <stdbool.h>
+//enum kv_etcd_msg_type {KV_ETCD_MSG_PUT, KV_ETCD_MSG_DEL};
+//typedef void (*kv_etcd_msg_handler)(enum kv_etcd_msg_type msg, const char * key, uint32_t key_len, const void * val, uint32_t val_len);
+//static void _msg_hdl_wrapper(kv_etcd_msg_handler h, uint32_t msg_type, _GoString_ key, _GoString_ val) {
+//	h((enum kv_etcd_msg_type)msg_type, key.p, key.n, val.p, val.n);
 //}
-//static inline void kv_etcd_node_handler_wrapper(kv_etcd_node_handler h, struct kv_node_info *info) { h(info); }
 import "C"
-
 import (
 	"context"
-	"fmt"
 	"log"
-	"strconv"
-	"strings"
 	"time"
 	"unsafe"
 
@@ -53,145 +18,156 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
-var (
+const (
 	dialTimeout      = 2 * time.Second
 	autoSyncInterval = 5 * time.Second
-	ctx              context.Context
-	cli              *clientv3.Client
-	kv               clientv3.KV
-	leaseID          clientv3.LeaseID
-	nodeHandler      C.kv_etcd_node_handler
-	vidHandler       C.kv_etcd_vid_handler
-	vidNum           *int
 )
 
-//export kvEtcdCreateNode
-func kvEtcdCreateNode(info *C.struct_kv_node_info, ttl C.uint64_t) {
-	gr, _ := kv.Get(ctx, "vid_num")
-	if len(gr.Kvs) == 1 {
-		vidNum, _ := strconv.Atoi(string(gr.Kvs[0].Value[:]))
-		if vidNum != int(info.vid_num) {
-			log.Fatalln("different vid_num in same cluster!")
+var (
+	ctx      context.Context
+	cli      *clientv3.Client
+	msgHdl   C.kv_etcd_msg_handler
+	funcChan chan func() error
+	DebugMod = false
+)
+
+//export kvEtcdLeaseCreate
+func kvEtcdLeaseCreate(ttl C.uint32_t, keepalive C.bool) C.uint64_t { //sync
+	lease, err := cli.Grant(ctx, int64(ttl))
+	if err != nil {
+		log.Fatalln("unable to create the lease")
+	}
+	if keepalive {
+		leaseCh, err := cli.KeepAlive(ctx, lease.ID)
+		if err != nil {
+			log.Fatalln("unable to keepalive")
+		}
+		go func() {
+			for range leaseCh {
+			}
+		}()
+	}
+	return C.uint64_t(lease.ID)
+}
+
+//export kvEtcdLeaseRevoke
+func kvEtcdLeaseRevoke(leaseID C.uint64_t) { //async
+	leaseId := clientv3.LeaseID(leaseID)
+	funcChan <- func() error {
+		ttl, err := cli.TimeToLive(ctx, leaseId)
+		if err != nil {
+			return err
+		}
+		time.Sleep(time.Duration(ttl.TTL) * time.Second)
+		_, err = cli.Revoke(ctx, leaseId)
+		return err
+	}
+}
+
+//export kvEtcdPut
+func kvEtcdPut(key *C.char, val unsafe.Pointer, valLen C.uint32_t, leaseID *C.uint64_t) { //async
+	k, v := C.GoString(key), C.GoStringN((*C.char)(val), C.int(valLen))
+	if leaseID == nil {
+		funcChan <- func() error {
+			_, err := cli.Put(ctx, k, v)
+			return err
 		}
 	} else {
-		_, _ = kv.Put(ctx, "vid_num", strconv.Itoa(int(info.vid_num)))
+		lease := clientv3.WithLease(clientv3.LeaseID(*leaseID))
+		funcChan <- func() error {
+			_, err := cli.Put(ctx, k, v, lease)
+			return err
+		}
 	}
-	nodeId := C.GoString(&info.rdma_ip[0]) + ":" + C.GoString(&info.rdma_port[0])
-	key := "node/" + nodeId + "/"
-	fmt.Println(key)
-	lease, _ := cli.Grant(ctx, int64(ttl))
-	leaseID = lease.ID
-	var Ops []clientv3.Op
-	Ops = append(Ops, clientv3.OpPut(key+"ds_num", strconv.Itoa(int(info.ds_num)), clientv3.WithLease(leaseID)))
-	Ops = append(Ops, clientv3.OpPut(key+"rpl_num", strconv.Itoa(int(info.rpl_num)), clientv3.WithLease(leaseID)))
-	for i := 0; i < int(info.vid_num); i++ {
-		vidKey := fmt.Sprintf("%svid/%d", key, i)
-		vid := unsafe.Pointer(C.kv_etcd_get_vid(info, C.uint32_t(i)))
-		Ops = append(Ops, clientv3.OpPut(vidKey, C.GoStringN((*C.char)(vid), C.int(24)), clientv3.WithLease(leaseID)))
-	}
-	_, _ = kv.Txn(ctx).Then(Ops...).Commit()
+
 }
 
-//export kvEtcdKeepAlive
-func kvEtcdKeepAlive() {
-	_, _ = cli.KeepAliveOnce(ctx, leaseID)
+//export kvEtcdDel
+func kvEtcdDel(key *C.char) { //async
+	k := C.GoString(key)
+	funcChan <- func() error {
+		_, err := cli.Delete(ctx, k)
+		return err
+	}
 }
 
-func sendNodeInfo(Kvs []*mvccpb.KeyValue, msgTypes []int) {
-	if vidNum == nil {
-		gr, _ := kv.Get(ctx, "vid_num")
-		if len(gr.Kvs) != 1 {
-			return
-		}
-		vidNum = new(int)
-		*vidNum, _ = strconv.Atoi(string(gr.Kvs[0].Value[:]))
+func onKeyChange(kv *mvccpb.KeyValue, msgType mvccpb.Event_EventType) {
+	if DebugMod {
+		println(msgType, string(kv.Key[:]))
 	}
-	nodeMap := make(map[string]*C.struct_kv_node_info)
-	for i, x := range Kvs {
-		key := strings.Split(string(x.Key[:]), "/")
-		nodeID := key[1]
-		if _, ok := nodeMap[nodeID]; !ok {
-			ipPort := strings.Split(nodeID, ":")
-			CIp, CPort := C.CString(ipPort[0]), C.CString(ipPort[1])
-			nodeMap[nodeID] = C.kv_node_info_alloc(CIp, CPort, C.uint32_t(*vidNum))
-			info := nodeMap[nodeID]
-			info.msg_type = C.uint32_t(msgTypes[i])
-			C.free(unsafe.Pointer(CIp))
-			C.free(unsafe.Pointer(CPort))
-		}
-		if info := nodeMap[nodeID]; info.msg_type != C.KV_NODE_INFO_DELETE {
-			if key[2] == "vid" {
-				j, _ := strconv.Atoi(key[3])
-				vid := C.kv_etcd_get_vid(info, C.uint32_t(j))
-				CValue := C.CBytes(x.Value)
-				C.memcpy(unsafe.Pointer(vid), CValue, 24)
-				C.free(unsafe.Pointer(CValue))
-			} else if key[2] == "ds_num" {
-				ds_num, _ := strconv.Atoi(string(x.Value[:]))
-				info.ds_num = C.uint16_t(ds_num)
-			} else if key[2] == "rpl_num" {
-				rpl_num, _ := strconv.Atoi(string(x.Value[:]))
-				info.rpl_num = C.uint16_t(rpl_num)
-			}
-		}
+	if msgHdl == nil {
+		return
 	}
-	for _, info := range nodeMap {
-		if nodeHandler != nil {
-			C.kv_etcd_node_handler_wrapper(nodeHandler, info)
-		} else {
-			C.free(unsafe.Pointer(info))
-		}
-	}
+	C._msg_hdl_wrapper(msgHdl, C.uint32_t(msgType), string(kv.Key[:]), string(kv.Value[:]))
 }
 
 //export kvEtcdInit
-func kvEtcdInit(ip, port *C.char, _nodeHandler C.kv_etcd_node_handler, _vidHandler C.kv_etcd_vid_handler) {
+func kvEtcdInit(ip, port *C.char, _msgHdl C.kv_etcd_msg_handler) C.int { //sync
+	funcChan = make(chan func() error, 4096)
+	for i := 0; i < 8; i++ {
+		go func() {
+			for f := range funcChan {
+				if err := f(); err != nil {
+					log.Fatalln(err)
+				}
+			}
+		}()
+	}
 	ctx = context.Background()
-	cli, _ = clientv3.New(clientv3.Config{
+	var err error
+	cli, err = clientv3.New(clientv3.Config{
 		DialTimeout:      dialTimeout,
 		Endpoints:        []string{C.GoString(ip) + ":" + C.GoString(port)},
 		AutoSyncInterval: autoSyncInterval,
 	})
-	kv = clientv3.NewKV(cli)
-	nodeHandler = _nodeHandler
-	vidHandler = _vidHandler
-	rch := cli.Watch(ctx, "node/", clientv3.WithPrefix())
+	if err != nil {
+		return -1
+	}
+	msgHdl = _msgHdl
+	rch := cli.Watch(ctx, "", clientv3.WithPrefix())
 	go func() {
 		for resp := range rch {
-			Kvs := make([]*mvccpb.KeyValue, len(resp.Events))
-			msgTypes := make([]int, len(resp.Events))
-			for i, ev := range resp.Events {
-				Kvs[i] = ev.Kv
-				if ev.Type == mvccpb.PUT {
-					msgTypes[i] = int(C.KV_NODE_INFO_CREATE)
-				} else {
-					msgTypes[i] = int(C.KV_NODE_INFO_DELETE)
-				}
-				//fmt.Printf("%s %q : %q\n", ev.Type, ev.Kv.Key, ev.Kv.Value)
+			for _, ev := range resp.Events {
+				onKeyChange(ev.Kv, ev.Type)
 			}
-			sendNodeInfo(Kvs, msgTypes)
 		}
 	}()
-	gr, _ := kv.Get(ctx, "node/", clientv3.WithPrefix())
-	sendNodeInfo(gr.Kvs, make([]int, len(gr.Kvs)))
+	gr, err := cli.Get(ctx, "", clientv3.WithPrefix(), clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend))
+	if err != nil {
+		return -2
+	}
+	for _, x := range gr.Kvs {
+		onKeyChange(x, mvccpb.PUT)
+	}
+	return 0
 }
 
 //export kvEtcdFini
-func kvEtcdFini() {
-	_ = cli.Close()
+func kvEtcdFini() C.int { //sync
+	close(funcChan)
+	err := cli.Close()
+	if err != nil {
+		return -1
+	} else {
+		return 0
+	}
 }
 
 func main() {
-	//"127.0.0.1:2379"127.0.0.1
-	var info *C.struct_kv_node_info
-	info = C.kv_node_info_alloc(C.CString("10.0.0.1"), C.CString("9000"), 4)
-	kvEtcdInit(C.CString("127.0.0.1"), C.CString("2379"), nil, nil)
-	kvEtcdCreateNode(info, 1)
-	go func() {
-		for true {
-			kvEtcdKeepAlive()
-			time.Sleep(300 * time.Millisecond)
-		}
-	}()
-	time.Sleep(300 * time.Second)
+	//tests
+	DebugMod = true
+	kvEtcdInit(C.CString("127.0.0.1"), C.CString("2379"), nil)
+	val := unsafe.Pointer(C.CString("a\x00aaaaaaaaaaaa"))
+	nodeId := C.CString("10.0.0.1:5000")
+	nodeId2 := C.CString("10.0.0.2:5000")
+	leaseID := kvEtcdLeaseCreate(5, true)
+	kvEtcdPut(nodeId, val, 8, &leaseID)
+	kvEtcdPut(nodeId2, val, 8, nil)
+	time.Sleep(5 * time.Second)
+	kvEtcdDel(nodeId2)
+	time.Sleep(5 * time.Second)
+	println("revoke the lease")
+	kvEtcdLeaseRevoke(leaseID)
+	time.Sleep(8 * time.Second)
+	kvEtcdFini()
 }

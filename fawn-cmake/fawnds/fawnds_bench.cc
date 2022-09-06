@@ -79,7 +79,7 @@ void *compactThread(void* p) {
     return NULL;
 }
 
-void *randomReadThread(void* p)
+void *randomReadThread(void* p, int mode)
 {
     benchData* bd = (benchData*)p;
     FawnDS<FawnDS_Flash>** dbs = bd->f;
@@ -92,7 +92,12 @@ void *randomReadThread(void* p)
     char *l = (char *)malloc(sizeof(char) * num_to_scan * sizeof(uint32_t));
 
     for (u_int i = 0; i < num_to_scan; i++) {
-        u_int val = (offsetVal * num_records) + (rand()%num_records);
+         u_int val;
+         if(mode == SCAN_RANDOM) {
+             val = (offsetVal * num_records) + (rand()%num_records);
+         } else {
+             val = (offsetVal * num_records) + (i % num_records);
+         }
         if (val < max_record) {
             string ps_key((const char *)&val, sizeof(val));
             uint32_t key_id = HashUtil::BobHash(ps_key);
@@ -327,7 +332,10 @@ void bench(int argc, char** argv) {
 
             }
             int dbi = (int)(val / bucket);
+            //string data;
             gettimeofday(&single_seq_write_start, NULL);
+            //dbs[dbi]->Get(key, sizeof(uint32_t), data);
+            
             if(!dbs[dbi]->Insert(key.data(), key.get_actual_size(), value.data(), valuesize)) {
                 perror("Insert failed\n");
             }
@@ -395,10 +403,10 @@ void bench(int argc, char** argv) {
                     pthread_attr_setaffinity_np(&attr, sizeof(cpuset), &cpuset);
                 }
 #endif
-                pthread_create(&workerThreadIds_[i], &attr,
-                               randomReadThread, &bd[i]);
+                //pthread_create(&workerThreadIds_[i], &attr,
+                 //              randomReadThread, &bd[i]);
             } else {
-                randomReadThread(&bd[0]);
+                randomReadThread(&bd[0], mode);
             }
         }
     }
