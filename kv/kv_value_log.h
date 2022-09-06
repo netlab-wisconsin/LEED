@@ -4,9 +4,9 @@
 #include "kv_bucket_log.h"
 #include "kv_circular_log.h"
 
-#define KV_VALUE_LOG_UNIT_SHIFT (8)
-#define KV_VALUE_LOG_UNIT_SIZE (1U << KV_VALUE_LOG_UNIT_SHIFT)
-#define KV_VALUE_LOG_UNIT_MASK (KV_VALUE_LOG_UNIT_SIZE - 1)
+#define KV_VALUE_LOG_UNIT_SHIFT (8ULL)
+#define KV_VALUE_LOG_UNIT_SIZE (1ULL << KV_VALUE_LOG_UNIT_SHIFT)
+#define KV_VALUE_LOG_UNIT_MASK (KV_VALUE_LOG_UNIT_SIZE - 1ULL)
 
 struct kv_value_log {
     struct kv_circular_log log;
