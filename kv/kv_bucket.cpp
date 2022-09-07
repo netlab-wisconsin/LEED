@@ -10,9 +10,9 @@ extern "C" {
 
 using namespace std;
 // --- bucket meta ---
-#define META_BLOCK_SHIFT (7u)
-#define META_BLOCK_SIZE (1 << META_BLOCK_SHIFT)
-#define META_BLOCK_MASK (META_BLOCK_SIZE - 1)
+#define META_BLOCK_SHIFT (7ull)
+#define META_BLOCK_SIZE (1ull << META_BLOCK_SHIFT)
+#define META_BLOCK_MASK (META_BLOCK_SIZE - 1ull)
 struct meta_block {
     struct kv_bucket_meta meta[META_BLOCK_SIZE];
     uint32_t non_empty_blks;
