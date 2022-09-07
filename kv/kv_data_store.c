@@ -341,3 +341,144 @@ kv_data_store_ctx kv_data_store_delete(struct kv_data_store *self, uint8_t *key,
     ctx->cb_arg = enqueue(self, KV_DS_DEL, delete_lock, ctx, cb, cb_arg);
     return ctx;
 }
+
+// --- get_range ---
+
+struct range_read_val_ctx;
+struct range_ctx {
+    struct kv_data_store *self;
+    uint64_t start_id;
+    uint64_t end_id;
+    uint32_t buf_num;
+    kv_data_store_range_cb get_buf;
+    void *arg;
+    kv_data_store_range_cb get_range_cb;
+    void *cb_arg;
+    uint64_t bucket_id;
+    uint32_t iocnt, queue_size;
+    TAILQ_HEAD(, range_read_val_ctx)
+    queue;
+};
+struct range_seg_ctx {
+    struct kv_bucket_segment seg;
+    struct kv_bucket_segments segs;
+    struct range_ctx *ctx;
+    uint32_t item_num;
+};
+
+struct range_read_val_ctx {
+    struct kv_data_store_get_range_buf buf;
+    struct range_seg_ctx *seg_ctx;
+    struct kv_item *item;
+    TAILQ_ENTRY(range_read_val_ctx)
+    entry;
+};
+static void range_scheduler(struct range_ctx *ctx);
+static void range_read_val_cb(bool success, void *arg) {
+    if (success == false) {
+        fprintf(stderr, "kv_datastore: range_read_val failed.\n");
+        exit(-1);
+    }
+    struct range_read_val_ctx *read_val = arg;
+    struct range_seg_ctx *seg_ctx = read_val->seg_ctx;
+    struct range_ctx *ctx = seg_ctx->ctx;
+    ctx->get_range_cb(&read_val->buf, ctx->cb_arg);
+    ctx->iocnt--;
+    kv_free(read_val);
+    if (--seg_ctx->item_num == 0) {
+        kv_bucket_unlock(&ctx->self->bucket_log, &seg_ctx->segs);
+        kv_free(seg_ctx);
+    }
+    range_scheduler(ctx);
+}
+
+static void range_consumer(struct range_ctx *ctx) {
+    while (ctx->iocnt < ctx->buf_num) {
+        struct range_read_val_ctx *read_val = TAILQ_FIRST(&ctx->queue);
+        if (read_val == NULL) return;
+        TAILQ_REMOVE(&ctx->queue, read_val, entry);
+        ctx->iocnt++;
+        ctx->get_buf(&read_val->buf, ctx->arg);
+        struct kv_item *item = read_val->item;
+        *read_val->buf.key_length = item->key_length;
+        kv_memcpy(read_val->buf.key, item->key, item->key_length);
+        *read_val->buf.value_length = item->value_length;
+        kv_value_log_read(&ctx->self->value_log, item->value_offset, read_val->buf.value, item->value_length,
+                          range_read_val_cb, read_val);
+    }
+}
+
+static void range_lock_cb(void *arg) {
+    struct range_seg_ctx *seg_ctx = arg;
+    struct range_ctx *ctx = seg_ctx->ctx;
+    assert(!TAILQ_EMPTY(&seg_ctx->seg.chain));
+    struct kv_bucket_chain_entry *ce;
+    TAILQ_FOREACH(ce, &seg_ctx->seg.chain, entry) {
+        for (struct kv_bucket *bucket = ce->bucket; bucket - ce->bucket < ce->len; ++bucket)
+            for (struct kv_item *item = bucket->items; item - bucket->items < KV_ITEM_PER_BUCKET; ++item) {
+                if (KV_EMPTY_ITEM(item)) continue;
+                struct range_read_val_ctx *read_val = kv_malloc(sizeof(*read_val));
+                read_val->item = item;
+                read_val->seg_ctx = seg_ctx;
+                seg_ctx->item_num++;
+                ctx->queue_size++;
+                TAILQ_INSERT_TAIL(&ctx->queue, read_val, entry);
+            }
+    }
+    range_scheduler(ctx);
+}
+
+static bool range_producer(struct range_ctx *ctx) {
+    uint64_t id_space_size = 1ULL << ctx->self->log_bucket_num, len = (id_space_size + ctx->end_id - ctx->start_id) % id_space_size;
+    for (; (id_space_size + ctx->bucket_id - ctx->start_id) % id_space_size < len; ctx->bucket_id = (ctx->bucket_id + ctx->start_id) % id_space_size) {
+        struct kv_bucket_meta meta = kv_bucket_meta_get(&ctx->self->bucket_log, ctx->bucket_id);
+        if (meta.chain_length == 0) continue;
+        struct range_seg_ctx *seg_ctx = kv_malloc(sizeof(*seg_ctx));
+        TAILQ_INIT(&seg_ctx->segs);
+        kv_bucket_seg_init(&seg_ctx->seg, ctx->bucket_id);
+        TAILQ_INSERT_TAIL(&seg_ctx->segs, &seg_ctx->seg, entry);
+        seg_ctx->ctx = ctx;
+        seg_ctx->item_num = 0;
+        kv_bucket_lock(&ctx->self->bucket_log, &seg_ctx->segs, range_lock_cb, seg_ctx);
+        return true;
+    }
+    return false;
+}
+static void range_scheduler(struct range_ctx *ctx) {
+    bool finish = false;
+    // consumer
+    // get a item from the queue -> get buf ->read value-> get_range_cb -> unlock
+    range_consumer(ctx);
+    // producer
+    //  find a none empty bucket -> lock the bucket -> add items to the queue
+    if (ctx->queue_size < ctx->buf_num) {
+        finish = !range_producer(ctx);
+    }
+
+    if (finish && ctx->iocnt == 0) {
+        // get_range finish
+        ctx->get_range_cb(NULL, ctx->cb_arg);
+        kv_free(ctx);
+    }
+}
+
+void kv_data_store_get_range(struct kv_data_store *self, uint8_t *start_key, uint8_t *end_key, uint64_t buf_num,
+                             kv_data_store_range_cb get_buf, void *arg, kv_data_store_range_cb get_range_cb, void *cb_arg) {
+    assert(get_range_cb && get_buf);
+    uint64_t start_id = kv_data_store_bucket_id(self, start_key), end_id = kv_data_store_bucket_id(self, end_key);
+    struct range_ctx *ctx = kv_malloc(sizeof(*ctx));
+    *ctx = (struct range_ctx){self, start_id, end_id, buf_num, get_buf, arg, get_range_cb, cb_arg};
+    ctx->bucket_id = ctx->start_id;
+    ctx->iocnt = 0;
+    ctx->queue_size = 0;
+    TAILQ_INIT(&ctx->queue);
+    range_scheduler(ctx);
+}
+
+void kv_data_store_del_range(struct kv_data_store *self, uint8_t *start_key, uint8_t *end_key) {
+    uint64_t start_id = kv_data_store_bucket_id(self, start_key), end_id = kv_data_store_bucket_id(self, end_key);
+    uint64_t id_space_size = 1ULL << self->log_bucket_num, len = (id_space_size + end_id - start_id) % id_space_size;
+    for (uint64_t i = start_id; (id_space_size + i - start_id) % id_space_size < len; i = (i + start_id) % id_space_size) {
+        kv_bucket_meta_put(&self->bucket_log, i, (struct kv_bucket_meta){0, 0});
+    }
+}
