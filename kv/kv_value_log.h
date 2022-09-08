@@ -20,7 +20,7 @@ struct kv_value_log {
 
 static inline uint64_t kv_value_log_offset(struct kv_value_log *self) { return self->log.tail << self->blk_shift; }
 
-// base(bytes) size(bytes)
+// base(blk) size(blk)
 void kv_value_log_init(struct kv_value_log *self, struct kv_storage *storage, struct kv_bucket_log *bucket_log, uint64_t base,
                        uint64_t size, uint32_t buf_len);
 void kv_value_log_fini(struct kv_value_log *self);

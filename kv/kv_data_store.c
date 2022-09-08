@@ -64,8 +64,8 @@ void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, 
                         uint64_t value_log_block_num, uint32_t compact_buf_len, struct kv_ds_queue *ds_queue, uint32_t ds_id) {
     self->log_bucket_num = log_bucket_num;
     kv_bucket_log_init(&self->bucket_log, storage, base, num_buckets);
-    kv_value_log_init(&self->value_log, storage, &self->bucket_log, (base + self->bucket_log.log.size) * storage->block_size,
-                      value_log_block_num * storage->block_size, compact_buf_len);
+    kv_value_log_init(&self->value_log, storage, &self->bucket_log, base + self->bucket_log.log.size,
+                      value_log_block_num, compact_buf_len);
     uint64_t value_log_size = self->value_log.log.size + self->value_log.id_log_size;
     if (self->bucket_log.log.size + value_log_size > storage->num_blocks) {
         fprintf(stderr, "kv_data_store_init: Not enough space.\n");

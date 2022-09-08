@@ -375,10 +375,8 @@ void kv_value_log_init(struct kv_value_log *self, struct kv_storage *storage, st
         ;
     assert(storage->block_size == 1U << self->blk_shift);
     self->blk_mask = storage->block_size - 1;
-    assert(!(base & self->blk_mask || size & self->blk_mask));
     self->bucket_log = bucket_log;
-    kv_circular_log_init(&self->log, storage, base, size >> self->blk_shift, 0, 0,
-                         COMPACTION_LENGTH * COMPACTION_CONCURRENCY * 8, 256);
+    kv_circular_log_init(&self->log, storage, base, size, 0, 0, COMPACTION_LENGTH * COMPACTION_CONCURRENCY * 8, 256);
     bucket_id_log_init(self);
 }
 

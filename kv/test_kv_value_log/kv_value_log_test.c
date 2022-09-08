@@ -45,8 +45,8 @@ static void test_cb(bool success, void *cb_arg) {
 }
 static void start(void *arg) {
     kv_storage_init(&storage, 0);
-    kv_value_log_init(&value_log, &storage, NULL, storage.block_size * storage.num_blocks / 3,
-                      storage.block_size * storage.num_blocks / 3, 1);
+    kv_value_log_init(&value_log, &storage, NULL,  storage.num_blocks / 3,
+                       storage.num_blocks / 3, 1);
     buf = kv_storage_blk_alloc(&storage, 10);
     for (uint32_t i = 0; i < 20; i++) sprintf(buf + i * storage.block_size / 2, "    %u. hello", i);
 
