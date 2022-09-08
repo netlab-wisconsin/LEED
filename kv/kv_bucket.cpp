@@ -1,11 +1,13 @@
 #include <cassert>
 #include <cstdint>
 #include <list>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 extern "C" {
 #include "kv_app.h"
 #include "kv_bucket_log.h"
+#include "kv_memory.h"
 }
 
 using namespace std;
@@ -195,4 +197,43 @@ void kv_bucket_lock_init(struct kv_bucket_log *self) {
 
 void kv_bucket_lock_fini(struct kv_bucket_log *self) {
     delete (struct bucket_lock *)self->bucket_lock;
+}
+// --- key set ---
+
+typedef array<uint8_t, KV_MAX_KEY_LENGTH> key_t_;
+typedef map<key_t_, uint32_t> key_set;
+
+static inline key_t_ key_to_array(uint8_t *key, uint8_t key_length) {
+    key_t_ _key({0});
+    kv_memcpy(_key.data(), key, key_length);
+    return _key;
+}
+
+bool kv_bucket_key_set_find(kv_bucket_key_set set, uint8_t *key, uint8_t key_length) {
+    return ((key_set *)set)->find(key_to_array(key, key_length)) != ((key_set *)set)->end();
+}
+
+void kv_bucket_key_set_add(kv_bucket_key_set _set, uint8_t *_key, uint8_t key_length) {
+    key_set *set = (key_set *)_set;
+    key_t_ key = key_to_array(_key, key_length);
+    if (set->find(key) == set->end()) {
+        (*set)[key] = 1;
+    } else {
+        (*set)[key]++;
+    }
+}
+
+void kv_bucket_key_set_del(kv_bucket_key_set _set, uint8_t *_key, uint8_t key_length) {
+    key_set *set = (key_set *)_set;
+    key_t_ key = key_to_array(_key, key_length);
+    assert(set->find(key) != set->end());
+    if (--(*set)[key] == 0) set->erase(key);
+}
+
+kv_bucket_key_set kv_bucket_key_set_init(void) {
+    return new key_set();
+}
+
+void kv_bucket_key_set_fini(kv_bucket_key_set set) {
+    delete (key_set *)set;
 }

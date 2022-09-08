@@ -89,15 +89,9 @@ static void get_options(int argc, char **argv) {
         }
 }
 
-struct key_set_t {
-    uint8_t key[KV_MAX_KEY_LENGTH];
-    uint32_t cnt;
-    UT_hash_handle hh;
-};
 struct worker_t {
     struct kv_storage storage;
     struct kv_data_store data_store;
-    struct key_set_t *dirty_keys;
 } * workers;
 
 kv_rdma_handle server;
@@ -115,37 +109,6 @@ struct io_ctx {
 
 struct kv_mempool *io_pool;
 struct kv_ds_queue ds_queue;
-static inline struct key_set_t *find_key(struct worker_t *worker, uint8_t *_key, uint8_t key_length) {
-    uint8_t key[KV_MAX_KEY_LENGTH];
-    kv_memset(key, 0, KV_MAX_KEY_LENGTH);
-    kv_memcpy(key, _key, key_length);
-    struct key_set_t *entry;
-    HASH_FIND(hh, worker->dirty_keys, key, KV_MAX_KEY_LENGTH, entry);
-    return entry;
-}
-
-static void put_key(struct worker_t *worker, uint8_t *key, uint8_t key_length) {
-    struct key_set_t *entry = find_key(worker, key, key_length);
-    if (entry) {
-        entry->cnt++;
-        return;
-    }
-    entry = kv_malloc(sizeof(struct key_set_t));
-    kv_memset(entry->key, 0, KV_MAX_KEY_LENGTH);
-    kv_memcpy(entry->key, key, key_length);
-    entry->cnt = 1;
-    HASH_ADD(hh, worker->dirty_keys, key, KV_MAX_KEY_LENGTH, entry);
-}
-
-static void del_key(struct io_ctx *io) {
-    struct worker_t *worker = workers + io->worker_id;
-    struct key_set_t *entry = find_key(worker, KV_MSG_KEY(io->msg), io->msg->key_len);
-    assert(entry);
-    if (--entry->cnt == 0) {
-        HASH_DEL(worker->dirty_keys, entry);
-        kv_free(entry);
-    }
-}
 
 static void send_response(void *arg) {
     struct io_ctx *io = arg;
@@ -157,7 +120,8 @@ static void send_response(void *arg) {
 static void forward_cb(void *arg) {
     struct io_ctx *io = arg;
     if (io->need_forward && (io->msg_type == KV_MSG_SET || io->msg_type == KV_MSG_DEL)) {
-        del_key(io);
+        struct kv_data_store *ds = &(workers + io->worker_id)->data_store;
+        kv_data_store_clean(ds, KV_MSG_KEY(io->msg), io->msg->key_len);
     }
     if (io->msg_type == KV_MSG_SET) {
         kv_data_store_set_commit(io->ds_ctx, io->msg->type == KV_MSG_OK);
@@ -172,7 +136,8 @@ static void io_fini(bool success, void *arg) {
     if (!success) {
         io->msg->type = KV_MSG_ERR;
         if (io->need_forward && (io->msg_type == KV_MSG_SET || io->msg_type == KV_MSG_DEL)) {
-            del_key(io);
+            struct kv_data_store *ds = &(workers + io->worker_id)->data_store;
+            kv_data_store_clean(ds, KV_MSG_KEY(io->msg), io->msg->key_len);
         }
         kv_app_send(io->server_thread, send_response, arg);
         return;
@@ -189,12 +154,12 @@ static void io_start(void *arg) {
     struct worker_t *self = workers + io->worker_id;
     switch (io->msg->type) {
         case KV_MSG_SET:
-            if (io->need_forward) put_key(self, KV_MSG_KEY(io->msg), io->msg->key_len);
+            if (io->need_forward) kv_data_store_dirty(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len);
             io->ds_ctx = kv_data_store_set(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, KV_MSG_VALUE(io->msg),
                                            io->msg->value_len, io_fini, arg);
             break;
         case KV_MSG_GET:
-            if (find_key(self, KV_MSG_KEY(io->msg), io->msg->key_len) && io->need_forward) {
+            if (kv_data_store_is_dirty(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len) && io->need_forward) {
                 io_fini(true, arg);
             } else {
                 io->need_forward = false;
@@ -204,7 +169,7 @@ static void io_start(void *arg) {
             break;
         case KV_MSG_DEL:
             assert(io->msg->value_len == 0);
-            if (io->need_forward) put_key(self, KV_MSG_KEY(io->msg), io->msg->key_len);
+            if (io->need_forward) kv_data_store_dirty(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len);
             io->ds_ctx = kv_data_store_delete(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, io_fini, arg);
             break;
         case KV_MSG_TEST:
@@ -242,7 +207,6 @@ static void ring_init(void *arg) {
 
 static void worker_init(void *arg) {
     struct worker_t *self = arg;
-    self->dirty_keys = NULL;
     kv_storage_init(&self->storage, self - workers);
     uint64_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET / opt.ssd_num;
     uint64_t value_log_block_num = self->storage.num_blocks * 0.95 - 2 * bucket_num;

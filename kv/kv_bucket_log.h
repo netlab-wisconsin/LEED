@@ -9,7 +9,7 @@
 #define KV_ITEM_PER_BUCKET 16
 
 typedef void (*kv_task_cb)(void *);
-
+typedef void *kv_bucket_key_set;
 struct kv_item {
     uint8_t key_length;
     uint8_t key[KV_MAX_KEY_LENGTH];
@@ -82,4 +82,10 @@ void kv_bucket_lock(struct kv_bucket_log *self, struct kv_bucket_segments *segs,
 void kv_bucket_unlock(struct kv_bucket_log *self, struct kv_bucket_segments *segs);
 void kv_bucket_lock_init(struct kv_bucket_log *self);
 void kv_bucket_lock_fini(struct kv_bucket_log *self);
+
+void kv_bucket_key_set_add(kv_bucket_key_set set, uint8_t *key, uint8_t key_length);
+bool kv_bucket_key_set_find(kv_bucket_key_set set, uint8_t *key, uint8_t key_length);
+void kv_bucket_key_set_del(kv_bucket_key_set set, uint8_t *key, uint8_t key_length);
+kv_bucket_key_set kv_bucket_key_set_init(void);
+void kv_bucket_key_set_fini(kv_bucket_key_set set);
 #endif

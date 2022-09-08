@@ -76,6 +76,7 @@ void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, 
     self->ds_queue = ds_queue;
     self->ds_id = ds_id;
     self->ds_queue->q_info[self->ds_id] = (struct kv_ds_q_info){.cap = 1024, .size = 0};
+    self->dirty_set = kv_bucket_key_set_init();
     self->q = kv_malloc(sizeof(struct queue_head));
     STAILQ_INIT((struct queue_head *)self->q);
 }
@@ -83,6 +84,7 @@ void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, 
 void kv_data_store_fini(struct kv_data_store *self) {
     kv_bucket_log_fini(&self->bucket_log);
     kv_value_log_fini(&self->value_log);
+    kv_bucket_key_set_fini(self->dirty_set);
     kv_free(self->q);
 }
 
