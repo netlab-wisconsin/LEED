@@ -12,16 +12,19 @@ struct kv_data_store {
     uint64_t log_bucket_num;  // cluster
     kv_bucket_key_set dirty_set;
     void *q;
+    void * copy_ctx;
 };
-struct kv_data_store_get_range_buf {
+struct kv_data_store_copy_buf {
     uint8_t *key;
     uint8_t *key_length;
     uint8_t *value;
     uint32_t *value_length;
+    void *ctx;
 };
-typedef void (*kv_data_store_range_cb)(struct kv_data_store_get_range_buf *buf, void *cb_arg);
 typedef void *kv_data_store_ctx;
 typedef kv_storage_io_cb kv_data_store_cb;
+typedef void (*kv_data_store_get_buf_cb)(struct kv_data_store_copy_buf *buf, void *cb_arg);
+
 void kv_data_store_init(struct kv_data_store *self, struct kv_storage *storage, uint64_t base, uint64_t num_buckets, uint64_t log_bucket_num,
                         uint64_t value_log_block_num, uint32_t compact_buf_len, struct kv_ds_queue *ds_queue, uint32_t ds_id);
 void kv_data_store_fini(struct kv_data_store *self);
@@ -42,7 +45,12 @@ static inline void kv_data_store_clean(struct kv_data_store *self, uint8_t *key,
 static inline bool kv_data_store_is_dirty(struct kv_data_store *self, uint8_t *key, uint8_t key_length){
     return kv_bucket_key_set_find(self->dirty_set, key, key_length);
 }
-void kv_data_store_get_range(struct kv_data_store *self, uint8_t *start_key, uint8_t *end_key, uint64_t buf_num,
-                             kv_data_store_range_cb get_buf, void *arg, kv_data_store_range_cb get_range_cb, void *cb_arg);
+
+void kv_data_store_copy_commit(struct kv_data_store_copy_buf *buf);
+bool kv_data_store_copy_forward(struct kv_data_store *self, uint8_t *key);
+void kv_data_store_copy_add_key_range(struct kv_data_store *self, uint8_t *start_key, uint8_t *end_key, kv_data_store_cb cb, void *cb_arg);
+void kv_data_store_copy_del_key_range(struct kv_data_store *self, uint8_t *start_key, uint8_t *end_key);
+void kv_data_store_copy_init(struct kv_data_store *self, kv_data_store_get_buf_cb get_buf, void *arg, uint64_t buf_num, kv_data_store_cb cb, void *cb_arg);
+void kv_data_store_copy_fini(struct kv_data_store *self);
 void kv_data_store_del_range(struct kv_data_store *self, uint8_t *start_key, uint8_t *end_key);
 #endif
