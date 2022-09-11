@@ -16,7 +16,7 @@ struct {
     uint32_t value_size;
     uint32_t ssd_num;
     uint32_t thread_num;
-    uint32_t concurrent_io_num;
+    uint32_t concurrent_io_num, copy_concurrency;
     uint32_t ring_num, vid_per_ssd, rpl_num;
     char json_config_file[1024];
     char etcd_ip[32];
@@ -27,6 +27,7 @@ struct {
 } opt = {.ssd_num = 2,
          .thread_num = 1,
          .concurrent_io_num = 32,
+         .copy_concurrency = 32,
          .rpl_num = 1,
          .json_config_file = "config.json",
          .etcd_ip = "127.0.0.1",
@@ -40,7 +41,7 @@ static void help(void) {
 }
 static void get_options(int argc, char **argv) {
     int ch;
-    while ((ch = getopt(argc, argv, "hn:r:v:d:c:i:T:s:P:l:p:m:M:R:")) != -1) switch (ch) {
+    while ((ch = getopt(argc, argv, "hn:r:v:d:c:i:T:s:P:l:p:m:M:R:I:")) != -1) switch (ch) {
             case 'h':
                 help();
                 break;
@@ -58,6 +59,9 @@ static void get_options(int argc, char **argv) {
                 break;
             case 'i':
                 opt.concurrent_io_num = atol(optarg);
+                break;
+            case 'I':
+                opt.copy_concurrency = atol(optarg);
                 break;
             case 'T':
                 opt.thread_num = atol(optarg);
@@ -95,6 +99,7 @@ struct worker_t {
 } * workers;
 
 kv_rdma_handle server;
+kv_rdma_mrs_handle server_mrs;
 struct io_ctx {
     void *req_h;
     struct kv_msg *msg;
@@ -107,7 +112,7 @@ struct io_ctx {
     uint32_t msg_type;
 };
 
-struct kv_mempool *io_pool;
+struct kv_mempool *io_pool, *copy_pool;
 struct kv_ds_queue ds_queue;
 
 static void send_response(void *arg) {
@@ -180,7 +185,7 @@ static void io_start(void *arg) {
     }
 }
 
-static void handler(void *req_h, kv_rdma_mr req, uint32_t req_sz, uint32_t ds_id, void *next, void *arg) {
+static void handler(void *req_h, kv_rdma_mr req, uint32_t req_sz, uint32_t ds_id, void *next, bool after_tail, void *arg) {
     uint32_t thread_id = kv_app_get_thread_index();
     struct io_ctx *io = kv_mempool_get(io_pool);
     assert(io);
@@ -195,6 +200,15 @@ static void handler(void *req_h, kv_rdma_mr req, uint32_t req_sz, uint32_t ds_id
     kv_app_send(io->worker_id, io_start, io);
 }
 
+static void ring_init_cb(void *arg) {
+    copy_pool = kv_mempool_create(opt.copy_concurrency, sizeof(struct io_ctx));
+    server_mrs = kv_rdma_alloc_bulk(server, KV_RDMA_MR_SERVER, opt.value_size + sizeof(struct kv_msg) + KV_MAX_KEY_LENGTH, opt.copy_concurrency);
+    for (size_t i = 0; i < opt.copy_concurrency; i++) {
+        struct io_ctx *io = kv_mempool_get(copy_pool);
+        io->req = kv_rdma_mrs_get(server_mrs, i);
+        kv_mempool_put(copy_pool, io);
+    }
+}
 static uint32_t io_cnt;
 uint64_t log_bucket_num = 48;
 static void ring_init(void *arg) {
@@ -202,7 +216,24 @@ static void ring_init(void *arg) {
     server = kv_ring_init(opt.etcd_ip, opt.etcd_port, opt.thread_num, NULL, NULL);
     io_pool = kv_mempool_create(opt.concurrent_io_num, sizeof(struct io_ctx));
     kv_ring_server_init(opt.local_ip, opt.local_port, opt.ring_num, opt.vid_per_ssd, opt.ssd_num, opt.rpl_num,
-                        log_bucket_num, opt.concurrent_io_num, sizeof(struct kv_msg) + 16 + opt.value_size, handler, NULL, NULL, NULL);
+                        log_bucket_num, opt.concurrent_io_num, sizeof(struct kv_msg) + KV_MAX_KEY_LENGTH + opt.value_size,
+                        handler, NULL, ring_init_cb, NULL);
+}
+
+static void copy_get_buf(struct kv_data_store_copy_buf *buf, void *cb_arg) {
+    struct io_ctx *io = kv_mempool_get(copy_pool);
+    io->req_h = NULL;
+    io->msg = (struct kv_msg *)kv_rdma_get_req_buf(io->req);
+    io->worker_id = kv_app_get_thread_index();
+    io->server_thread = opt.ssd_num + random() % opt.thread_num;
+    io->msg->type = KV_MSG_SET;
+    *buf = (struct kv_data_store_copy_buf){
+        .key = KV_MSG_KEY(io->msg),
+        .key_length = &io->msg->key_len,
+        .value = KV_MSG_VALUE(io->msg),
+        .value_length = &io->msg->value_len,
+        .ctx = io,
+    };
 }
 
 static void worker_init(void *arg) {
@@ -211,6 +242,7 @@ static void worker_init(void *arg) {
     uint64_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET / opt.ssd_num;
     uint64_t value_log_block_num = self->storage.num_blocks * 0.95 - 2 * bucket_num;
     kv_data_store_init(&self->data_store, &self->storage, 0, bucket_num, log_bucket_num, value_log_block_num, 512, &ds_queue, self - workers);
+    kv_data_store_copy_init(&self->data_store, copy_get_buf, NULL, opt.copy_concurrency, io_fini, NULL);
     kv_app_send(opt.ssd_num, ring_init, NULL);
 }
 #define KEY_PER_BKT_SEGMENT (KV_ITEM_PER_BUCKET)

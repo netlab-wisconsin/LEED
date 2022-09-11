@@ -140,9 +140,10 @@ static inline void set_ring_id(uint8_t *vid, uint32_t log_ring_num, uint32_t rin
     *(uint64_t *)vid |= (uint64_t)ring_id << (64 - log_ring_num);
 }
 static inline void mask_vnode_id(uint8_t *vid, uint32_t log_bkt_num) {
-    uint64_t mask = ~((1ULL << (64 - log_bkt_num)) - 1);
-    *(uint64_t *)vid &= mask;
+    uint64_t mask = (1ULL << (64 - log_bkt_num)) - 1;
+    *(uint64_t *)vid |= mask;
 }
+// keys from (vnode_a, vnode_b] are belong to b.
 static struct vid_entry *find_vid_entry(struct vid_ring *ring, char *vid) {
     if (CIRCLEQ_EMPTY(ring)) return NULL;
     uint64_t base_vid = get_vid_64(CIRCLEQ_LAST(ring)->vid.vid) + 1;
@@ -168,53 +169,43 @@ static struct vid_entry *find_vid_by_node(struct vid_ring *ring, struct kv_node 
 
 struct vnode_chain {
     struct vid_ring *ring;
-    struct vid_entry *base;  // may be a invalid vnode
+    struct vid_entry *base, *copy;  // may be a invalid vnode
+    uint32_t rpl_num;
+    struct vid_entry *vids[0];
 };
 
-static struct vid_entry *get_vnode_from_chain(struct vnode_chain *chain, int32_t index, struct vid_entry *base, bool pre_copy) {
-    // index: -1 for tail, 0 for head, chain_len for pre_coping vnode.
-    // atmost one invalid vnode exists in a ring(chain).
-    struct vid_entry *invalid = NULL, *tail = NULL, *x = base && !pre_copy ? base : chain->base;
-    int32_t i = 0;
-    while (i < (int32_t)chain->base->node->info.rpl_num) {
+static struct vnode_chain *get_chain(char *key) {
+    struct kv_ring *self = &g_ring;
+    if (self->rings == NULL) return NULL;
+    struct vid_ring *ring = self->rings[kv_app_get_thread_index() - self->thread_id];
+    ring = ring + get_ring_id(key, self->log_ring_num);
+    struct vid_entry *base = find_vid_entry(ring, key);
+    if (base == NULL) return NULL;
+    uint32_t rpl_num = base->node->info.rpl_num;
+    struct vnode_chain *chain = kv_malloc(sizeof(struct vnode_chain) + sizeof(struct vid_entry *) * rpl_num);
+    *chain = (struct vnode_chain){ring, base, NULL, 0};
+    struct vid_entry *x = chain->base, *invalid = NULL;
+    while (chain->rpl_num < rpl_num) {
         if (x->state == VID_RUNNING) {
-            if (i == index) return x;
-            tail = x;
-            ++i;
+            chain->vids[chain->rpl_num] = x;
+            chain->rpl_num++;
         } else {
             if (invalid != NULL) {
                 fprintf(stderr, "two failed vnodes in a hash ring!\n");
                 exit(-1);
             }
             invalid = x;
+            if (invalid->state == VID_LEAVING) rpl_num--;
         }
         if ((x = CIRCLEQ_LOOP_NEXT(chain->ring, x, entry)) == chain->base) break;
     }
-    if (index == -1) return tail;
-    if (pre_copy && index == i && invalid != NULL) {
+    if (invalid != NULL) {
         if (invalid->state == VID_LEAVING && x != chain->base)
-            return x;  // pre_copy to the next vnode
+            chain->copy = x;  // pre_copy to the next vnode
         if (invalid->state == VID_COPYING)
-            return invalid;  // pre_copy to new vnode.
+            chain->copy = invalid;  // pre_copy to new vnode.
     }
-    return NULL;
-}
-static inline struct vid_entry *get_vnode(struct vnode_chain *chain, int32_t index) {
-    return get_vnode_from_chain(chain, index, NULL, false);
-}
-static inline struct vid_entry *get_vnode_next(struct vnode_chain *chain, struct vid_entry *base) {
-    return get_vnode_from_chain(chain, 1, base, false);
-}
-
-static bool get_chain(struct vnode_chain *chain, char *key) {
-    assert(chain);
-    struct kv_ring *self = &g_ring;
-    if (self->rings == NULL) return false;
-    struct vid_ring *ring = self->rings[kv_app_get_thread_index() - self->thread_id];
-    chain->ring = ring + get_ring_id(key, self->log_ring_num);
-    chain->base = find_vid_entry(chain->ring, key);
-    if (chain->base == NULL) return false;
-    return true;
+    return chain;
 }
 
 // --- dispatch ---
@@ -242,31 +233,38 @@ static void dispatch_send_cb(connection_handle h, bool success, kv_rdma_mr req, 
 #if DISPATCH_TYPE == 0
 static bool try_send_req(struct dispatch_ctx *ctx) {
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(ctx->req);
-    struct vnode_chain chain;
-    if (get_chain(&chain, KV_MSG_KEY(msg)) == false) return false;
+    struct vnode_chain *chain = get_chain(KV_MSG_KEY(msg));
+    if (chain == NULL) return false;
     msg->hop = 1;
     if (msg->type == KV_MSG_GET) {
-        struct kv_ds_q_info q_info[chain.base->node->info.rpl_num];
-        uint32_t io_cnt[chain.base->node->info.rpl_num];
+        struct kv_ds_q_info q_info[chain->rpl_num];
+        uint32_t io_cnt[chain->rpl_num];
         uint32_t i = 0;
-        for (struct vid_entry *x = get_vnode(&chain, 0); x != NULL; x = get_vnode_next(&chain, x)) {
+        for (; i < chain->rpl_num; i++) {
+            struct vid_entry *x = chain->vids[i];
             q_info[i] = x->node->ds_queue.q_info[x->vid.ds_id];
             io_cnt[i] = x->node->ds_queue.io_cnt[x->vid.ds_id];
-            i++;
         }
         struct kv_ds_q_info *y = kv_ds_queue_find(q_info, io_cnt, i, kv_ds_op_cost(KV_DS_GET));
-        if (y == NULL) return false;
-        struct vid_entry *dst = get_vnode(&chain, y - q_info);
+        if (y == NULL) {
+            kv_free(chain);
+            return false;
+        }
+        struct vid_entry *dst = chain->vids[y - q_info];
         ctx->ds_id = dst->vid.ds_id;
         ctx->node = dst->node;
         ctx->node->ds_queue.io_cnt[ctx->ds_id]++;
         ctx->node->ds_queue.q_info[ctx->ds_id] = *y;
         ctx->node->req_cnt++;
         kv_rdma_send_req(dst->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->resp, ctx->resp_addr, dispatch_send_cb, ctx);
+        kv_free(chain);
         return true;
     } else {
-        struct vid_entry *head = get_vnode(&chain, 0);
-        if (head == NULL) return false;
+        if (chain->rpl_num == 0) {
+            kv_free(chain);
+            return false;
+        }
+        struct vid_entry *head = chain->vids[0];
         uint32_t cost = kv_ds_op_cost(msg->type == KV_MSG_SET ? KV_DS_SET : KV_DS_DEL);
         struct kv_ds_q_info q_info = head->node->ds_queue.q_info[head->vid.ds_id];
         uint32_t io_cnt = head->node->ds_queue.io_cnt[head->vid.ds_id];
@@ -277,8 +275,10 @@ static bool try_send_req(struct dispatch_ctx *ctx) {
             ctx->node->ds_queue.q_info[ctx->ds_id] = q_info;
             ctx->node->req_cnt++;
             kv_rdma_send_req(head->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->resp, ctx->resp_addr, dispatch_send_cb, ctx);
+            kv_free(chain);
             return true;
         }
+        kv_free(chain);
         return false;
     }
 }
@@ -711,41 +711,59 @@ static int vid_ring_stat_cmp(const void *_a, const void *_b) {
 static void rdma_req_handler_wrapper(void *req_h, kv_rdma_mr req, uint32_t req_sz, void *arg) {
     struct kv_ring *self = &g_ring;
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(req);
-    struct vnode_chain chain;
+    struct vnode_chain *chain = NULL;
     if (self->is_server_exiting) goto send_nak;
-    if (get_chain(&chain, KV_MSG_KEY(msg)) == false) goto send_nak;
+    chain = get_chain(KV_MSG_KEY(msg));
+    if (chain == NULL) goto send_nak;
     if (msg->type == KV_MSG_SET || msg->type == KV_MSG_DEL) {
-        struct vid_entry *local = get_vnode(&chain, msg->hop - 1);
+        struct vid_entry *local, *next = NULL;
+        if (msg->hop == chain->rpl_num + 1) {
+            local = chain->copy;
+        } else if (msg->hop < chain->rpl_num + 1) {
+            local = chain->vids[msg->hop - 1];
+        } else {
+            goto send_nak;
+        }
         if (local == NULL || !local->node->is_local) goto send_nak;
-        struct vid_entry *next = get_vnode_next(&chain, local);
+
+        bool after_tail = msg->hop == chain->rpl_num || msg->hop == chain->rpl_num + 1;
+        if (msg->hop < chain->rpl_num) {
+            next = chain->vids[msg->hop];
+        } else if (msg->hop == chain->rpl_num && chain->copy) {
+            next = chain->copy;
+        }
         if (next) {
             msg->hop++;
             next->node->req_cnt++;
         }
-        self->req_handler(req_h, req, req_sz, local->vid.ds_id, next ? next->node : NULL, arg);
+        self->req_handler(req_h, req, req_sz, local->vid.ds_id, next ? next->node : NULL, after_tail, arg);
+        kv_free(chain);
         return;
     } else if (msg->type == KV_MSG_GET) {
         if (msg->hop == 1) {
-            struct vid_entry *x;
-            for (x = get_vnode(&chain, 0); x != NULL; x = get_vnode_next(&chain, x))
-                if (x->node->is_local) break;
-            if (x == NULL) goto send_nak;
-            struct vid_entry *tail = get_vnode_from_chain(&chain, -1, x, false);
+            uint32_t i = 0;
+            for (uint32_t i = 0; i < chain->rpl_num; i++)
+                if (chain->vids[i]->node->is_local) break;
+            if (i == chain->rpl_num) goto send_nak;
+            struct vid_entry *tail = chain->vids[chain->rpl_num - 1];
             if (!tail->node->is_local) {
                 msg->hop++;
                 tail->node->req_cnt++;
             }
-            self->req_handler(req_h, req, req_sz, x->vid.ds_id, tail->node->is_local ? NULL : tail->node, arg);
+            self->req_handler(req_h, req, req_sz, chain->vids[i]->vid.ds_id, tail->node->is_local ? NULL : tail->node, tail->node->is_local, arg);
+            kv_free(chain);
             return;
         } else if (msg->hop == 2) {
-            struct vid_entry *tail = get_vnode(&chain, -1);
+            struct vid_entry *tail = chain->vids[chain->rpl_num - 1];
             if (!tail->node->is_local) goto send_nak;
-            self->req_handler(req_h, req, req_sz, tail->vid.ds_id, NULL, arg);
+            self->req_handler(req_h, req, req_sz, tail->vid.ds_id, NULL, true, arg);
+            kv_free(chain);
             return;
         }
     }
     assert(false);
 send_nak:
+    if (chain) kv_free(chain);
     msg->type = KV_MSG_OUTDATED;
     msg->value_len = 0;
     kv_rdma_make_resp(req_h, (uint8_t *)msg, KV_MSG_SIZE(msg));

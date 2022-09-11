@@ -1,8 +1,10 @@
 #ifndef _KV_RING_H_
 #define _KV_RING_H_
 #include "kv_rdma.h"
+
 typedef void (*kv_ring_cb)(void *arg);
-typedef void (*kv_ring_req_handler)(void *req_h, kv_rdma_mr req, uint32_t req_sz, uint32_t ds_id, void *next, void *arg);
+typedef void (*kv_ring_req_handler)(void *req_h, kv_rdma_mr req, uint32_t req_sz, uint32_t ds_id,
+                                    void *next, bool after_tail, void *arg);
 
 void kv_ring_dispatch(kv_rdma_mr req, kv_rdma_mr resp, void *resp_addr, kv_ring_cb cb, void *cb_arg);  // for clients
 void kv_ring_forward(void *node, kv_rdma_mr req, kv_ring_cb cb, void *cb_arg);                         // for servers
