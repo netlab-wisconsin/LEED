@@ -400,13 +400,6 @@ void kv_data_store_copy_commit(struct kv_data_store_copy_buf *buf) {
     copy_scheduler(ctx);
 }
 
-// static void copy_read_val_cb(bool success, void *arg) {
-//     if (success == false) {
-//         fprintf(stderr, "kv_datastore: copy_read_val failed.\n");
-//         exit(-1);
-//     }
-// }
-
 static void copy_consumer(struct copy_ctx_t *ctx) {
     while (ctx->iocnt < ctx->buf_num) {
         struct copy_read_val_ctx *read_val = TAILQ_FIRST(&ctx->queue);

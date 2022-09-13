@@ -106,10 +106,12 @@ struct io_ctx {
     uint32_t worker_id;
     uint32_t server_thread;
     kv_rdma_mr req;
-    bool need_forward;
+    bool need_forward, in_copy_pool;
     void *next_node;
+    uint32_t vnode_type;
     kv_data_store_ctx ds_ctx;
     uint32_t msg_type;
+    struct kv_data_store_copy_buf *copy_buf;
 };
 
 struct kv_mempool *io_pool, *copy_pool;
@@ -124,7 +126,13 @@ static void send_response(void *arg) {
 
 static void forward_cb(void *arg) {
     struct io_ctx *io = arg;
-    if (io->need_forward && (io->msg_type == KV_MSG_SET || io->msg_type == KV_MSG_DEL)) {
+    if (io->in_copy_pool) {
+        struct kv_data_store_copy_buf *copy_buf = io->copy_buf;
+        kv_mempool_put(copy_pool, io);
+        kv_data_store_copy_commit(copy_buf);
+        return;
+    }
+    if (io->vnode_type == KV_RING_VNODE && (io->msg_type == KV_MSG_SET || io->msg_type == KV_MSG_DEL)) {
         struct kv_data_store *ds = &(workers + io->worker_id)->data_store;
         kv_data_store_clean(ds, KV_MSG_KEY(io->msg), io->msg->key_len);
     }
@@ -138,9 +146,13 @@ static void forward_cb(void *arg) {
 
 static void io_fini(bool success, void *arg) {
     struct io_ctx *io = arg;
+    if (io->in_copy_pool && success == false) {
+        fprintf(stderr, "kv_server: copy failed.\n");
+        exit(-1);
+    }
     if (!success) {
         io->msg->type = KV_MSG_ERR;
-        if (io->need_forward && (io->msg_type == KV_MSG_SET || io->msg_type == KV_MSG_DEL)) {
+        if (io->vnode_type == KV_RING_VNODE && (io->msg_type == KV_MSG_SET || io->msg_type == KV_MSG_DEL)) {
             struct kv_data_store *ds = &(workers + io->worker_id)->data_store;
             kv_data_store_clean(ds, KV_MSG_KEY(io->msg), io->msg->key_len);
         }
@@ -151,31 +163,37 @@ static void io_fini(bool success, void *arg) {
         if (io->msg->type == KV_MSG_SET) io->msg->value_len = 0;
         io->msg->type = KV_MSG_OK;
     }
-    kv_ring_forward(io->next_node, io->need_forward ? io->req : NULL, forward_cb, io);
+    kv_ring_forward(io->next_node, io->need_forward ? io->req : NULL, io->in_copy_pool, forward_cb, io);
 }
 
 static void io_start(void *arg) {
     struct io_ctx *io = arg;
     struct worker_t *self = workers + io->worker_id;
+    io->need_forward = false;
     switch (io->msg->type) {
+        case KV_MSG_DEL:
         case KV_MSG_SET:
-            if (io->need_forward) kv_data_store_dirty(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len);
-            io->ds_ctx = kv_data_store_set(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, KV_MSG_VALUE(io->msg),
-                                           io->msg->value_len, io_fini, arg);
+            if (io->vnode_type == KV_RING_VNODE) kv_data_store_dirty(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len);
+            if (io->msg->type == KV_MSG_SET)
+                io->ds_ctx = kv_data_store_set(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len,
+                                               KV_MSG_VALUE(io->msg), io->msg->value_len, io_fini, arg);
+            else {
+                assert(io->msg->value_len == 0);
+                io->ds_ctx = kv_data_store_delete(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, io_fini, arg);
+            }
+            if (io->vnode_type == KV_RING_TAIL)
+                io->need_forward = kv_data_store_copy_forward(&self->data_store, KV_MSG_KEY(io->msg));
+            else if (io->vnode_type == KV_RING_VNODE)
+                io->need_forward = true;
             break;
         case KV_MSG_GET:
-            if (kv_data_store_is_dirty(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len) && io->need_forward) {
+            if (kv_data_store_is_dirty(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len) && io->vnode_type == KV_RING_VNODE) {
+                io->need_forward = true;
                 io_fini(true, arg);
             } else {
-                io->need_forward = false;
                 kv_data_store_get(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, KV_MSG_VALUE(io->msg),
                                   &io->msg->value_len, io_fini, arg);
             }
-            break;
-        case KV_MSG_DEL:
-            assert(io->msg->value_len == 0);
-            if (io->need_forward) kv_data_store_dirty(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len);
-            io->ds_ctx = kv_data_store_delete(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, io_fini, arg);
             break;
         case KV_MSG_TEST:
             io_fini(true, io);
@@ -184,8 +202,41 @@ static void io_start(void *arg) {
             assert(false);
     }
 }
+struct server_copy_ctx {
+    bool start;
+    uint32_t ds_id;
+    uint8_t *key_start;
+    uint8_t *key_end;
+    bool del;
+};
+static void copy_fini(void *arg) {
+    struct server_copy_ctx *ctx = arg;
+    kv_ring_stop_copy(ctx->key_start, ctx->key_end);
+    kv_free(ctx);
+}
+static void on_copy_fini(bool success, void *arg) {
+    assert(success);
+    kv_app_send(opt.ssd_num, copy_fini, arg);
+}
+static void on_copy_msg(void *arg) {
+    struct server_copy_ctx *ctx = arg;
+    struct worker_t *self = workers + ctx->ds_id;
+    if (ctx->start) {
+        kv_data_store_copy_add_key_range(&self->data_store, ctx->key_start, ctx->key_end, on_copy_fini, ctx);
+    } else {
+        kv_data_store_copy_del_key_range(&self->data_store, ctx->key_start, ctx->key_end);
+        if (ctx->del) kv_data_store_del_range(&self->data_store, ctx->key_start, ctx->key_end);
+        kv_free(ctx);
+    }
+}
 
-static void handler(void *req_h, kv_rdma_mr req, uint32_t req_sz, uint32_t ds_id, void *next, bool after_tail, void *arg) {
+static void ring_copy_cb(bool start, uint32_t ds_id, uint8_t *key_start, uint8_t *key_end, bool del, void *arg) {
+    struct server_copy_ctx *ctx = kv_malloc(sizeof(*ctx));
+    *ctx = (struct server_copy_ctx){start, ds_id, key_start, key_end, del};
+    kv_app_send(ds_id, on_copy_msg, ctx);
+}
+
+static void handler(void *req_h, kv_rdma_mr req, uint32_t req_sz, uint32_t ds_id, void *next, uint32_t vnode_type, void *arg) {
     uint32_t thread_id = kv_app_get_thread_index();
     struct io_ctx *io = kv_mempool_get(io_pool);
     assert(io);
@@ -195,7 +246,8 @@ static void handler(void *req_h, kv_rdma_mr req, uint32_t req_sz, uint32_t ds_id
     io->server_thread = thread_id;
     io->req = req;
     io->next_node = next;
-    io->need_forward = next != NULL;
+    io->in_copy_pool = false;
+    io->vnode_type = vnode_type;
     io->msg_type = io->msg->type;
     kv_app_send(io->worker_id, io_start, io);
 }
@@ -218,6 +270,7 @@ static void ring_init(void *arg) {
     kv_ring_server_init(opt.local_ip, opt.local_port, opt.ring_num, opt.vid_per_ssd, opt.ssd_num, opt.rpl_num,
                         log_bucket_num, opt.concurrent_io_num, sizeof(struct kv_msg) + KV_MAX_KEY_LENGTH + opt.value_size,
                         handler, NULL, ring_init_cb, NULL);
+    kv_ring_register_copy_cb(ring_copy_cb, NULL);
 }
 
 static void copy_get_buf(struct kv_data_store_copy_buf *buf, void *cb_arg) {
@@ -227,6 +280,8 @@ static void copy_get_buf(struct kv_data_store_copy_buf *buf, void *cb_arg) {
     io->worker_id = kv_app_get_thread_index();
     io->server_thread = opt.ssd_num + random() % opt.thread_num;
     io->msg->type = KV_MSG_SET;
+    io->next_node = NULL;
+    io->in_copy_pool = true;
     *buf = (struct kv_data_store_copy_buf){
         .key = KV_MSG_KEY(io->msg),
         .key_length = &io->msg->key_len,
@@ -234,6 +289,7 @@ static void copy_get_buf(struct kv_data_store_copy_buf *buf, void *cb_arg) {
         .value_length = &io->msg->value_len,
         .ctx = io,
     };
+    io->copy_buf = buf;
 }
 
 static void worker_init(void *arg) {
