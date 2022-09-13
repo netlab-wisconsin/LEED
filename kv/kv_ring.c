@@ -140,9 +140,11 @@ static inline size_t ring_size(struct vid_ring *ring) {
 
 static inline uint64_t get_vid_64(uint8_t *vid) { return *(uint64_t *)vid; }
 static inline uint32_t get_ring_id(uint8_t *vid, uint32_t log_ring_num) {
+    if (log_ring_num == 0) return 0;
     return get_vid_64(vid) >> (64 - log_ring_num);
 }
 static inline void set_ring_id(uint8_t *vid, uint32_t log_ring_num, uint32_t ring_id) {
+    if (log_ring_num == 0) return;
     *(uint64_t *)vid &= ((1ULL << (64 - log_ring_num)) - 1);
     *(uint64_t *)vid |= (uint64_t)ring_id << (64 - log_ring_num);
 }
@@ -455,7 +457,7 @@ static void start_stop_copy(bool start, struct vid_ring *ring, struct vid_entry 
     struct vid_entry *x = vnode;
     for (size_t i = 0; i < vnode->node->info.rpl_num; i++) {
         struct vnode_chain *chain = get_chain(x->vid.vid);
-        assert(chain->copy == x);
+        assert(chain->copy == vnode);
         struct vid_entry *tail = chain->vids[chain->rpl_num - 1];
         // the local node must be the tail of the hash chain
         if (tail->node->is_local && self->copy_cb) {
@@ -484,15 +486,15 @@ static void update_ring(void *arg) {
             vnode->state = VID_JOINING;
             vnode->cp_cnt++;
             if (master_thread) {
-                if (vnode->node->is_local) {
+                if (vnode->node->is_local && strcmp(ctx->src_id, self->local_id) == 0) {
                     sprintf(key, "/rings/%u/1/%s/", ctx->ring_id, self->local_id);  // running
                     kvEtcdPut(key, &vnode->vid, sizeof(vnode->vid), &self->vid_lease);
-                } else if (strcmp(ctx->src_id, ctx->node_id) == 0) {
+                } else if (!vnode->node->is_local && strcmp(ctx->src_id, ctx->node_id) == 0) {
                     if (vnode_join_copyable(ring + ctx->ring_id, vnode)) {
-                        sprintf(key, "/rings/%u/0/%s/%s", ctx->ring_id, vnode->node->node_id, self->local_id);  // joining
+                        sprintf(key, "/rings/%u/0/%s/%s/", ctx->ring_id, vnode->node->node_id, self->local_id);  // joining
                         kvEtcdPut(key, &vnode->vid, sizeof(vnode->vid), &self->vid_lease);
                     }
-                } else if (strcmp(ctx->src_id, self->local_id) == 0) {
+                } else if (!vnode->node->is_local && strcmp(ctx->src_id, self->local_id) == 0) {
                     start_stop_copy(true, ring + ctx->ring_id, vnode);
                 }
             }
@@ -738,6 +740,7 @@ static inline const char *key_next(const char *s1) {
 static void msg_handler(enum kv_etcd_msg_type msg, const char *key, uint32_t key_len, const void *val, uint32_t val_len) {
     // if msg == KV_ETCD_MSG_DEL, val_len == 0
     const char *key_end = key + key_len;
+    assert(*(key_end - 1) == '/');
     struct kv_ring *self = &g_ring;
     if (*(key++) != '/') return;
     if (key_cmp("nodes", key)) {
@@ -896,9 +899,9 @@ void kv_ring_server_init(char *local_ip, char *local_port, uint32_t ring_num, ui
     assert(local_ip && local_port);
     struct kv_ring *self = &g_ring;
 
-    uint32_t log_ring_num = 31;
-    while (1U << log_ring_num >= ring_num) log_ring_num--;
-    ring_init(++log_ring_num);
+    uint32_t log_ring_num = 0;
+    while ((ring_num - 1) >> log_ring_num) log_ring_num++;
+    ring_init(log_ring_num);
     ring_num = 1U << log_ring_num;
 
     self->req_handler = handler;

@@ -502,6 +502,7 @@ void kv_data_store_copy_add_key_range(struct kv_data_store *self, uint8_t *start
         ctx->next_range = range;
     }
     CIRCLEQ_INSERT_HEAD(&ctx->key_ranges, range, entry);
+    copy_scheduler(ctx);
 }
 void kv_data_store_copy_del_key_range(struct kv_data_store *self, uint8_t *start_key, uint8_t *end_key) {
     struct copy_ctx_t *ctx = self->copy_ctx;
@@ -531,7 +532,6 @@ void kv_data_store_copy_init(struct kv_data_store *self, kv_data_store_get_buf_c
     ctx->iocnt = 0;
     ctx->queue_size = 0;
     self->copy_ctx = ctx;
-    copy_scheduler(ctx);
 }
 
 void kv_data_store_copy_fini(struct kv_data_store *self) {
