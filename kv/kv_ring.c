@@ -452,7 +452,7 @@ static bool vnode_leave_copyable(struct vid_ring *ring, struct vid_entry *vid) {
     }
     return false;
 }
-static void start_stop_copy(bool start, struct vid_ring *ring, struct vid_entry *vnode) {
+static void start_stop_copy(bool is_start, struct vid_ring *ring, struct vid_entry *vnode) {
     struct kv_ring *self = &g_ring;
     struct vid_entry *x = vnode;
     for (size_t i = 0; i < vnode->node->info.rpl_num; i++) {
@@ -461,10 +461,21 @@ static void start_stop_copy(bool start, struct vid_ring *ring, struct vid_entry 
         struct vid_entry *tail = chain->vids[chain->rpl_num - 1];
         // the local node must be the tail of the hash chain
         if (tail->node->is_local && self->copy_cb) {
-            uint8_t *start_key = CIRCLEQ_LOOP_PREV(ring, chain->base, entry)->vid.vid;
-            if (start) chain->copy->copy_io_cnt++;
             bool del = chain->rpl_num == vnode->node->info.rpl_num;
-            self->copy_cb(start, tail->vid.ds_id, start_key, chain->base->vid.vid, del, self->copy_cb_arg);
+            // since the datastore is unaware of the multiple rings, we may need to split the key range.
+            uint64_t start = get_vid_64(CIRCLEQ_LOOP_PREV(ring, chain->base, entry)->vid.vid) + 1;
+            uint64_t end = get_vid_64(chain->base->vid.vid) + 1;
+            if (start > end && end != 0) {
+                uint64_t ring_start = 0, ring_end = 0, ring_id = get_ring_id(chain->base->vid.vid, self->log_ring_num);
+                set_ring_id((uint8_t *)&ring_start, self->log_ring_num, ring_id);
+                set_ring_id((uint8_t *)&ring_end, self->log_ring_num, ring_id + 1);
+                if (is_start) chain->copy->copy_io_cnt += 2;
+                self->copy_cb(chain->base->vid.vid, is_start, chain->base->vid.ds_id, ring_start, end, del, self->copy_cb_arg);
+                self->copy_cb(chain->base->vid.vid, is_start, chain->base->vid.ds_id, start, ring_end, del, self->copy_cb_arg);
+            }else{
+                if (is_start) chain->copy->copy_io_cnt++;
+                self->copy_cb(chain->base->vid.vid, is_start, chain->base->vid.ds_id, start, end, del, self->copy_cb_arg);
+            }            
         }
         kv_free(chain);
         if ((x = CIRCLEQ_LOOP_PREV(ring, x, entry)) == vnode) break;
@@ -810,9 +821,9 @@ void kv_ring_register_copy_cb(kv_ring_copy_cb copy_cb, void *cb_arg) {
     self->copy_cb = copy_cb;
     self->copy_cb_arg = cb_arg;
 }
-void kv_ring_stop_copy(uint8_t *key_start, uint8_t *key_end) {
+void kv_ring_stop_copy(uint8_t *range_id) {
     struct kv_ring *self = &g_ring;
-    struct vnode_chain *chain = get_chain(key_end);
+    struct vnode_chain *chain = get_chain(range_id);
     assert(chain->copy);
     if (--chain->copy->copy_io_cnt) return;
     uint32_t ring_id = chain->ring - self->rings[0], type = chain->copy->state == VID_JOINING ? 0 : 2;

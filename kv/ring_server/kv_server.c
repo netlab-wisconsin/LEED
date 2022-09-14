@@ -203,15 +203,16 @@ static void io_start(void *arg) {
     }
 }
 struct server_copy_ctx {
-    bool start;
+    uint8_t *range_id;
+    bool is_start;
     uint32_t ds_id;
-    uint8_t *key_start;
-    uint8_t *key_end;
+    uint64_t key_start;
+    uint64_t key_end;
     bool del;
 };
 static void copy_fini(void *arg) {
     struct server_copy_ctx *ctx = arg;
-    kv_ring_stop_copy(ctx->key_start, ctx->key_end);
+    kv_ring_stop_copy(ctx->range_id);
     kv_free(ctx);
 }
 static void on_copy_fini(bool success, void *arg) {
@@ -221,18 +222,18 @@ static void on_copy_fini(bool success, void *arg) {
 static void on_copy_msg(void *arg) {
     struct server_copy_ctx *ctx = arg;
     struct worker_t *self = workers + ctx->ds_id;
-    if (ctx->start) {
-        kv_data_store_copy_add_key_range(&self->data_store, ctx->key_start, ctx->key_end, on_copy_fini, ctx);
+    if (ctx->is_start) {
+        kv_data_store_copy_add_key_range(&self->data_store, (uint8_t *)&ctx->key_start, (uint8_t *)&ctx->key_end, on_copy_fini, ctx);
     } else {
-        kv_data_store_copy_del_key_range(&self->data_store, ctx->key_start, ctx->key_end);
-        if (ctx->del) kv_data_store_del_range(&self->data_store, ctx->key_start, ctx->key_end);
+        kv_data_store_copy_del_key_range(&self->data_store, (uint8_t *)&ctx->key_start, (uint8_t *)&ctx->key_end);
+        if (ctx->del) kv_data_store_del_range(&self->data_store, (uint8_t *)&ctx->key_start, (uint8_t *)&ctx->key_end);
         kv_free(ctx);
     }
 }
 
-static void ring_copy_cb(bool start, uint32_t ds_id, uint8_t *key_start, uint8_t *key_end, bool del, void *arg) {
+static void ring_copy_cb(uint8_t *range_id, bool is_start, uint32_t ds_id, uint64_t key_start, uint64_t key_end, bool del, void *arg) {
     struct server_copy_ctx *ctx = kv_malloc(sizeof(*ctx));
-    *ctx = (struct server_copy_ctx){start, ds_id, key_start, key_end, del};
+    *ctx = (struct server_copy_ctx){range_id, is_start, ds_id, key_start, key_end, del};
     kv_app_send(ds_id, on_copy_msg, ctx);
 }
 
