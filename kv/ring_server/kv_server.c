@@ -273,7 +273,7 @@ static void ring_init(void *arg) {
     kv_ring_register_copy_cb(ring_copy_cb, NULL);
 }
 
-static void copy_get_buf(struct kv_data_store_copy_buf *buf, void *cb_arg) {
+static void copy_get_buf(uint8_t *key, uint8_t key_len, uint32_t val_len, struct kv_data_store_copy_buf *buf, void *cb_arg) {
     struct io_ctx *io = kv_mempool_get(copy_pool);
     io->req_h = NULL;
     io->msg = (struct kv_msg *)kv_rdma_get_req_buf(io->req);
@@ -282,13 +282,10 @@ static void copy_get_buf(struct kv_data_store_copy_buf *buf, void *cb_arg) {
     io->msg->type = KV_MSG_SET;
     io->next_node = NULL;
     io->in_copy_pool = true;
-    *buf = (struct kv_data_store_copy_buf){
-        .key = KV_MSG_KEY(io->msg),
-        .key_length = &io->msg->key_len,
-        .value = KV_MSG_VALUE(io->msg),
-        .value_length = &io->msg->value_len,
-        .ctx = io,
-    };
+    io->msg->key_len = key_len;
+    kv_memcpy(KV_MSG_KEY(io->msg), key, key_len);
+    io->msg->value_len = val_len;
+    *buf = (struct kv_data_store_copy_buf){.val_buf = KV_MSG_VALUE(io->msg), .ctx = io};
     io->copy_buf = buf;
 }
 
@@ -298,7 +295,7 @@ static void worker_init(void *arg) {
     uint64_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET / opt.ssd_num;
     uint64_t value_log_block_num = self->storage.num_blocks * 0.95 - 2 * bucket_num;
     kv_data_store_init(&self->data_store, &self->storage, 0, bucket_num, log_bucket_num, value_log_block_num, 512, &ds_queue, self - workers);
-    kv_data_store_copy_init(&self->data_store, copy_get_buf, NULL, opt.copy_concurrency, io_fini, NULL);
+    kv_data_store_copy_init(&self->data_store, copy_get_buf, NULL, opt.copy_concurrency, io_fini);
     kv_app_send(opt.ssd_num, ring_init, NULL);
 }
 #define KEY_PER_BKT_SEGMENT (KV_ITEM_PER_BUCKET)

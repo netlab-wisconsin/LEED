@@ -503,8 +503,10 @@ static void update_ring(void *arg) {
             assert(vnode != NULL);
             assert(vnode->state == VID_JOINING);
             if (--vnode->cp_cnt == 0) {
-                if (master_thread && !vnode->node->is_local) {
-                    start_stop_copy(false, ring + ctx->ring_id, vnode);
+                if (master_thread) {
+                    if (!vnode->node->is_local && strcmp(ctx->src_id, self->local_id) == 0) {
+                        start_stop_copy(false, ring + ctx->ring_id, vnode);
+                    }
                 }
                 vnode->state = VID_RUNNING;
             }
@@ -533,8 +535,10 @@ static void update_ring(void *arg) {
             assert(vnode != NULL);
             assert(vnode->state == VID_LEAVING);
             if (--vnode->rm_cnt == 0) {
-                if (master_thread && !vnode->node->is_local) {
-                    start_stop_copy(false, ring + ctx->ring_id, vnode);
+                if (master_thread) {
+                    if (!vnode->node->is_local && strcmp(ctx->src_id, self->local_id) == 0) {
+                        start_stop_copy(false, ring + ctx->ring_id, vnode);
+                    }
                 }
                 vnode_delete(ctx, ring, vnode);
             }

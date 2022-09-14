@@ -375,7 +375,6 @@ struct copy_ctx_t {
     kv_data_store_get_buf_cb get_buf;
     void *arg;
     kv_data_store_cb copy_cb;
-    void *cb_arg;
     uint32_t iocnt, queue_size;
     struct key_range_t *next_range;  // used by producer
     TAILQ_HEAD(, copy_read_val_ctx)
@@ -407,14 +406,10 @@ static void copy_consumer(struct copy_ctx_t *ctx) {
         TAILQ_REMOVE(&ctx->queue, read_val, entry);
         ctx->queue_size--;
         ctx->iocnt++;
-        ctx->get_buf(&read_val->buf, ctx->arg);
         struct kv_item *item = read_val->item;
-        *read_val->buf.key_length = item->key_length;
-        kv_memcpy(read_val->buf.key, item->key, item->key_length);
-        *read_val->buf.value_length = item->value_length;
-        read_val->buf.ctx = ctx->cb_arg;
-        kv_value_log_read(&ctx->self->value_log, item->value_offset, read_val->buf.value, item->value_length,
-                          ctx->copy_cb, &read_val->buf);
+        ctx->get_buf(item->key, item->key_length, item->value_length, &read_val->buf, ctx->arg);
+        kv_value_log_read(&ctx->self->value_log, item->value_offset, read_val->buf.val_buf, item->value_length,
+                          ctx->copy_cb, read_val->buf.ctx);
     }
 }
 
@@ -455,9 +450,11 @@ static bool copy_producer(struct copy_ctx_t *ctx) {
                 range->copied = (range->copied + 1) % id_space_size;
                 continue;
             }
+            assert(range->seg.empty);
             kv_bucket_seg_init(&range->seg, range->to_copy);
             assert(range->item_num == 0);
             kv_bucket_lock(&ctx->self->bucket_log, &range->segs, copy_lock_cb, range);
+            range->to_copy = (range->to_copy + 1) % id_space_size;
             return true;
         }
         range->copied = range->end;
@@ -496,6 +493,7 @@ void kv_data_store_copy_add_key_range(struct kv_data_store *self, uint8_t *start
     range->to_copy = range->start;
     range->item_num = 0;
     TAILQ_INIT(&range->segs);
+    range->seg.empty = true;
     TAILQ_INSERT_TAIL(&range->segs, &range->seg, entry);
     if (ctx->next_range == NULL) {
         assert(CIRCLEQ_EMPTY(&ctx->key_ranges));
@@ -523,9 +521,9 @@ void kv_data_store_copy_del_key_range(struct kv_data_store *self, uint8_t *start
     assert(false);
 }
 
-void kv_data_store_copy_init(struct kv_data_store *self, kv_data_store_get_buf_cb get_buf, void *arg, uint64_t buf_num, kv_data_store_cb cb, void *cb_arg) {
+void kv_data_store_copy_init(struct kv_data_store *self, kv_data_store_get_buf_cb get_buf, void *arg, uint64_t buf_num, kv_data_store_cb cb) {
     struct copy_ctx_t *ctx = kv_malloc(sizeof(*ctx));
-    *ctx = (struct copy_ctx_t){self, buf_num, get_buf, arg, cb, cb_arg};
+    *ctx = (struct copy_ctx_t){self, buf_num, get_buf, arg, cb};
     TAILQ_INIT(&ctx->queue);
     CIRCLEQ_INIT(&ctx->key_ranges);
     ctx->next_range = NULL;
