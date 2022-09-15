@@ -19,6 +19,7 @@ struct {
     uint32_t thread_num;
     uint32_t producer_num;
     uint32_t concurrent_io_num;
+    int stat_interval;
     bool seq_read, fill, seq_write, del;
     char json_config_file[1024];
     char workload_file[1024];
@@ -30,6 +31,7 @@ struct {
          .producer_num = 1,
          .value_size = 1024,
          .concurrent_io_num = 32,
+         .stat_interval = -1,
          .json_config_file = "config.json",
          .server_ip = "192.168.1.13",
          .seq_read = false,
@@ -43,7 +45,7 @@ static void help(void) {
 }
 static void get_options(int argc, char **argv) {
     int ch;
-    while ((ch = getopt(argc, argv, "htn:r:v:P:c:i:p:s:T:w:RWFD")) != -1) switch (ch) {
+    while ((ch = getopt(argc, argv, "htn:r:v:P:c:i:p:s:T:w:I:RWFD")) != -1) switch (ch) {
             case 'h':
                 help();
                 break;
@@ -67,6 +69,9 @@ static void get_options(int argc, char **argv) {
                 break;
             case 'p':
                 strcpy(opt.server_port, optarg);
+                break;
+            case 'I':
+                opt.stat_interval = atol(optarg);
                 break;
             case 'R':
                 opt.seq_read = true;
@@ -98,8 +103,10 @@ struct producer_t {
     uint64_t iocnt;
     double latency_sum;
     uint32_t io_per_record;
+    _Atomic uint64_t counter;  // for real time thourghput
 } * producers;
 
+static void *tp_poller = NULL;
 #define LATENCY_MAX_RECORD 0x100000  // 1M
 static double latency_records[LATENCY_MAX_RECORD];
 
@@ -123,6 +130,7 @@ static void ring_fini_cb(void *arg) {
 static void stop(void) {
     kv_rdma_free_bulk(req_mrs);
     kv_rdma_free_bulk(resp_mrs);
+    if (tp_poller) kv_app_poller_unregister(&tp_poller);
     kv_ring_fini(ring_fini_cb, NULL);
 }
 
@@ -163,14 +171,18 @@ static void test_fini(void *arg) {  // always running on producer 0
                 total_io = opt.num_items;
                 state = FILL;
             } else {
-                state = opt.del ? DEL : opt.seq_read ? SEQ_READ : opt.seq_write ? SEQ_WRITE : TRANSACTION;
+                state = opt.del ? DEL : opt.seq_read ? SEQ_READ
+                                    : opt.seq_write  ? SEQ_WRITE
+                                                     : TRANSACTION;
                 total_io = opt.operation_cnt;
             }
             break;
         case FILL:
             printf("Write rate: %lf\n", ((double)opt.num_items / timeval_diff(&tv_start, &tv_end)));
             puts("db created successfully.");
-            state = opt.del ? DEL : opt.seq_read ? SEQ_READ : opt.seq_write ? SEQ_WRITE : TRANSACTION;
+            state = opt.del ? DEL : opt.seq_read ? SEQ_READ
+                                : opt.seq_write  ? SEQ_WRITE
+                                                 : TRANSACTION;
             total_io = opt.operation_cnt;
             break;
         case SEQ_WRITE:
@@ -231,6 +243,7 @@ static void test(void *arg) {
     struct io_buffer_t *io = arg;
     struct producer_t *p = io ? producers + io->producer_id : producers;
     if (io && io->is_finished) {
+        p->counter++;
         struct timeval io_end;
         gettimeofday(&io_end, NULL);
         double latency = timeval_diff(&io->io_start, &io_end);
@@ -290,9 +303,27 @@ static void test(void *arg) {
     gettimeofday(&io->io_start, NULL);
     kv_ring_dispatch(io->req, io->resp, kv_rdma_get_resp_buf(io->resp), test, io);
 }
+static struct timeval stat_tv;
+static int throughput_poller(void *arg) {
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    double duration = timeval_diff(&stat_tv, &now);
+    stat_tv = now;
+    uint64_t sum = 0;
+    for (size_t i = 0; i < opt.producer_num; i++) {
+        sum += atomic_exchange(&producers[i].counter, 0);
+    }
+    printf("throughput: %lf IOPS\n", (double)sum / duration);
+    return 0;
+}
 
 static void ring_ready_cb(void *arg) { kv_app_send(opt.thread_num, test, NULL); }
-static void ring_init(void *arg) { rdma = kv_ring_init(opt.server_ip, opt.server_port, opt.thread_num, ring_ready_cb, NULL); }
+static void ring_init(void *arg) {
+    gettimeofday(&stat_tv, NULL);
+    if (opt.stat_interval > 0)
+        tp_poller = kv_app_poller_register(throughput_poller, NULL, opt.stat_interval * 1000);
+    rdma = kv_ring_init(opt.server_ip, opt.server_port, opt.thread_num, ring_ready_cb, NULL);
+}
 
 int main(int argc, char **argv) {
 #ifdef NDEBUG
