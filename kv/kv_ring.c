@@ -383,7 +383,7 @@ static void forward(void *arg) {
 void kv_ring_forward(void *_node, kv_rdma_mr req, bool is_copy_req, kv_ring_cb cb, void *cb_arg) {
     struct kv_ring *self = &g_ring;
     struct kv_node *node = _node;
-    if (req == NULL || node == NULL) {
+    if (!is_copy_req && (req == NULL || node == NULL)) {
         if (node) node->req_cnt--;
         if (cb) cb(cb_arg);
         return;
@@ -472,10 +472,10 @@ static void start_stop_copy(bool is_start, struct vid_ring *ring, struct vid_ent
                 if (is_start) chain->copy->copy_io_cnt += 2;
                 self->copy_cb(chain->base->vid.vid, is_start, chain->base->vid.ds_id, ring_start, end, del, self->copy_cb_arg);
                 self->copy_cb(chain->base->vid.vid, is_start, chain->base->vid.ds_id, start, ring_end, del, self->copy_cb_arg);
-            }else{
+            } else {
                 if (is_start) chain->copy->copy_io_cnt++;
                 self->copy_cb(chain->base->vid.vid, is_start, chain->base->vid.ds_id, start, end, del, self->copy_cb_arg);
-            }            
+            }
         }
         kv_free(chain);
         if ((x = CIRCLEQ_LOOP_PREV(ring, x, entry)) == vnode) break;

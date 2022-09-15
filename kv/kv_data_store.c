@@ -394,7 +394,11 @@ void kv_data_store_copy_commit(struct kv_data_store_copy_buf *buf) {
         range->copied = (range->copied + 1) % (1ULL << ctx->self->log_bucket_num);
         assert(range->copied == range->to_copy);
         kv_bucket_unlock(&ctx->self->bucket_log, &range->segs);
-        if (range->copied == range->end && range->cb) range->cb(true, range->cb_arg);
+        if (range->copied == range->end && range->cb) {
+            printf("%lx %lx %lx\n", range->start, range->to_copy, range->end);
+            range->cb(true, range->cb_arg);
+            range->cb = NULL;
+        }
     }
     copy_scheduler(ctx);
 }
@@ -407,7 +411,8 @@ static void copy_consumer(struct copy_ctx_t *ctx) {
         ctx->queue_size--;
         ctx->iocnt++;
         struct kv_item *item = read_val->item;
-        ctx->get_buf(item->key, item->key_length, item->value_length, &read_val->buf, ctx->arg);
+        read_val->buf.val_len = item->value_length;
+        ctx->get_buf(item->key, item->key_length, &read_val->buf, ctx->arg);
         kv_value_log_read(&ctx->self->value_log, item->value_offset, read_val->buf.val_buf, item->value_length,
                           ctx->copy_cb, read_val->buf.ctx);
     }
@@ -433,18 +438,17 @@ static void copy_lock_cb(void *arg) {
     copy_scheduler(ctx);
 }
 
-static bool copy_producer(struct copy_ctx_t *ctx) {
-    if (ctx->next_range == NULL) return false;
+static void copy_producer(struct copy_ctx_t *ctx) {
+    if (ctx->next_range == NULL) return;
     struct key_range_t *range_base = ctx->next_range;
     while (true) {
         struct key_range_t *range = ctx->next_range;
-        ctx->next_range = CIRCLEQ_LOOP_NEXT(&ctx->key_ranges, ctx->next_range, entry);
-        if (range->to_copy == range->end || range->to_copy != range->copied) {
-            if (ctx->next_range == range_base) return false;
-            continue;
-        }
+        // if (range->to_copy == range->end || range->to_copy != range->copied) {
+        //     if (ctx->next_range == range_base) return false;
+        //     continue;
+        // }
         uint64_t id_space_size = 1ULL << ctx->self->log_bucket_num;
-        for (; range->to_copy != range->end; range->to_copy = (range->to_copy + 1) % id_space_size) {
+        for (; range->to_copy != range->end && range->to_copy == range->copied; range->to_copy = (range->to_copy + 1) % id_space_size) {
             struct kv_bucket_meta meta = kv_bucket_meta_get(&ctx->self->bucket_log, range->to_copy);
             if (meta.chain_length == 0) {
                 range->copied = (range->copied + 1) % id_space_size;
@@ -454,12 +458,14 @@ static bool copy_producer(struct copy_ctx_t *ctx) {
             kv_bucket_seg_init(&range->seg, range->to_copy);
             assert(range->item_num == 0);
             kv_bucket_lock(&ctx->self->bucket_log, &range->segs, copy_lock_cb, range);
-            range->to_copy = (range->to_copy + 1) % id_space_size;
-            return true;
         }
-        range->copied = range->end;
-        if (range->cb) range->cb(true, range->cb_arg);
-        if (ctx->next_range == range_base) return false;
+        if (range->copied == range->end && range->cb) {
+            printf("%lx %lx %lx \n", range->start, range->to_copy, range->end);
+            range->cb(true, range->cb_arg);
+            range->cb = NULL;
+        }
+        ctx->next_range = CIRCLEQ_LOOP_NEXT(&ctx->key_ranges, ctx->next_range, entry);
+        if (ctx->next_range == range_base) return;
     }
 }
 static void copy_scheduler(struct copy_ctx_t *ctx) {

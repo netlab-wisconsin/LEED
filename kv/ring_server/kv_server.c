@@ -123,13 +123,23 @@ static void send_response(void *arg) {
     kv_rdma_make_resp(io->req_h, (uint8_t *)io->msg, KV_MSG_SIZE(io->msg));
     kv_mempool_put(io_pool, io);
 }
-
+static void io_fini(bool success, void *arg);
 static void forward_cb(void *arg) {
     struct io_ctx *io = arg;
     if (io->in_copy_pool) {
-        struct kv_data_store_copy_buf *copy_buf = io->copy_buf;
-        kv_mempool_put(copy_pool, io);
-        kv_data_store_copy_commit(copy_buf);
+        if (io->msg->type == KV_MSG_OK) {
+            struct kv_data_store_copy_buf *copy_buf = io->copy_buf;
+            kv_mempool_put(copy_pool, io);
+            kv_data_store_copy_commit(copy_buf);
+        } else if (io->msg->type == KV_MSG_OUTDATED) {
+            // retry
+            io->msg->type = KV_MSG_SET;
+            io->msg->value_len = io->copy_buf->val_len;
+            io_fini(true, io);
+        } else {
+            fprintf(stderr, "kv_server: copy forward failed.\n");
+            exit(-1);
+        }
         return;
     }
     if (io->vnode_type == KV_RING_VNODE && (io->msg_type == KV_MSG_SET || io->msg_type == KV_MSG_DEL)) {
@@ -274,7 +284,7 @@ static void ring_init(void *arg) {
     kv_ring_register_copy_cb(ring_copy_cb, NULL);
 }
 
-static void copy_get_buf(uint8_t *key, uint8_t key_len, uint32_t val_len, struct kv_data_store_copy_buf *buf, void *cb_arg) {
+static void copy_get_buf(uint8_t *key, uint8_t key_len, struct kv_data_store_copy_buf *buf, void *cb_arg) {
     struct io_ctx *io = kv_mempool_get(copy_pool);
     io->req_h = NULL;
     io->msg = (struct kv_msg *)kv_rdma_get_req_buf(io->req);
@@ -282,11 +292,13 @@ static void copy_get_buf(uint8_t *key, uint8_t key_len, uint32_t val_len, struct
     io->server_thread = opt.ssd_num + random() % opt.thread_num;
     io->msg->type = KV_MSG_SET;
     io->next_node = NULL;
+    io->need_forward = true;
     io->in_copy_pool = true;
     io->msg->key_len = key_len;
     kv_memcpy(KV_MSG_KEY(io->msg), key, key_len);
-    io->msg->value_len = val_len;
-    *buf = (struct kv_data_store_copy_buf){.val_buf = KV_MSG_VALUE(io->msg), .ctx = io};
+    io->msg->value_len = buf->val_len;
+    buf->val_buf = KV_MSG_VALUE(io->msg);
+    buf->ctx = io;
     io->copy_buf = buf;
 }
 
