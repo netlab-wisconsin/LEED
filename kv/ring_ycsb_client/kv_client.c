@@ -215,6 +215,7 @@ static void test_fini(void *arg) {  // always running on producer 0
             kv_app_send(opt.thread_num + i, test, io_buffers + j);
         }
     }
+    producers[opt.producer_num - 1].end_io = total_io;
     gettimeofday(&tv_start, NULL);
 }
 
