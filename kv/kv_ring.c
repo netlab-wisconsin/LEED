@@ -457,10 +457,10 @@ static void start_stop_copy(bool is_start, struct vid_ring *ring, struct vid_ent
     struct vid_entry *x = vnode;
     for (size_t i = 0; i < vnode->node->info.rpl_num; i++) {
         struct vnode_chain *chain = get_chain(x->vid.vid);
-        assert(chain->copy == vnode);
-        struct vid_entry *tail = chain->vids[chain->rpl_num - 1];
-        // the local node must be the tail of the hash chain
-        if (tail->node->is_local && self->copy_cb) {
+        struct vid_entry *tail = chain->vids[chain->rpl_num - 1];        
+        if (chain->copy && tail->node->is_local && self->copy_cb) {
+            // the local node must be the tail of the hash chain
+            assert(chain->copy == vnode);
             bool del = chain->rpl_num == vnode->node->info.rpl_num;
             // since the datastore is unaware of the multiple rings, we may need to split the key range.
             uint64_t start = get_vid_64(CIRCLEQ_LOOP_PREV(ring, chain->base, entry)->vid.vid) + 1;
