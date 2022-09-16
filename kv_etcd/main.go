@@ -104,7 +104,7 @@ func onKeyChange(kv *mvccpb.KeyValue, msgType mvccpb.Event_EventType) {
 //export kvEtcdInit
 func kvEtcdInit(ip, port *C.char, _msgHdl C.kv_etcd_msg_handler) C.int { //sync
 	funcChan = make(chan func() error, 4096)
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 16; i++ {
 		go func() {
 			for f := range funcChan {
 				if err := f(); err != nil {
@@ -125,13 +125,6 @@ func kvEtcdInit(ip, port *C.char, _msgHdl C.kv_etcd_msg_handler) C.int { //sync
 	}
 	msgHdl = _msgHdl
 	rch := cli.Watch(ctx, "", clientv3.WithPrefix())
-	go func() {
-		for resp := range rch {
-			for _, ev := range resp.Events {
-				onKeyChange(ev.Kv, ev.Type)
-			}
-		}
-	}()
 	gr, err := cli.Get(ctx, "", clientv3.WithPrefix(), clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend))
 	if err != nil {
 		return -2
@@ -139,6 +132,13 @@ func kvEtcdInit(ip, port *C.char, _msgHdl C.kv_etcd_msg_handler) C.int { //sync
 	for _, x := range gr.Kvs {
 		onKeyChange(x, mvccpb.PUT)
 	}
+	go func() {
+		for resp := range rch {
+			for _, ev := range resp.Events {
+				onKeyChange(ev.Kv, ev.Type)
+			}
+		}
+	}()
 	return 0
 }
 
