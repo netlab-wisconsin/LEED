@@ -191,7 +191,7 @@ static void io_start(void *arg) {
                 assert(io->msg->value_len == 0);
                 io->ds_ctx = kv_data_store_delete(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, io_fini, arg);
             }
-            if (io->vnode_type == KV_RING_TAIL)
+            if (io->vnode_type == KV_RING_TAIL && io->next_node != NULL)
                 io->need_forward = kv_data_store_copy_forward(&self->data_store, KV_MSG_KEY(io->msg));
             else if (io->vnode_type == KV_RING_VNODE)
                 io->need_forward = true;
