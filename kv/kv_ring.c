@@ -44,7 +44,7 @@ struct ring_change_ctx {
     uint32_t ring_id, state, msg_type;
     struct kv_node *node;
     uint32_t cnt;  // only used in master thread
-    TAILQ_ENTRY(ring_change_ctx)
+    STAILQ_ENTRY(ring_change_ctx)
     next;
 };
 
@@ -56,8 +56,7 @@ struct kv_node {
     bool is_connected, is_disconnecting, is_local, has_info;
     STAILQ_ENTRY(kv_node)
     next;
-    bool *ring_updating;
-    TAILQ_HEAD(, ring_change_ctx)
+    STAILQ_HEAD(, ring_change_ctx)
     ring_updates;
     UT_hash_handle hh;
     _Atomic uint32_t req_cnt;
@@ -483,7 +482,6 @@ static void start_stop_copy(bool is_start, struct vid_ring *ring, struct vid_ent
     }
 }
 
-static void update_rings(struct kv_node *node);
 static void update_ring(void *arg) {
     struct kv_ring *self = &g_ring;
     struct ring_change_ctx *ctx = arg;
@@ -563,18 +561,14 @@ static void update_ring(void *arg) {
     if (!master_thread) {
         kv_app_send(self->thread_id, update_ring, ctx);  // send ack to master thread
     } else {
-        ctx->node->ring_updating[ctx->ring_id] = false;
-        update_rings(ctx->node);
         kv_free(ctx);  // all the hash rings are updated
     }
 };
 static void update_rings(struct kv_node *node) {
     struct kv_ring *self = &g_ring;
-    struct ring_change_ctx *ctx, *tmp;
-    TAILQ_FOREACH_SAFE(ctx, &node->ring_updates, next, tmp) {
-        if (node->ring_updating[ctx->ring_id]) continue;
-        node->ring_updating[ctx->ring_id] = true;
-        TAILQ_REMOVE(&node->ring_updates, ctx, next);
+    struct ring_change_ctx *ctx;
+    while ((ctx = STAILQ_FIRST(&node->ring_updates)) != NULL) {
+        STAILQ_REMOVE_HEAD(&node->ring_updates, next);
         mask_vnode_id(ctx->vid.vid, node->info.log_bkt_num);
         assert(ctx->msg_type == KV_ETCD_MSG_DEL || ctx->ring_id == get_ring_id(ctx->vid.vid, self->log_ring_num));
         for (size_t i = 1; i < self->thread_num; i++) kv_app_send(self->thread_id + i, update_ring, ctx);
@@ -593,12 +587,12 @@ static void on_ring_change(void *arg) {
         strcpy(ctx->node->node_id, ctx->node_id);
         ctx->node->has_info = false;
         HASH_ADD_STR(self->nodes, node_id, ctx->node);
-        TAILQ_INIT(&ctx->node->ring_updates);
+        STAILQ_INIT(&ctx->node->ring_updates);
         update_now = false;
     } else if (!ctx->node->has_info || (!ctx->node->is_local && !ctx->node->is_connected)) {  // node not ready
         update_now = false;
     }
-    TAILQ_INSERT_HEAD(&ctx->node->ring_updates, ctx, next);
+    STAILQ_INSERT_TAIL(&ctx->node->ring_updates, ctx, next);
     if (update_now) update_rings(ctx->node);
 }
 
@@ -621,7 +615,6 @@ static void rdma_disconnect_cb(void *arg) {
         printf("client: disconnected to node %s.\n", node->node_id);
         kv_ds_queue_fini(&node->ds_queue);
         HASH_DEL(self->nodes, node);
-        kv_free(node->ring_updating);
         kv_free(node);
     } else {
         fprintf(stderr, "server %s disconnected actively, exiting\n", node->node_id);
@@ -731,8 +724,6 @@ static void on_node_put(void *arg) {
     node->is_disconnecting = false;
     node->is_connected = false;
     node->req_cnt = 0;
-    node->ring_updating = kv_calloc(1U << node->info.log_ring_num, sizeof(bool));
-    kv_memset(node->ring_updating, 0, (1U << node->info.log_ring_num) * sizeof(bool));
     kv_ds_queue_init(&node->ds_queue, node->info.ds_num);
     for (uint32_t i = 0; i < node->info.ds_num; ++i) {
         node->ds_queue.q_info[i] = (struct kv_ds_q_info){0, 0};
@@ -774,7 +765,7 @@ static void msg_handler(enum kv_etcd_msg_type msg, const char *key, uint32_t key
             key_copy(node->node_id, key);
             assert(val_len == sizeof(struct kv_etcd_node));
             kv_memcpy(&node->info, val, val_len);
-            TAILQ_INIT(&node->ring_updates);
+            STAILQ_INIT(&node->ring_updates);
             printf("PUT NODE %s\n", node->node_id);
             kv_app_send_without_token(self->thread_id, on_node_put, node);
         } else if (msg == KV_ETCD_MSG_DEL) {
