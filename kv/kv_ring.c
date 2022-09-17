@@ -418,9 +418,10 @@ static void ring_init(uint32_t log_ring_num) {
 };
 
 // --- hash ring: virtual nodes management ---
-static inline struct vid_entry *vnode_create(struct ring_change_ctx *ctx, struct vid_ring *ring, struct vid_entry *entry) {
+static inline struct vid_entry *vnode_create(struct ring_change_ctx *ctx, struct vid_ring *ring) {    
     struct vid_entry *x = kv_malloc(sizeof(*x));
     *x = (struct vid_entry){.vid = ctx->vid, .node = ctx->node, .cp_cnt = 0, .rm_cnt = 0, .copy_io_cnt = 0};
+    struct vid_entry *entry = find_vid_entry(ring + ctx->ring_id, ctx->vid.vid);
     if (entry) {
         CIRCLEQ_INSERT_BEFORE(ring + ctx->ring_id, entry, x, entry);
     } else {
@@ -457,7 +458,7 @@ static void start_stop_copy(bool is_start, struct vid_ring *ring, struct vid_ent
     struct vid_entry *x = vnode;
     for (size_t i = 0; i < vnode->node->info.rpl_num; i++) {
         struct vnode_chain *chain = get_chain(x->vid.vid);
-        struct vid_entry *tail = chain->vids[chain->rpl_num - 1];        
+        struct vid_entry *tail = chain->vids[chain->rpl_num - 1];
         if (chain->copy && tail->node->is_local && self->copy_cb) {
             // the local node must be the tail of the hash chain
             assert(chain->copy == vnode);
@@ -493,7 +494,7 @@ static void update_ring(void *arg) {
     struct vid_entry *vnode = find_vid_by_node(ring + ctx->ring_id, ctx->node);
     switch ((ctx->state << 1) | ctx->msg_type) {
         case (VID_JOINING << 1) | KV_ETCD_MSG_PUT:
-            if (vnode == NULL) vnode = vnode_create(ctx, ring, vnode);
+            if (vnode == NULL) vnode = vnode_create(ctx, ring);
             vnode->state = VID_JOINING;
             vnode->cp_cnt++;
             if (master_thread) {
@@ -523,7 +524,7 @@ static void update_ring(void *arg) {
             }
             break;
         case (VID_RUNNING << 1) | KV_ETCD_MSG_PUT:
-            if (vnode == NULL) vnode = vnode_create(ctx, ring, vnode);
+            if (vnode == NULL) vnode = vnode_create(ctx, ring);
             if (vnode->cp_cnt == 0) vnode->state = VID_RUNNING;
             break;
         case (VID_RUNNING << 1) | KV_ETCD_MSG_DEL:
@@ -534,7 +535,7 @@ static void update_ring(void *arg) {
                 assert(vnode->state == VID_LEAVING);
             break;
         case (VID_LEAVING << 1) | KV_ETCD_MSG_PUT:
-            if (vnode == NULL) vnode = vnode_create(ctx, ring, vnode);
+            if (vnode == NULL) vnode = vnode_create(ctx, ring);
             vnode->state = VID_LEAVING;
             if (master_thread) {
                 if (!vnode->node->is_local && strcmp(ctx->src_id, self->local_id) == 0) {
