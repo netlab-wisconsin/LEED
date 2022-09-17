@@ -123,7 +123,7 @@ static void send_response(void *arg) {
     kv_rdma_make_resp(io->req_h, (uint8_t *)io->msg, KV_MSG_SIZE(io->msg));
     kv_mempool_put(io_pool, io);
 }
-static void io_fini(bool success, void *arg);
+
 static void forward_cb(void *arg) {
     struct io_ctx *io = arg;
     if (io->in_copy_pool) {
@@ -135,7 +135,7 @@ static void forward_cb(void *arg) {
             // retry
             io->msg->type = KV_MSG_SET;
             io->msg->value_len = io->copy_buf->val_len;
-            io_fini(true, io);
+            kv_ring_forward(io->next_node, io->req, io->in_copy_pool, forward_cb, io);
         } else {
             fprintf(stderr, "kv_server: copy forward failed.\n");
             exit(-1);
@@ -160,15 +160,23 @@ static void io_fini(bool success, void *arg) {
         fprintf(stderr, "kv_server: copy failed.\n");
         exit(-1);
     }
+    struct kv_data_store *ds = &(workers + io->worker_id)->data_store;
     if (!success) {
         io->msg->type = KV_MSG_ERR;
         if (io->vnode_type == KV_RING_VNODE && (io->msg_type == KV_MSG_SET || io->msg_type == KV_MSG_DEL)) {
-            struct kv_data_store *ds = &(workers + io->worker_id)->data_store;
             kv_data_store_clean(ds, KV_MSG_KEY(io->msg), io->msg->key_len);
         }
         kv_app_send(io->server_thread, send_response, arg);
         return;
     }
+    if (io->msg_type == KV_MSG_SET || io->msg_type == KV_MSG_DEL) {
+        if (io->vnode_type == KV_RING_TAIL && io->next_node != NULL) {
+            io->need_forward = kv_data_store_copy_forward(ds, KV_MSG_KEY(io->msg));
+            kv_data_store_copy_range_counter(ds, KV_MSG_KEY(io->msg), false);
+        } else if (io->vnode_type == KV_RING_VNODE)
+            io->need_forward = true;
+    }
+
     if (io->need_forward == false) {  // is the last node
         if (io->msg->type == KV_MSG_SET) io->msg->value_len = 0;
         io->msg->type = KV_MSG_OK;
@@ -184,6 +192,8 @@ static void io_start(void *arg) {
         case KV_MSG_DEL:
         case KV_MSG_SET:
             if (io->vnode_type == KV_RING_VNODE) kv_data_store_dirty(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len);
+            if (io->vnode_type == KV_RING_TAIL && io->next_node != NULL)
+                kv_data_store_copy_range_counter(&self->data_store, KV_MSG_KEY(io->msg), true);
             if (io->msg->type == KV_MSG_SET)
                 io->ds_ctx = kv_data_store_set(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len,
                                                KV_MSG_VALUE(io->msg), io->msg->value_len, io_fini, arg);
@@ -191,10 +201,6 @@ static void io_start(void *arg) {
                 assert(io->msg->value_len == 0);
                 io->ds_ctx = kv_data_store_delete(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len, io_fini, arg);
             }
-            if (io->vnode_type == KV_RING_TAIL && io->next_node != NULL)
-                io->need_forward = kv_data_store_copy_forward(&self->data_store, KV_MSG_KEY(io->msg));
-            else if (io->vnode_type == KV_RING_VNODE)
-                io->need_forward = true;
             break;
         case KV_MSG_GET:
             if (kv_data_store_is_dirty(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len) && io->vnode_type == KV_RING_VNODE) {
@@ -235,8 +241,7 @@ static void on_copy_msg(void *arg) {
     if (ctx->is_start) {
         kv_data_store_copy_add_key_range(&self->data_store, (uint8_t *)&ctx->key_start, (uint8_t *)&ctx->key_end, on_copy_fini, ctx);
     } else {
-        kv_data_store_copy_del_key_range(&self->data_store, (uint8_t *)&ctx->key_start, (uint8_t *)&ctx->key_end);
-        if (ctx->del) kv_data_store_del_range(&self->data_store, (uint8_t *)&ctx->key_start, (uint8_t *)&ctx->key_end);
+        kv_data_store_copy_del_key_range(&self->data_store, (uint8_t *)&ctx->key_start, (uint8_t *)&ctx->key_end, ctx->del);
         kv_free(ctx);
     }
 }

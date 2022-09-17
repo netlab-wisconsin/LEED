@@ -46,9 +46,9 @@ static inline bool kv_data_store_is_dirty(struct kv_data_store *self, uint8_t *k
 
 void kv_data_store_copy_commit(struct kv_data_store_copy_buf *buf);
 bool kv_data_store_copy_forward(struct kv_data_store *self, uint8_t *key);
+void kv_data_store_copy_range_counter(struct kv_data_store *self, uint8_t *key, bool inc);
 void kv_data_store_copy_add_key_range(struct kv_data_store *self, uint8_t *start_key, uint8_t *end_key, kv_data_store_cb cb, void *cb_arg);
-void kv_data_store_copy_del_key_range(struct kv_data_store *self, uint8_t *start_key, uint8_t *end_key);
+void kv_data_store_copy_del_key_range(struct kv_data_store *self, uint8_t *start_key, uint8_t *end_key, bool delete_items);
 void kv_data_store_copy_init(struct kv_data_store *self, kv_data_store_get_buf_cb get_buf, void *arg, uint64_t buf_num, kv_data_store_cb cb);
 void kv_data_store_copy_fini(struct kv_data_store *self);
-void kv_data_store_del_range(struct kv_data_store *self, uint8_t *start_key, uint8_t *end_key);
 #endif
