@@ -68,6 +68,7 @@ struct vid_entry {
     uint32_t state;
     uint32_t cp_cnt, rm_cnt;
     uint32_t copy_io_cnt;
+    bool copy_to;
     CIRCLEQ_ENTRY(vid_entry)
     entry;
 };
@@ -418,9 +419,9 @@ static void ring_init(uint32_t log_ring_num) {
 };
 
 // --- hash ring: virtual nodes management ---
-static inline struct vid_entry *vnode_create(struct ring_change_ctx *ctx, struct vid_ring *ring) {    
+static inline struct vid_entry *vnode_create(struct ring_change_ctx *ctx, struct vid_ring *ring) {
     struct vid_entry *x = kv_malloc(sizeof(*x));
-    *x = (struct vid_entry){.vid = ctx->vid, .node = ctx->node, .cp_cnt = 0, .rm_cnt = 0, .copy_io_cnt = 0};
+    *x = (struct vid_entry){.vid = ctx->vid, .node = ctx->node, .cp_cnt = 0, .rm_cnt = 0, .copy_io_cnt = 0, .copy_to = false};
     struct vid_entry *entry = find_vid_entry(ring + ctx->ring_id, ctx->vid.vid);
     if (entry) {
         CIRCLEQ_INSERT_BEFORE(ring + ctx->ring_id, entry, x, entry);
@@ -515,10 +516,9 @@ static void update_ring(void *arg) {
             assert(vnode != NULL);
             assert(vnode->state == VID_JOINING);
             if (--vnode->cp_cnt == 0) {
-                if (master_thread) {
-                    if (!vnode->node->is_local && strcmp(ctx->src_id, self->local_id) == 0) {
-                        start_stop_copy(false, ring + ctx->ring_id, vnode);
-                    }
+                if (master_thread && vnode->copy_to) {
+                    vnode->copy_to = false;
+                    start_stop_copy(false, ring + ctx->ring_id, vnode);
                 }
                 vnode->state = VID_RUNNING;
             }
@@ -547,10 +547,9 @@ static void update_ring(void *arg) {
             assert(vnode != NULL);
             assert(vnode->state == VID_LEAVING);
             if (--vnode->rm_cnt == 0) {
-                if (master_thread) {
-                    if (!vnode->node->is_local && strcmp(ctx->src_id, self->local_id) == 0) {
-                        start_stop_copy(false, ring + ctx->ring_id, vnode);
-                    }
+                if (master_thread && vnode->copy_to) {
+                    vnode->copy_to = false;
+                    start_stop_copy(false, ring + ctx->ring_id, vnode);
                 }
                 vnode_delete(ctx, ring, vnode);
             }
@@ -832,6 +831,7 @@ void kv_ring_stop_copy(uint8_t *range_id) {
     sprintf(key, "/rings/%u/%u/%s/%s/", ring_id, type, chain->copy->node->node_id, self->local_id);  // leaving
     kvEtcdDel(key);
     kv_free(chain);
+    chain->copy->copy_to = true;
 }
 struct vid_ring_stat {
     uint32_t index;
