@@ -169,7 +169,6 @@ static void io_fini(bool success, void *arg) {
     if (io->msg_type == KV_MSG_SET || io->msg_type == KV_MSG_DEL) {
         if (io->vnode_type == KV_RING_TAIL && io->has_next_node) {
             io->need_forward = kv_data_store_copy_forward(ds, KV_MSG_KEY(io->msg));
-            // kv_data_store_copy_range_counter(ds, KV_MSG_KEY(io->msg), false);
         } else if (io->vnode_type == KV_RING_VNODE)
             io->need_forward = true;
     }
@@ -189,8 +188,6 @@ static void io_start(void *arg) {
         case KV_MSG_DEL:
         case KV_MSG_SET:
             if (io->vnode_type == KV_RING_VNODE) kv_data_store_dirty(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len);
-            // if (io->vnode_type == KV_RING_TAIL && io->next_node != NULL)
-            //     kv_data_store_copy_range_counter(&self->data_store, KV_MSG_KEY(io->msg), true);
             if (io->msg->type == KV_MSG_SET)
                 io->ds_ctx = kv_data_store_set(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len,
                                                KV_MSG_VALUE(io->msg), io->msg->value_len, io_fini, arg);
@@ -267,9 +264,9 @@ static void handler(void *req_h, kv_rdma_mr req, void *fwd_ctx, bool has_next_no
 }
 
 static void ring_init_cb(void *arg) {
-    copy_pool = kv_mempool_create(opt.copy_concurrency, sizeof(struct io_ctx));
-    server_mrs = kv_rdma_alloc_bulk(server, KV_RDMA_MR_SERVER, opt.value_size + sizeof(struct kv_msg) + KV_MAX_KEY_LENGTH, opt.copy_concurrency);
-    for (size_t i = 0; i < opt.copy_concurrency; i++) {
+    copy_pool = kv_mempool_create(opt.copy_concurrency * 2, sizeof(struct io_ctx));
+    server_mrs = kv_rdma_alloc_bulk(server, KV_RDMA_MR_SERVER, opt.value_size + sizeof(struct kv_msg) + KV_MAX_KEY_LENGTH, opt.copy_concurrency * 2);
+    for (size_t i = 0; i < opt.copy_concurrency * 2; i++) {
         struct io_ctx *io = kv_mempool_get(copy_pool);
         io->req = kv_rdma_mrs_get(server_mrs, i);
         kv_mempool_put(copy_pool, io);
@@ -312,7 +309,7 @@ static void worker_init(void *arg) {
     uint64_t bucket_num = opt.num_items / KV_ITEM_PER_BUCKET / opt.ssd_num;
     uint64_t value_log_block_num = self->storage.num_blocks * 0.95 - 2 * bucket_num;
     kv_data_store_init(&self->data_store, &self->storage, 0, bucket_num, log_bucket_num, value_log_block_num, 512, &ds_queue, self - workers);
-    kv_data_store_copy_init(&self->data_store, copy_get_buf, NULL, opt.copy_concurrency, io_fini);
+    kv_data_store_copy_init(&self->data_store, copy_get_buf, NULL, opt.copy_concurrency / opt.ssd_num, io_fini);
     kv_app_send(opt.ssd_num, ring_init, NULL);
 }
 #define KEY_PER_BKT_SEGMENT (KV_ITEM_PER_BUCKET)
