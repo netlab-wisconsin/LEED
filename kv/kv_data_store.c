@@ -189,8 +189,7 @@ static void set_finish_cb(bool success, void *arg) {
     struct set_ctx *ctx = arg;
     success = ctx->success && success;
     if (--ctx->io_cnt) return;  // sync
-    if (ctx->cb) ctx->cb(success, ctx->cb_arg);
-    if (!success) kv_data_store_set_commit(arg, false);
+    if (ctx->cb) ctx->cb(success, ctx->cb_arg);    
 }
 
 static void set_lock_cb(void *arg) {
@@ -310,7 +309,6 @@ void kv_data_store_del_commit(kv_data_store_ctx arg, bool success) {
 static void delete_finish_cb(bool success, void *arg) {
     struct delete_ctx *ctx = arg;
     if (ctx->cb) ctx->cb(success, ctx->cb_arg);
-    if (!success) kv_data_store_del_commit(arg, false);
 }
 
 static void delete_lock_cb(void *arg) {

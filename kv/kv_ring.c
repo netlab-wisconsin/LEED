@@ -406,19 +406,18 @@ static void forward(void *arg) {
 void kv_ring_forward(void *_ctx, kv_rdma_mr req, bool is_copy_req, kv_ring_cb cb, void *cb_arg) {
     struct kv_ring *self = &g_ring;
     struct forward_ctx *ctx = _ctx;
-    if (!is_copy_req && (req == NULL || ctx == NULL)) {
-        if (ctx) {
-            ctx->node->req_cnt--;
-            ctx->ring_version->counter--;
-            kv_free(ctx);
-        }
+    if (is_copy_req) {
+        assert(ctx == NULL);
+        ctx = kv_malloc(sizeof(*ctx));
+        ctx->node = NULL;
+    } else if (req == NULL || ctx->node == NULL) {
+        if (ctx->node) ctx->node->req_cnt--;
+        ctx->ring_version->counter--;
+        kv_free(ctx);
         if (cb) cb(cb_arg);
         return;
     }
-    if (is_copy_req) {
-        ctx = kv_malloc(sizeof(*ctx));
-        ctx->node = NULL;
-    }
+
     ctx->req = req;
     ctx->is_copy_req = is_copy_req;
     ctx->cb = cb;
@@ -900,9 +899,13 @@ static void rdma_req_handler_wrapper(void *req_h, kv_rdma_mr req, uint32_t req_s
     struct kv_ring *self = &g_ring;
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(req);
     struct vnode_chain *chain = NULL;
+    struct forward_ctx *ctx = NULL;
     if (self->is_server_exiting) goto send_nak;
     chain = get_chain(KV_MSG_KEY(msg));
     if (chain == NULL) goto send_nak;
+    ctx = kv_malloc(sizeof(*ctx));
+    ctx->ring_version = self->rings_version[get_ring_id(KV_MSG_KEY(msg), self->log_ring_num)] + chain->ring->version;
+    ctx->node = NULL;
     if (msg->type == KV_MSG_SET || msg->type == KV_MSG_DEL) {
         struct vid_entry *local, *next = NULL;
         if (msg->hop == chain->rpl_num + 1) {
@@ -922,16 +925,13 @@ static void rdma_req_handler_wrapper(void *req_h, kv_rdma_mr req, uint32_t req_s
         } else if (msg->hop == chain->rpl_num && chain->copy) {
             next = chain->copy;
         }
-        struct forward_ctx *ctx = NULL;
         if (next) {
-            ctx = kv_malloc(sizeof(*ctx));
             ctx->node = next->node;
-            ctx->ring_version = self->rings_version[get_ring_id(KV_MSG_KEY(msg), self->log_ring_num)] + chain->ring->version;
             msg->hop++;
             next->node->req_cnt++;
-            ctx->ring_version->counter++;
         }
-        self->req_handler(req_h, req, req_sz, local->vid.ds_id, ctx, vnode_type, arg);
+        ctx->ring_version->counter++;
+        self->req_handler(req_h, req, ctx, ctx->node != NULL, local->vid.ds_id, vnode_type, arg);
         kv_free(chain);
         return;
     } else if (msg->type == KV_MSG_GET) {
@@ -942,23 +942,21 @@ static void rdma_req_handler_wrapper(void *req_h, kv_rdma_mr req, uint32_t req_s
             if (i == chain->rpl_num) goto send_nak;
             struct vid_entry *tail = chain->vids[chain->rpl_num - 1];
             uint32_t vnode_type = KV_RING_TAIL;
-            struct forward_ctx *ctx = NULL;
             if (!tail->node->is_local) {
-                ctx = kv_malloc(sizeof(*ctx));
                 ctx->node = tail->node;
-                ctx->ring_version = self->rings_version[get_ring_id(KV_MSG_KEY(msg), self->log_ring_num)] + chain->ring->version;
                 msg->hop++;
                 tail->node->req_cnt++;
-                ctx->ring_version->counter++;
                 vnode_type = KV_RING_VNODE;
             }
-            self->req_handler(req_h, req, req_sz, chain->vids[i]->vid.ds_id, ctx, vnode_type, arg);
+            ctx->ring_version->counter++;
+            self->req_handler(req_h, req, ctx, ctx->node != NULL, chain->vids[i]->vid.ds_id, vnode_type, arg);
             kv_free(chain);
             return;
         } else if (msg->hop == 2) {
             struct vid_entry *tail = chain->vids[chain->rpl_num - 1];
             if (!tail->node->is_local) goto send_nak;
-            self->req_handler(req_h, req, req_sz, tail->vid.ds_id, NULL, KV_RING_TAIL, arg);
+            ctx->ring_version->counter++;
+            self->req_handler(req_h, req, ctx, ctx->node != NULL, tail->vid.ds_id, KV_RING_TAIL, arg);
             kv_free(chain);
             return;
         }
@@ -966,6 +964,7 @@ static void rdma_req_handler_wrapper(void *req_h, kv_rdma_mr req, uint32_t req_s
     assert(false);
 send_nak:
     if (chain) kv_free(chain);
+    if (ctx) kv_free(ctx);
     msg->type = KV_MSG_OUTDATED;
     msg->value_len = 0;
     kv_rdma_make_resp(req_h, (uint8_t *)msg, KV_MSG_SIZE(msg));

@@ -12,12 +12,12 @@ struct kv_ring_copy_info {
     bool del;
 };
 typedef void (*kv_ring_cb)(void *arg);
-typedef void (*kv_ring_req_handler)(void *req_h, kv_rdma_mr req, uint32_t req_sz, uint32_t ds_id,
-                                    void *next, uint32_t vnode_type, void *arg);
+typedef void (*kv_ring_req_handler)(void *req_h, kv_rdma_mr req, void *fwd_ctx, bool has_next_node,
+                                    uint32_t ds_id, uint32_t vnode_type, void *arg);
 typedef void (*kv_ring_copy_cb)(bool is_start, struct kv_ring_copy_info *info, void *arg);
 
 void kv_ring_dispatch(kv_rdma_mr req, kv_rdma_mr resp, void *resp_addr, kv_ring_cb cb, void *cb_arg);  // for clients
-void kv_ring_forward(void *_node, kv_rdma_mr req, bool is_copy_req, kv_ring_cb cb, void *cb_arg);      // for servers
+void kv_ring_forward(void *fwd_ctx, kv_rdma_mr req, bool is_copy_req, kv_ring_cb cb, void *cb_arg);    // for servers
 
 void kv_ring_register_copy_cb(kv_ring_copy_cb copy_cb, void *cb_arg);
 void kv_ring_stop_copy(struct kv_ring_copy_info *info);
