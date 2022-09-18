@@ -67,13 +67,27 @@ struct vid_entry {
     struct kv_node *node;
     uint32_t state;
     uint32_t cp_cnt, rm_cnt;
-    uint32_t copy_io_cnt;
-    bool copy_to;
     CIRCLEQ_ENTRY(vid_entry)
     entry;
 };
 
-CIRCLEQ_HEAD(vid_ring, vid_entry);
+struct vnode_ring {
+    CIRCLEQ_HEAD(, vid_entry)
+    head;
+    uint64_t version;
+    TAILQ_HEAD(, copy_range_ctx)
+    copy_ranges;
+    uint32_t range_size;
+};
+
+struct copy_range_ctx {
+    struct kv_ring_copy_info info;
+    struct vnode_ring *ring;
+    struct vid_entry *invalid;
+    uint64_t version;
+    TAILQ_ENTRY(copy_range_ctx)
+    entry;
+};
 
 struct dispatch_ctx {
     kv_rdma_mr req;
@@ -90,12 +104,17 @@ struct dispatch_ctx {
 };
 TAILQ_HEAD(dispatch_queue, dispatch_ctx);
 
+#define RING_VERSION_MAX 64
+struct ring_version_t {
+    _Atomic uint64_t counter;
+};
+
 struct kv_ring {
     kv_rdma_handle h;
     uint32_t thread_id, thread_num;
     char local_id[KV_MAX_NODEID_LEN];
     struct kv_node *nodes;
-    struct vid_ring **rings;
+    struct vnode_ring **rings;
     struct dispatch_queue *dqs;
     void **dq_pollers;
     uint32_t log_ring_num;
@@ -108,6 +127,7 @@ struct kv_ring {
     _Atomic bool is_server_exiting;
     kv_ring_copy_cb copy_cb;
     void *copy_cb_arg;
+    struct ring_version_t (*rings_version)[RING_VERSION_MAX];
 } g_ring;
 
 static void random_vid(char *vid) __attribute__((unused));
@@ -129,11 +149,11 @@ static inline void hash_vid(char *vid, char *ip, char *port, uint32_t index) {
     uint128 hash = CityHash128((const char *)&buf, sizeof(buf));
     kv_memcpy(vid, &hash, sizeof(hash));
 }
-static inline size_t ring_size(struct vid_ring *ring) {
-    if (CIRCLEQ_EMPTY(ring)) return 0;
+static inline size_t ring_size(struct vnode_ring *ring) {
+    if (CIRCLEQ_EMPTY(&ring->head)) return 0;
     size_t size = 0;
     struct vid_entry *x;
-    CIRCLEQ_FOREACH(x, ring, entry) {
+    CIRCLEQ_FOREACH(x, &ring->head, entry) {
         size++;
     }
     return size;
@@ -154,22 +174,22 @@ static inline void mask_vnode_id(uint8_t *vid, uint32_t log_bkt_num) {
     *(uint64_t *)vid |= mask;
 }
 // keys from (vnode_a, vnode_b] are belong to b.
-static struct vid_entry *find_vid_entry(struct vid_ring *ring, char *vid) {
-    if (CIRCLEQ_EMPTY(ring)) return NULL;
-    uint64_t base_vid = get_vid_64(CIRCLEQ_LAST(ring)->vid.vid) + 1;
+static struct vid_entry *find_vid_entry(struct vnode_ring *ring, char *vid) {
+    if (CIRCLEQ_EMPTY(&ring->head)) return NULL;
+    uint64_t base_vid = get_vid_64(CIRCLEQ_LAST(&ring->head)->vid.vid) + 1;
     uint64_t d = get_vid_64(vid) - base_vid;
     struct vid_entry *x;
-    CIRCLEQ_FOREACH(x, ring, entry) {
+    CIRCLEQ_FOREACH(x, &ring->head, entry) {
         if (get_vid_64(x->vid.vid) - base_vid >= d) break;
     }
-    assert(x != (const void *)(ring));
+    assert(x != (const void *)(&ring->head));
     return x;
 }
 
-static struct vid_entry *find_vid_by_node(struct vid_ring *ring, struct kv_node *node) {
-    if (CIRCLEQ_EMPTY(ring)) return NULL;
+static struct vid_entry *find_vid_by_node(struct vnode_ring *ring, struct kv_node *node) {
+    if (CIRCLEQ_EMPTY(&ring->head)) return NULL;
     struct vid_entry *x;
-    CIRCLEQ_FOREACH(x, ring, entry) {
+    CIRCLEQ_FOREACH(x, &ring->head, entry) {
         assert(x->node);
         if (x->node == node)
             return x;
@@ -178,8 +198,8 @@ static struct vid_entry *find_vid_by_node(struct vid_ring *ring, struct kv_node 
 }
 
 struct vnode_chain {
-    struct vid_ring *ring;
-    struct vid_entry *base, *copy;  // may be a invalid vnode
+    struct vnode_ring *ring;
+    struct vid_entry *base, *copy, *invalid;  // copy may point to a invalid vnode
     uint32_t rpl_num;
     struct vid_entry *vids[0];
 };
@@ -187,33 +207,33 @@ struct vnode_chain {
 static struct vnode_chain *get_chain(char *key) {
     struct kv_ring *self = &g_ring;
     if (self->rings == NULL) return NULL;
-    struct vid_ring *ring = self->rings[kv_app_get_thread_index() - self->thread_id];
+    struct vnode_ring *ring = self->rings[kv_app_get_thread_index() - self->thread_id];
     ring = ring + get_ring_id(key, self->log_ring_num);
     struct vid_entry *base = find_vid_entry(ring, key);
     if (base == NULL) return NULL;
     uint32_t rpl_num = base->node->info.rpl_num;
     struct vnode_chain *chain = kv_malloc(sizeof(struct vnode_chain) + sizeof(struct vid_entry *) * rpl_num);
-    *chain = (struct vnode_chain){ring, base, NULL, 0};
-    struct vid_entry *x = chain->base, *invalid = NULL;
+    *chain = (struct vnode_chain){ring, base, NULL, NULL, 0};
+    struct vid_entry *x = chain->base;
     while (chain->rpl_num < rpl_num) {
         if (x->state == VID_RUNNING) {
             chain->vids[chain->rpl_num] = x;
             chain->rpl_num++;
         } else {
-            if (invalid != NULL) {
+            if (chain->invalid != NULL) {
                 fprintf(stderr, "two failed vnodes in a hash ring!\n");
                 exit(-1);
             }
-            invalid = x;
-            if (invalid->state == VID_LEAVING) rpl_num--;
+            chain->invalid = x;
+            if (chain->invalid->state == VID_LEAVING) rpl_num--;
         }
-        if ((x = CIRCLEQ_LOOP_NEXT(chain->ring, x, entry)) == chain->base) break;
+        if ((x = CIRCLEQ_LOOP_NEXT(&chain->ring->head, x, entry)) == chain->base) break;
     }
-    if (invalid != NULL) {
-        if (invalid->state == VID_LEAVING && x != chain->base)
+    if (chain->invalid != NULL) {
+        if (chain->invalid->state == VID_LEAVING && x != chain->base)
             chain->copy = x;  // pre_copy to the next vnode
-        if (invalid->state == VID_JOINING)
-            chain->copy = invalid;  // pre_copy to new vnode.
+        if (chain->invalid->state == VID_JOINING)
+            chain->copy = chain->invalid;  // pre_copy to new vnode.
     }
     return chain;
 }
@@ -355,6 +375,7 @@ struct forward_ctx {
     kv_ring_cb cb;
     void *cb_arg;
     uint32_t thread_id;
+    struct ring_version_t *ring_version;
 };
 
 static void forward_cb(connection_handle h, bool success, kv_rdma_mr req, kv_rdma_mr resp, void *cb_arg) {
@@ -363,6 +384,7 @@ static void forward_cb(connection_handle h, bool success, kv_rdma_mr req, kv_rdm
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_resp_buf(resp);
     if (!success) msg->type = KV_MSG_ERR;
     if (ctx->cb) kv_app_send(ctx->thread_id, ctx->cb, ctx->cb_arg);
+    if (!ctx->is_copy_req) ctx->ring_version->counter--;
     kv_free(ctx);
 }
 
@@ -381,16 +403,27 @@ static void forward(void *arg) {
     kv_rdma_send_req(ctx->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->req, msg, forward_cb, ctx);
 }
 
-void kv_ring_forward(void *_node, kv_rdma_mr req, bool is_copy_req, kv_ring_cb cb, void *cb_arg) {
+void kv_ring_forward(void *_ctx, kv_rdma_mr req, bool is_copy_req, kv_ring_cb cb, void *cb_arg) {
     struct kv_ring *self = &g_ring;
-    struct kv_node *node = _node;
-    if (!is_copy_req && (req == NULL || node == NULL)) {
-        if (node) node->req_cnt--;
+    struct forward_ctx *ctx = _ctx;
+    if (!is_copy_req && (req == NULL || ctx == NULL)) {
+        if (ctx) {
+            ctx->node->req_cnt--;
+            ctx->ring_version->counter--;
+            kv_free(ctx);
+        }
         if (cb) cb(cb_arg);
         return;
     }
-    struct forward_ctx *ctx = kv_malloc(sizeof(*ctx));
-    *ctx = (struct forward_ctx){node, req, is_copy_req, cb, cb_arg, kv_app_get_thread_index()};
+    if (is_copy_req) {
+        ctx = kv_malloc(sizeof(*ctx));
+        ctx->node = NULL;
+    }
+    ctx->req = req;
+    ctx->is_copy_req = is_copy_req;
+    ctx->cb = cb;
+    ctx->cb_arg = cb_arg;
+    ctx->thread_id = kv_app_get_thread_index();
     if (ctx->thread_id >= self->thread_id && ctx->thread_id < self->thread_id + self->thread_num) {
         forward(ctx);
     } else {
@@ -402,10 +435,19 @@ static void ring_init(uint32_t log_ring_num) {
     struct kv_ring *self = &g_ring;
     if (self->rings == NULL) {
         self->log_ring_num = log_ring_num;
-        self->rings = kv_calloc(self->thread_num, sizeof(struct vid_ring *));
+        self->rings = kv_calloc(self->thread_num, sizeof(struct vnode_ring *));
+        self->rings_version = kv_calloc(1u << self->log_ring_num, sizeof(*self->rings_version));
+        for (size_t i = 0; i < 1u << self->log_ring_num; i++) {
+            for (size_t j = 0; j < RING_VERSION_MAX; j++) self->rings_version[i][j].counter = 0;
+        }
         for (size_t i = 0; i < self->thread_num; i++) {
-            self->rings[i] = kv_calloc(1u << self->log_ring_num, sizeof(struct vid_ring));
-            for (size_t j = 0; j < 1u << self->log_ring_num; j++) CIRCLEQ_INIT(self->rings[i] + j);
+            self->rings[i] = kv_calloc(1u << self->log_ring_num, sizeof(struct vnode_ring));
+            for (size_t j = 0; j < 1u << self->log_ring_num; j++) {
+                CIRCLEQ_INIT(&self->rings[i][j].head);
+                self->rings[i][j].version = 0;
+                TAILQ_INIT(&self->rings[i][j].copy_ranges);
+                self->rings[i][j].range_size = 0;
+            }
         }
     }
     if (self->dqs == NULL) {
@@ -419,42 +461,43 @@ static void ring_init(uint32_t log_ring_num) {
 };
 
 // --- hash ring: virtual nodes management ---
-static inline struct vid_entry *vnode_create(struct ring_change_ctx *ctx, struct vid_ring *ring) {
+static inline struct vid_entry *vnode_create(struct ring_change_ctx *ctx, struct vnode_ring *ring) {
     struct vid_entry *x = kv_malloc(sizeof(*x));
-    *x = (struct vid_entry){.vid = ctx->vid, .node = ctx->node, .cp_cnt = 0, .rm_cnt = 0, .copy_io_cnt = 0, .copy_to = false};
+    *x = (struct vid_entry){.vid = ctx->vid, .node = ctx->node, .cp_cnt = 0, .rm_cnt = 0};
     struct vid_entry *entry = find_vid_entry(ring + ctx->ring_id, ctx->vid.vid);
     if (entry) {
-        CIRCLEQ_INSERT_BEFORE(ring + ctx->ring_id, entry, x, entry);
+        CIRCLEQ_INSERT_BEFORE(&ring[ctx->ring_id].head, entry, x, entry);
     } else {
-        CIRCLEQ_INSERT_HEAD(ring + ctx->ring_id, x, entry);
+        CIRCLEQ_INSERT_HEAD(&ring[ctx->ring_id].head, x, entry);
     }
     return x;
 }
 
-static inline void vnode_delete(struct ring_change_ctx *ctx, struct vid_ring *ring, struct vid_entry *entry) {
-    CIRCLEQ_REMOVE(ring + ctx->ring_id, entry, entry);
+static inline void vnode_delete(struct ring_change_ctx *ctx, struct vnode_ring *ring, struct vid_entry *entry) {
+    CIRCLEQ_REMOVE(&ring[ctx->ring_id].head, entry, entry);
     kv_free(entry);
 }
 
-static bool vnode_join_copyable(struct vid_ring *ring, struct vid_entry *vid) {
+static bool vnode_join_copyable(struct vnode_ring *ring, struct vid_entry *vid) {
     struct vid_entry *x = vid;
     for (size_t i = 0; i < vid->node->info.rpl_num; i++) {
-        x = CIRCLEQ_LOOP_NEXT(ring, x, entry);
+        x = CIRCLEQ_LOOP_NEXT(&ring->head, x, entry);
         if (x == vid) break;
         if (x->node->is_local) return true;
     }
     return false;
 }
-static bool vnode_leave_copyable(struct vid_ring *ring, struct vid_entry *vid) {
-    if (CIRCLEQ_LOOP_PREV(ring, vid, entry)->node->is_local) return true;
+static bool vnode_leave_copyable(struct vnode_ring *ring, struct vid_entry *vid) {
+    if (CIRCLEQ_LOOP_PREV(&ring->head, vid, entry)->node->is_local) return true;
     uint32_t len = vid->node->info.rpl_num - 1;
     for (size_t i = 0; i < len; i++) {
-        vid = CIRCLEQ_LOOP_NEXT(ring, vid, entry);
+        vid = CIRCLEQ_LOOP_NEXT(&ring->head, vid, entry);
         if (vid->node->is_local) return true;
     }
     return false;
 }
-static void start_stop_copy(bool is_start, struct vid_ring *ring, struct vid_entry *vnode) {
+
+static void start_copy(struct vnode_ring *ring, struct vid_entry *vnode) {
     struct kv_ring *self = &g_ring;
     struct vid_entry *x = vnode;
     for (size_t i = 0; i < vnode->node->info.rpl_num; i++) {
@@ -462,25 +505,29 @@ static void start_stop_copy(bool is_start, struct vid_ring *ring, struct vid_ent
         struct vid_entry *tail = chain->vids[chain->rpl_num - 1];
         if (chain->copy && tail->node->is_local && self->copy_cb) {
             // the local node must be the tail of the hash chain
-            assert(chain->copy == vnode);
             bool del = chain->rpl_num == vnode->node->info.rpl_num;
             // since the datastore is unaware of the multiple rings, we may need to split the key range.
-            uint64_t start = get_vid_64(CIRCLEQ_LOOP_PREV(ring, chain->base, entry)->vid.vid) + 1;
+            uint64_t start = get_vid_64(CIRCLEQ_LOOP_PREV(&ring->head, chain->base, entry)->vid.vid) + 1;
             uint64_t end = get_vid_64(chain->base->vid.vid) + 1;
             if (start > end && end != 0) {
                 uint64_t ring_start = 0, ring_end = 0, ring_id = get_ring_id(chain->base->vid.vid, self->log_ring_num);
                 set_ring_id((uint8_t *)&ring_start, self->log_ring_num, ring_id);
                 set_ring_id((uint8_t *)&ring_end, self->log_ring_num, ring_id + 1);
-                if (is_start) chain->copy->copy_io_cnt += 2;
-                self->copy_cb(chain->base->vid.vid, is_start, chain->base->vid.ds_id, ring_start, end, del, self->copy_cb_arg);
-                self->copy_cb(chain->base->vid.vid, is_start, chain->base->vid.ds_id, start, ring_end, del, self->copy_cb_arg);
+                ring->range_size += 2;
+                struct copy_range_ctx *ctx[2] = {kv_malloc(sizeof(struct copy_range_ctx)), kv_malloc(sizeof(struct copy_range_ctx))};
+                *ctx[0] = (struct copy_range_ctx){{ring_start, end, tail->vid.ds_id, del}, ring, chain->invalid, ring->version};
+                *ctx[1] = (struct copy_range_ctx){{start, ring_end, tail->vid.ds_id, del}, ring, chain->invalid, ring->version};
+                self->copy_cb(true, &ctx[0]->info, self->copy_cb_arg);
+                self->copy_cb(true, &ctx[1]->info, self->copy_cb_arg);
             } else {
-                if (is_start) chain->copy->copy_io_cnt++;
-                self->copy_cb(chain->base->vid.vid, is_start, chain->base->vid.ds_id, start, end, del, self->copy_cb_arg);
+                ring->range_size++;
+                struct copy_range_ctx *ctx = kv_malloc(sizeof(struct copy_range_ctx));
+                *ctx = (struct copy_range_ctx){{start, end, tail->vid.ds_id, del}, ring, chain->invalid, ring->version};
+                self->copy_cb(true, &ctx->info, self->copy_cb_arg);
             }
         }
         kv_free(chain);
-        if ((x = CIRCLEQ_LOOP_PREV(ring, x, entry)) == vnode) break;
+        if ((x = CIRCLEQ_LOOP_PREV(&ring->head, x, entry)) == vnode) break;
     }
 }
 
@@ -491,7 +538,7 @@ static void update_ring(void *arg) {
     static char key[MAX_ETCD_KEY_LEN];
     if (master_thread)
         if (--ctx->cnt) return;
-    struct vid_ring *ring = self->rings[kv_app_get_thread_index() - self->thread_id];
+    struct vnode_ring *ring = self->rings[kv_app_get_thread_index() - self->thread_id];
     struct vid_entry *vnode = find_vid_by_node(ring + ctx->ring_id, ctx->node);
     switch ((ctx->state << 1) | ctx->msg_type) {
         case (VID_JOINING << 1) | KV_ETCD_MSG_PUT:
@@ -508,7 +555,7 @@ static void update_ring(void *arg) {
                         kvEtcdPut(key, &vnode->vid, sizeof(vnode->vid), &self->vid_lease);
                     }
                 } else if (!vnode->node->is_local && strcmp(ctx->src_id, self->local_id) == 0) {
-                    start_stop_copy(true, ring + ctx->ring_id, vnode);
+                    start_copy(ring + ctx->ring_id, vnode);
                 }
             }
             break;
@@ -516,11 +563,9 @@ static void update_ring(void *arg) {
             assert(vnode != NULL);
             assert(vnode->state == VID_JOINING);
             if (--vnode->cp_cnt == 0) {
-                if (master_thread && vnode->copy_to) {
-                    vnode->copy_to = false;
-                    start_stop_copy(false, ring + ctx->ring_id, vnode);
-                }
                 vnode->state = VID_RUNNING;
+                assert(self->rings_version[ctx->ring_id][(ring[ctx->ring_id].version + RING_VERSION_MAX - 1) % RING_VERSION_MAX].counter == 0);
+                ring[ctx->ring_id].version = (ring[ctx->ring_id].version + 1) % RING_VERSION_MAX;
             }
             break;
         case (VID_RUNNING << 1) | KV_ETCD_MSG_PUT:
@@ -539,7 +584,7 @@ static void update_ring(void *arg) {
             vnode->state = VID_LEAVING;
             if (master_thread) {
                 if (!vnode->node->is_local && strcmp(ctx->src_id, self->local_id) == 0) {
-                    start_stop_copy(true, ring + ctx->ring_id, vnode);
+                    start_copy(ring + ctx->ring_id, vnode);
                 }
             }
             break;
@@ -547,11 +592,9 @@ static void update_ring(void *arg) {
             assert(vnode != NULL);
             assert(vnode->state == VID_LEAVING);
             if (--vnode->rm_cnt == 0) {
-                if (master_thread && vnode->copy_to) {
-                    vnode->copy_to = false;
-                    start_stop_copy(false, ring + ctx->ring_id, vnode);
-                }
                 vnode_delete(ctx, ring, vnode);
+                assert(self->rings_version[ctx->ring_id][(ring[ctx->ring_id].version + RING_VERSION_MAX - 1) % RING_VERSION_MAX].counter == 0);
+                ring[ctx->ring_id].version = (ring[ctx->ring_id].version + 1) % RING_VERSION_MAX;
             }
             break;
         default:
@@ -601,7 +644,7 @@ static inline bool are_vnodes_leaving(struct kv_node *node) {
     struct kv_ring *self = &g_ring;
     for (uint32_t i = 0; i < 1u << self->log_ring_num; i++) {
         // ring 0 is the last updated ring.
-        struct vid_ring *ring = self->rings[0] + i;
+        struct vnode_ring *ring = self->rings[0] + i;
         struct vid_entry *vid = find_vid_by_node(ring, node);
         if (vid && vid->state != VID_LEAVING) return false;
     }
@@ -671,6 +714,19 @@ static int kv_conn_q_poller(void *arg) {
         kv_ring_fini(NULL, NULL);
         exit(0);  // TODO: call finish callback
     }
+    for (size_t i = 0; i < 1u << self->log_ring_num; i++) {
+        struct vnode_ring *ring = self->rings[0] + i;
+        struct copy_range_ctx *ctx, *tmp;
+        TAILQ_FOREACH_SAFE(ctx, &ring->copy_ranges, entry, tmp) {
+            if (ctx->version == ring->version) continue;
+            if (self->rings_version[i][ctx->version].counter == 0) {
+                assert(ring->range_size == 0);
+                self->copy_cb(false, &ctx->info, self->copy_cb_arg);
+                TAILQ_REMOVE(&ring->copy_ranges, ctx, entry);
+                kv_free(ctx);
+            }
+        }
+    }
     return 0;
 }
 static void on_node_del(void *arg) {
@@ -691,7 +747,7 @@ static void on_node_del(void *arg) {
 
     // tail-> write leaving ring
     for (uint32_t i = 0; i < 1u << self->log_ring_num; i++) {
-        struct vid_ring *ring = self->rings[0] + i;
+        struct vnode_ring *ring = self->rings[0] + i;
         if (ring_size(ring) <= node->info.rpl_num) continue;
         struct vid_entry *vid = find_vid_by_node(ring, node);
         if (vid == NULL) continue;
@@ -810,7 +866,7 @@ kv_rdma_handle kv_ring_init(char *etcd_ip, char *etcd_port, uint32_t thread_num,
     self->thread_num = thread_num;
     kv_rdma_init(&self->h, thread_num);
     kvEtcdInit(etcd_ip, etcd_port, msg_handler);
-    self->conn_q_poller = kv_app_poller_register(kv_conn_q_poller, self, 1000000);
+    self->conn_q_poller = kv_app_poller_register(kv_conn_q_poller, self, 100000);
     return self->h;
 }
 
@@ -821,17 +877,15 @@ void kv_ring_register_copy_cb(kv_ring_copy_cb copy_cb, void *cb_arg) {
     self->copy_cb = copy_cb;
     self->copy_cb_arg = cb_arg;
 }
-void kv_ring_stop_copy(uint8_t *range_id) {
+void kv_ring_stop_copy(struct kv_ring_copy_info *info) {
     struct kv_ring *self = &g_ring;
-    struct vnode_chain *chain = get_chain(range_id);
-    assert(chain->copy);
-    if (--chain->copy->copy_io_cnt) return;
-    uint32_t ring_id = chain->ring - self->rings[0], type = chain->copy->state == VID_JOINING ? 0 : 2;
+    struct copy_range_ctx *ctx = (struct copy_range_ctx *)info;
+    TAILQ_INSERT_TAIL(&ctx->ring->copy_ranges, ctx, entry);
+    if (--ctx->ring->range_size) return;
+    uint32_t ring_id = ctx->ring - self->rings[0], type = ctx->invalid->state == VID_JOINING ? 0 : 2;
     static uint8_t key[MAX_ETCD_KEY_LEN];
-    sprintf(key, "/rings/%u/%u/%s/%s/", ring_id, type, chain->copy->node->node_id, self->local_id);  // leaving
+    sprintf(key, "/rings/%u/%u/%s/%s/", ring_id, type, ctx->invalid->node->node_id, self->local_id);
     kvEtcdDel(key);
-    kv_free(chain);
-    chain->copy->copy_to = true;
 }
 struct vid_ring_stat {
     uint32_t index;
@@ -868,11 +922,16 @@ static void rdma_req_handler_wrapper(void *req_h, kv_rdma_mr req, uint32_t req_s
         } else if (msg->hop == chain->rpl_num && chain->copy) {
             next = chain->copy;
         }
+        struct forward_ctx *ctx = NULL;
         if (next) {
+            ctx = kv_malloc(sizeof(*ctx));
+            ctx->node = next->node;
+            ctx->ring_version = self->rings_version[get_ring_id(KV_MSG_KEY(msg), self->log_ring_num)] + chain->ring->version;
             msg->hop++;
             next->node->req_cnt++;
+            ctx->ring_version->counter++;
         }
-        self->req_handler(req_h, req, req_sz, local->vid.ds_id, next ? next->node : NULL, vnode_type, arg);
+        self->req_handler(req_h, req, req_sz, local->vid.ds_id, ctx, vnode_type, arg);
         kv_free(chain);
         return;
     } else if (msg->type == KV_MSG_GET) {
@@ -883,12 +942,17 @@ static void rdma_req_handler_wrapper(void *req_h, kv_rdma_mr req, uint32_t req_s
             if (i == chain->rpl_num) goto send_nak;
             struct vid_entry *tail = chain->vids[chain->rpl_num - 1];
             uint32_t vnode_type = KV_RING_TAIL;
+            struct forward_ctx *ctx = NULL;
             if (!tail->node->is_local) {
+                ctx = kv_malloc(sizeof(*ctx));
+                ctx->node = tail->node;
+                ctx->ring_version = self->rings_version[get_ring_id(KV_MSG_KEY(msg), self->log_ring_num)] + chain->ring->version;
                 msg->hop++;
                 tail->node->req_cnt++;
+                ctx->ring_version->counter++;
                 vnode_type = KV_RING_VNODE;
             }
-            self->req_handler(req_h, req, req_sz, chain->vids[i]->vid.ds_id, tail->node->is_local ? NULL : tail->node, vnode_type, arg);
+            self->req_handler(req_h, req, req_sz, chain->vids[i]->vid.ds_id, ctx, vnode_type, arg);
             kv_free(chain);
             return;
         } else if (msg->hop == 2) {
@@ -957,6 +1021,7 @@ void kv_ring_fini(kv_rdma_fini_cb cb, void *cb_arg) {
     if (self->rings) {
         for (size_t i = 0; i < self->thread_num; i++) kv_free(self->rings[i]);
         kv_free(self->rings);
+        kv_free(self->rings_version);
     }
     if (self->dqs) {
         for (size_t i = 0; i < self->thread_num; i++) kv_app_poller_unregister(&self->dq_pollers[i]);

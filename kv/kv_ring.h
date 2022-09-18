@@ -5,16 +5,22 @@ enum { KV_RING_VNODE,
        KV_RING_TAIL,
        KV_RING_COPY };
 
+struct kv_ring_copy_info {
+    uint64_t start;
+    uint64_t end;
+    uint16_t ds_id;
+    bool del;
+};
 typedef void (*kv_ring_cb)(void *arg);
 typedef void (*kv_ring_req_handler)(void *req_h, kv_rdma_mr req, uint32_t req_sz, uint32_t ds_id,
                                     void *next, uint32_t vnode_type, void *arg);
-typedef void (*kv_ring_copy_cb)(uint8_t * range_id, bool is_start, uint32_t ds_id, uint64_t key_start, uint64_t key_end, bool del, void *arg);
+typedef void (*kv_ring_copy_cb)(bool is_start, struct kv_ring_copy_info *info, void *arg);
 
 void kv_ring_dispatch(kv_rdma_mr req, kv_rdma_mr resp, void *resp_addr, kv_ring_cb cb, void *cb_arg);  // for clients
 void kv_ring_forward(void *_node, kv_rdma_mr req, bool is_copy_req, kv_ring_cb cb, void *cb_arg);      // for servers
 
 void kv_ring_register_copy_cb(kv_ring_copy_cb copy_cb, void *cb_arg);
-void kv_ring_stop_copy(uint8_t * range_id);
+void kv_ring_stop_copy(struct kv_ring_copy_info *info);
 // client: kv_ring_init(kv_rdma_init)
 // server: kv_ring_init(kv_rdma_init)->kv_ring_server_init(kv_rdma_listen)
 kv_rdma_handle kv_ring_init(char *etcd_ip, char *etcd_port, uint32_t thread_num, kv_ring_cb server_online_cb, void *arg);

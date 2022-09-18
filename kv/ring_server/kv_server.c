@@ -172,7 +172,7 @@ static void io_fini(bool success, void *arg) {
     if (io->msg_type == KV_MSG_SET || io->msg_type == KV_MSG_DEL) {
         if (io->vnode_type == KV_RING_TAIL && io->next_node != NULL) {
             io->need_forward = kv_data_store_copy_forward(ds, KV_MSG_KEY(io->msg));
-            kv_data_store_copy_range_counter(ds, KV_MSG_KEY(io->msg), false);
+            // kv_data_store_copy_range_counter(ds, KV_MSG_KEY(io->msg), false);
         } else if (io->vnode_type == KV_RING_VNODE)
             io->need_forward = true;
     }
@@ -192,8 +192,8 @@ static void io_start(void *arg) {
         case KV_MSG_DEL:
         case KV_MSG_SET:
             if (io->vnode_type == KV_RING_VNODE) kv_data_store_dirty(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len);
-            if (io->vnode_type == KV_RING_TAIL && io->next_node != NULL)
-                kv_data_store_copy_range_counter(&self->data_store, KV_MSG_KEY(io->msg), true);
+            // if (io->vnode_type == KV_RING_TAIL && io->next_node != NULL)
+            //     kv_data_store_copy_range_counter(&self->data_store, KV_MSG_KEY(io->msg), true);
             if (io->msg->type == KV_MSG_SET)
                 io->ds_ctx = kv_data_store_set(&self->data_store, KV_MSG_KEY(io->msg), io->msg->key_len,
                                                KV_MSG_VALUE(io->msg), io->msg->value_len, io_fini, arg);
@@ -219,7 +219,7 @@ static void io_start(void *arg) {
     }
 }
 struct server_copy_ctx {
-    uint8_t *range_id;
+    struct kv_ring_copy_info *info;
     bool is_start;
     uint32_t ds_id;
     uint64_t key_start;
@@ -228,7 +228,7 @@ struct server_copy_ctx {
 };
 static void copy_fini(void *arg) {
     struct server_copy_ctx *ctx = arg;
-    kv_ring_stop_copy(ctx->range_id);
+    kv_ring_stop_copy(ctx->info);
     kv_free(ctx);
 }
 static void on_copy_fini(bool success, void *arg) {
@@ -246,10 +246,10 @@ static void on_copy_msg(void *arg) {
     }
 }
 
-static void ring_copy_cb(uint8_t *range_id, bool is_start, uint32_t ds_id, uint64_t key_start, uint64_t key_end, bool del, void *arg) {
+static void ring_copy_cb(bool is_start, struct kv_ring_copy_info *info, void *arg) {
     struct server_copy_ctx *ctx = kv_malloc(sizeof(*ctx));
-    *ctx = (struct server_copy_ctx){range_id, is_start, ds_id, key_start, key_end, del};
-    kv_app_send(ds_id, on_copy_msg, ctx);
+    *ctx = (struct server_copy_ctx){info, is_start, info->ds_id, info->start, info->end, info->del};
+    kv_app_send(info->ds_id, on_copy_msg, ctx);
 }
 
 static void handler(void *req_h, kv_rdma_mr req, uint32_t req_sz, uint32_t ds_id, void *next, uint32_t vnode_type, void *arg) {

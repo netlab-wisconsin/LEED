@@ -583,6 +583,7 @@ void kv_data_store_copy_del_key_range(struct kv_data_store *self, uint8_t *start
         if (range->start == start_id && range->end == end_id) {
             range->deleting = true;
             range->delete_items = delete_items;
+            assert(range->counter == 0);
             if (range->counter == 0) del_key_range(range);
             return;
         }
