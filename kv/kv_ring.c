@@ -581,6 +581,7 @@ static void update_ring(void *arg) {
         case (VID_LEAVING << 1) | KV_ETCD_MSG_PUT:
             if (vnode == NULL) vnode = vnode_create(ctx, ring);
             vnode->state = VID_LEAVING;
+            vnode->rm_cnt++;
             if (master_thread) {
                 if (!vnode->node->is_local && strcmp(ctx->src_id, self->local_id) == 0) {
                     start_copy(ring + ctx->ring_id, vnode);
