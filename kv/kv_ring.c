@@ -639,13 +639,16 @@ static void on_ring_change(void *arg) {
 }
 
 // --- hash ring: nodes management ---
-static inline bool are_vnodes_leaving(struct kv_node *node) {
+static inline bool are_vnodes_gone(struct kv_node *node, bool is_leaving) {
     struct kv_ring *self = &g_ring;
     for (uint32_t i = 0; i < 1u << self->log_ring_num; i++) {
         // ring 0 is the last updated ring.
         struct vnode_ring *ring = self->rings[0] + i;
         struct vid_entry *vid = find_vid_by_node(ring, node);
-        if (vid && vid->state != VID_LEAVING) return false;
+        if (vid) {
+            if (is_leaving && vid->state == VID_LEAVING) continue;
+            return false;
+        }
     }
     return true;
 }
@@ -653,11 +656,10 @@ static void rdma_disconnect_cb(void *arg) {
     struct kv_ring *self = &g_ring;
     struct kv_node *node = arg;
     if (node->is_disconnecting) {
-        assert(are_vnodes_leaving(node) && node->req_cnt == 0);
+        assert(are_vnodes_gone(node, true) && node->req_cnt == 0);
         printf("client: disconnected to node %s.\n", node->node_id);
-        kv_ds_queue_fini(&node->ds_queue);
-        HASH_DEL(self->nodes, node);
-        kv_free(node);
+        node->is_connected = false;
+        STAILQ_INSERT_TAIL(&self->conn_q, node, next);
     } else {
         fprintf(stderr, "server %s disconnected actively, exiting\n", node->node_id);
         exit(-1);
@@ -688,13 +690,17 @@ static int kv_conn_q_poller(void *arg) {
     struct kv_node *node, *tmp;
     STAILQ_FOREACH_SAFE(node, &self->conn_q, next, tmp) {
         if (node->is_disconnecting) {
-            if (are_vnodes_leaving(node) && node->req_cnt == 0) {
+            if (are_vnodes_gone(node, true) && node->req_cnt == 0) {
                 if (node->is_connected) {
                     kv_rdma_disconnect(node->conn);
-                } else {  // local node
-                    rdma_disconnect_cb(node);
+                    STAILQ_REMOVE(&self->conn_q, node, kv_node, next);
+                } else if (are_vnodes_gone(node, false)) {
+                    printf("node %s deleted.\n", node->node_id);
+                    STAILQ_REMOVE(&self->conn_q, node, kv_node, next);
+                    kv_ds_queue_fini(&node->ds_queue);
+                    HASH_DEL(self->nodes, node);
+                    kv_free(node);
                 }
-                STAILQ_REMOVE(&self->conn_q, node, kv_node, next);
             }
         } else {
             assert(!node->is_connected);
@@ -742,7 +748,7 @@ static void on_node_del(void *arg) {
         goto finish;
     }
     node->is_disconnecting = true;
-    if (node->is_connected || node->is_local) STAILQ_INSERT_TAIL(&self->conn_q, node, next);
+    if (node->is_connected) STAILQ_INSERT_TAIL(&self->conn_q, node, next);
 
     // tail-> write leaving ring
     for (uint32_t i = 0; i < 1u << self->log_ring_num; i++) {
