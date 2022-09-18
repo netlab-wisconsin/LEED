@@ -462,7 +462,7 @@ static void ring_init(uint32_t log_ring_num) {
 // --- hash ring: virtual nodes management ---
 static inline struct vid_entry *vnode_create(struct ring_change_ctx *ctx, struct vnode_ring *ring) {
     struct vid_entry *x = kv_malloc(sizeof(*x));
-    *x = (struct vid_entry){.vid = ctx->vid, .node = ctx->node, .cp_cnt = 0, .rm_cnt = 0};
+    *x = (struct vid_entry){.vid = ctx->vid, .node = ctx->node, .cp_cnt = 0, .rm_cnt = 1};
     struct vid_entry *entry = find_vid_entry(ring + ctx->ring_id, ctx->vid.vid);
     if (entry) {
         CIRCLEQ_INSERT_BEFORE(&ring[ctx->ring_id].head, entry, x, entry);
@@ -573,7 +573,7 @@ static void update_ring(void *arg) {
             break;
         case (VID_RUNNING << 1) | KV_ETCD_MSG_DEL:
             assert(vnode != NULL);
-            if (vnode->rm_cnt == 0)
+            if (--vnode->rm_cnt == 0)
                 vnode_delete(ctx, ring, vnode);
             else
                 assert(vnode->state == VID_LEAVING);
