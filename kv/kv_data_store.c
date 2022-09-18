@@ -502,6 +502,7 @@ void kv_data_store_copy_add_key_range(struct kv_data_store *self, uint8_t *start
         assert(CIRCLEQ_EMPTY(&ctx->key_ranges));
         ctx->next_range = range;
     }
+    CIRCLEQ_INSERT_HEAD(&ctx->key_ranges, range, entry);
     copy_scheduler(ctx);
 }
 void kv_data_store_copy_del_key_range(struct kv_data_store *self, uint8_t *start_key, uint8_t *end_key, bool delete_items) {
