@@ -878,7 +878,7 @@ static void rdma_req_handler_wrapper(void *req_h, kv_rdma_mr req, uint32_t req_s
     } else if (msg->type == KV_MSG_GET) {
         if (msg->hop == 1) {
             uint32_t i = 0;
-            for (uint32_t i = 0; i < chain->rpl_num; i++)
+            for (; i < chain->rpl_num; i++)
                 if (chain->vids[i]->node->is_local) break;
             if (i == chain->rpl_num) goto send_nak;
             struct vid_entry *tail = chain->vids[chain->rpl_num - 1];
