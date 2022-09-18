@@ -632,7 +632,7 @@ static void on_ring_change(void *arg) {
         HASH_ADD_STR(self->nodes, node_id, ctx->node);
         STAILQ_INIT(&ctx->node->ring_updates);
         update_now = false;
-    } else if (!ctx->node->has_info || (!ctx->node->is_local && !ctx->node->is_connected)) {  // node not ready
+    } else if (!ctx->node->has_info || (!ctx->node->is_local && !ctx->node->is_disconnecting && !ctx->node->is_connected)) {  // node not ready
         update_now = false;
     }
     STAILQ_INSERT_TAIL(&ctx->node->ring_updates, ctx, next);
