@@ -294,22 +294,30 @@ static bool try_send_req(struct dispatch_ctx *ctx) {
             kv_free(chain);
             return false;
         }
-        struct vid_entry *head = chain->vids[0];
         uint32_t cost = kv_ds_op_cost(msg->type == KV_MSG_SET ? KV_DS_SET : KV_DS_DEL);
-        struct kv_ds_q_info q_info = head->node->ds_queue.q_info[head->vid.ds_id];
-        uint32_t io_cnt = head->node->ds_queue.io_cnt[head->vid.ds_id];
-        if (kv_ds_queue_find(&q_info, &io_cnt, 1, cost)) {
-            ctx->ds_id = head->vid.ds_id;
-            ctx->node = head->node;
-            ctx->node->ds_queue.io_cnt[ctx->ds_id]++;
-            ctx->node->ds_queue.q_info[ctx->ds_id] = q_info;
-            ctx->node->req_cnt++;
-            kv_rdma_send_req(head->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->resp, ctx->resp_addr, dispatch_send_cb, ctx);
-            kv_free(chain);
-            return true;
+        struct kv_ds_q_info q_info[chain->rpl_num];
+        uint32_t io_cnt[chain->rpl_num];
+        uint32_t i = 0;
+        for (; i < chain->rpl_num; i++) {
+            struct vid_entry *x = chain->vids[i];
+            q_info[i] = x->node->ds_queue.q_info[x->vid.ds_id];
+            io_cnt[i] = x->node->ds_queue.io_cnt[x->vid.ds_id];
+            if (!kv_ds_queue_find(q_info + i, io_cnt + i, 1, cost)) {
+                kv_free(chain);
+                return false;
+            }
         }
+        ctx->ds_id = chain->vids[0]->vid.ds_id;
+        ctx->node = chain->vids[0]->node;
+        ctx->node->ds_queue.io_cnt[ctx->ds_id]++;
+        for (; i < chain->rpl_num; i++) {
+            struct vid_entry *x = chain->vids[i];
+            x->node->ds_queue.q_info[x->vid.ds_id] = q_info[i];
+        }
+        ctx->node->req_cnt++;
+        kv_rdma_send_req(ctx->node->conn, ctx->req, KV_MSG_SIZE(msg), ctx->resp, ctx->resp_addr, dispatch_send_cb, ctx);
         kv_free(chain);
-        return false;
+        return true;
     }
 }
 #else
@@ -850,7 +858,7 @@ static void msg_handler(enum kv_etcd_msg_type msg, const char *key, uint32_t key
         } else {
             key_copy(ctx->src_id, key);
         }
-        // if (ctx->ring_id == 0)
+        if (ctx->ring_id == 0)
             printf("[%s] %s %s RING(%u): %s\n", ctx->src_id, msg == KV_ETCD_MSG_PUT ? "PUT" : "DEL", state_str[ctx->state], ctx->ring_id, ctx->node_id);
         if (msg == KV_ETCD_MSG_PUT) {
             assert(val_len == sizeof(ctx->vid));

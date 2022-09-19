@@ -16,7 +16,7 @@ void kv_ds_queue_fini(struct kv_ds_queue *self) {
 uint32_t kv_ds_op_cost(enum kv_ds_op op) {
     switch (op) {
         case KV_DS_SET:
-            return 10;
+            return 8;
         case KV_DS_GET:
             return 3;
         case KV_DS_DEL:
