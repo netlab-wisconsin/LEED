@@ -728,6 +728,7 @@ static int kv_conn_q_poller(void *arg) {
         kv_ring_fini(NULL, NULL);
         exit(0);  // TODO: call finish callback
     }
+    if (self->rings == NULL) return 0;
     for (size_t i = 0; i < 1u << self->log_ring_num; i++) {
         struct vnode_ring *ring = self->rings[0] + i;
         struct copy_range_ctx *ctx, *tmp;
