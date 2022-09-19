@@ -128,6 +128,16 @@ struct kv_ring {
     kv_ring_copy_cb copy_cb;
     void *copy_cb_arg;
     struct ring_version_t (*rings_version)[RING_VERSION_MAX];
+    uint64_t server_init_cnt;
+    struct init_ctx_t {
+        char *local_ip;
+        char *local_port;
+        uint32_t ring_num;
+        uint32_t vid_per_ssd;
+        uint32_t ds_num;
+        uint32_t rpl_num;
+        uint32_t log_bkt_num;
+    } init_ctx;
 } g_ring;
 
 static void random_vid(char *vid) __attribute__((unused));
@@ -693,6 +703,48 @@ static void rdma_connect_cb(connection_handle h, void *arg) {
         self->server_online_cb = NULL;  // only call server_online_cb once
     }
 }
+struct vid_ring_stat {
+    uint32_t index;
+    size_t size;
+};
+static int vid_ring_stat_cmp(const void *_a, const void *_b) {
+    const struct vid_ring_stat *a = _a, *b = _b;
+    if (a->size == b->size) return 0;
+    return a->size < b->size ? -1 : 1;
+}
+static void reg_node(void) {
+    struct kv_ring *self = &g_ring;
+    struct init_ctx_t *ctx = &self->init_ctx;
+    uint32_t log_ring_num = 0;
+    while ((ctx->ring_num - 1) >> log_ring_num) log_ring_num++;
+    ring_init(log_ring_num);
+    ctx->ring_num = 1U << log_ring_num;
+
+    sprintf(self->local_id, "%s:%s", ctx->local_ip, ctx->local_port);
+    static char key[MAX_ETCD_KEY_LEN];
+    sprintf(key, "/nodes/%s/", self->local_id);
+    self->node_lease = kvEtcdLeaseCreate(1, true);
+    struct kv_etcd_node etcd_node = {.ds_num = ctx->ds_num, .log_ring_num = log_ring_num, .log_bkt_num = ctx->log_bkt_num, .rpl_num = ctx->rpl_num};
+    kvEtcdPut(key, &etcd_node, sizeof(etcd_node), &self->node_lease);
+
+    struct vid_ring_stat stats[ctx->ring_num];
+    for (size_t i = 0; i < ctx->ring_num; i++) stats[i] = (struct vid_ring_stat){i, ring_size(self->rings[0] + i)};
+    qsort(stats, ctx->ring_num, sizeof(struct vid_ring_stat), vid_ring_stat_cmp);
+    self->vid_lease = kvEtcdLeaseCreate(5, true);  // vid lease ttl must larger than node lease ttl
+    uint64_t init_lease = kvEtcdLeaseCreate(5, false);
+
+    uint32_t ds_id = 0;
+    for (size_t i = 0; i < ctx->vid_per_ssd * ctx->ds_num; i++) {
+        struct kv_etcd_vid vid = {.ds_id = ds_id};
+        // random_vid(vid.vid);
+        hash_vid(vid.vid, ctx->local_ip, ctx->local_port, i);
+        set_ring_id(vid.vid, log_ring_num, stats[i].index);
+        sprintf(key, "/rings/%u/0/%s/", stats[i].index, self->local_id);  // joining
+        kvEtcdPut(key, &vid, sizeof(vid), &init_lease);
+
+        ds_id = (ds_id + 1) % ctx->ds_num;
+    }
+}
 
 static int kv_conn_q_poller(void *arg) {
     struct kv_ring *self = arg;
@@ -727,6 +779,9 @@ static int kv_conn_q_poller(void *arg) {
             if (x->req_cnt != 0) return 0;
         kv_ring_fini(NULL, NULL);
         exit(0);  // TODO: call finish callback
+    }
+    if (self->server_init_cnt != 0) {
+        if (--self->server_init_cnt == 0) reg_node();
     }
     if (self->rings == NULL) return 0;
     for (size_t i = 0; i < 1u << self->log_ring_num; i++) {
@@ -881,6 +936,7 @@ kv_rdma_handle kv_ring_init(char *etcd_ip, char *etcd_port, uint32_t thread_num,
     self->thread_num = thread_num;
     kv_rdma_init(&self->h, thread_num);
     kvEtcdInit(etcd_ip, etcd_port, msg_handler);
+    self->server_init_cnt = 0;
     self->conn_q_poller = kv_app_poller_register(kv_conn_q_poller, self, 100000);
     return self->h;
 }
@@ -902,15 +958,7 @@ void kv_ring_stop_copy(struct kv_ring_copy_info *info) {
     sprintf(key, "/rings/%u/%u/%s/%s/", ring_id, type, ctx->invalid->node->node_id, self->local_id);
     kvEtcdDel(key);
 }
-struct vid_ring_stat {
-    uint32_t index;
-    size_t size;
-};
-static int vid_ring_stat_cmp(const void *_a, const void *_b) {
-    const struct vid_ring_stat *a = _a, *b = _b;
-    if (a->size == b->size) return 0;
-    return a->size < b->size ? -1 : 1;
-}
+
 static void rdma_req_handler_wrapper(void *req_h, kv_rdma_mr req, uint32_t req_sz, void *arg) {
     struct kv_ring *self = &g_ring;
     struct kv_msg *msg = (struct kv_msg *)kv_rdma_get_req_buf(req);
@@ -985,53 +1033,6 @@ send_nak:
     msg->value_len = 0;
     kv_rdma_make_resp(req_h, (uint8_t *)msg, KV_MSG_SIZE(msg));
 }
-struct init_ctx {
-    char *local_ip;
-    char *local_port;
-    uint32_t ring_num;
-    uint32_t vid_per_ssd;
-    uint32_t ds_num;
-    uint32_t rpl_num;
-    uint32_t log_bkt_num;
-    kv_rdma_server_init_cb cb;
-    void *cb_arg;
-};
-
-static void rdma_init_cb(void *arg) {
-    struct kv_ring *self = &g_ring;
-    struct init_ctx *ctx = arg;
-    uint32_t log_ring_num = 0;
-    while ((ctx->ring_num - 1) >> log_ring_num) log_ring_num++;
-    ring_init(log_ring_num);
-    ctx->ring_num = 1U << log_ring_num;
-
-    sprintf(self->local_id, "%s:%s", ctx->local_ip, ctx->local_port);
-    static char key[MAX_ETCD_KEY_LEN];
-    sprintf(key, "/nodes/%s/", self->local_id);
-    self->node_lease = kvEtcdLeaseCreate(1, true);
-    struct kv_etcd_node etcd_node = {.ds_num = ctx->ds_num, .log_ring_num = log_ring_num, .log_bkt_num = ctx->log_bkt_num, .rpl_num = ctx->rpl_num};
-    kvEtcdPut(key, &etcd_node, sizeof(etcd_node), &self->node_lease);
-
-    struct vid_ring_stat stats[ctx->ring_num];
-    for (size_t i = 0; i < ctx->ring_num; i++) stats[i] = (struct vid_ring_stat){i, ring_size(self->rings[0] + i)};
-    qsort(stats, ctx->ring_num, sizeof(struct vid_ring_stat), vid_ring_stat_cmp);
-    self->vid_lease = kvEtcdLeaseCreate(5, true);  // vid lease ttl must larger than node lease ttl
-    uint64_t init_lease = kvEtcdLeaseCreate(5, false);
-
-    uint32_t ds_id = 0;
-    for (size_t i = 0; i < ctx->vid_per_ssd * ctx->ds_num; i++) {
-        struct kv_etcd_vid vid = {.ds_id = ds_id};
-        // random_vid(vid.vid);
-        hash_vid(vid.vid, ctx->local_ip, ctx->local_port, i);
-        set_ring_id(vid.vid, log_ring_num, stats[i].index);
-        sprintf(key, "/rings/%u/0/%s/", stats[i].index, self->local_id);  // joining
-        kvEtcdPut(key, &vid, sizeof(vid), &init_lease);
-
-        ds_id = (ds_id + 1) % ctx->ds_num;
-    }
-    if (ctx->cb) ctx->cb(ctx->cb_arg);
-    kv_free(ctx);
-}
 
 void kv_ring_server_init(char *local_ip, char *local_port, uint32_t ring_num, uint32_t vid_per_ssd, uint32_t ds_num, uint32_t rpl_num,
                          uint32_t log_bkt_num, uint32_t con_req_num, uint32_t max_msg_sz, kv_ring_req_handler handler, void *arg,
@@ -1040,10 +1041,10 @@ void kv_ring_server_init(char *local_ip, char *local_port, uint32_t ring_num, ui
     assert(vid_per_ssd * ds_num <= ring_num);
     assert(local_ip && local_port);
     struct kv_ring *self = &g_ring;
-    struct init_ctx *ctx = kv_malloc(sizeof(*ctx));
-    *ctx = (struct init_ctx){local_ip, local_port, ring_num, vid_per_ssd, ds_num, rpl_num, log_bkt_num, cb, cb_arg};
+    self->init_ctx = (struct init_ctx_t){local_ip, local_port, ring_num, vid_per_ssd, ds_num, rpl_num, log_bkt_num};
     self->req_handler = handler;
-    kv_rdma_listen(self->h, local_ip, local_port, con_req_num, max_msg_sz, rdma_req_handler_wrapper, arg, rdma_init_cb, ctx);
+    kv_rdma_listen(self->h, local_ip, local_port, con_req_num, max_msg_sz, rdma_req_handler_wrapper, arg, cb, cb_arg);
+    self->server_init_cnt = 20;
 }
 
 void kv_ring_fini(kv_rdma_fini_cb cb, void *cb_arg) {
