@@ -850,7 +850,7 @@ static void msg_handler(enum kv_etcd_msg_type msg, const char *key, uint32_t key
         } else {
             key_copy(ctx->src_id, key);
         }
-        if (ctx->ring_id == 0)
+        // if (ctx->ring_id == 0)
             printf("[%s] %s %s RING(%u): %s\n", ctx->src_id, msg == KV_ETCD_MSG_PUT ? "PUT" : "DEL", state_str[ctx->state], ctx->ring_id, ctx->node_id);
         if (msg == KV_ETCD_MSG_PUT) {
             assert(val_len == sizeof(ctx->vid));

@@ -7,7 +7,7 @@ typedef moodycamel::ConcurrentQueue<void *> MoodycamelCQType, *MoodycamelCQPtr;
 extern "C" {
 using namespace moodycamel;
 int moodycamel_cq_create(MoodycamelCQHandle *handle) {
-    MoodycamelCQPtr retval = new MoodycamelCQType();
+    MoodycamelCQPtr retval = new MoodycamelCQType(1024 * MoodycamelCQType::BLOCK_SIZE);
     if (retval == nullptr) {
         return 0;
     }

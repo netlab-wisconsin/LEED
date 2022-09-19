@@ -43,14 +43,14 @@ void kv_app_send_without_token(uint32_t index, kv_app_func func, void *arg) {
     moodycamel_cq_enqueue(g_threads[index].cq, msg);
 }
 
-#define MAX_POLL_SZ 32
+#define MAX_POLL_SZ 128
+static __thread struct kv_app_task *msg_buf[MAX_POLL_SZ];
 static int msg_poller(void *arg) {
     struct thread_data *data = arg;
-    struct kv_app_task *msg[MAX_POLL_SZ];
-    size_t size = moodycamel_cq_try_dequeue_bulk_with_token(data->cq, data->c_token, (MoodycamelValue *)msg, MAX_POLL_SZ);
+    size_t size = moodycamel_cq_try_dequeue_bulk_with_token(data->cq, data->c_token, (MoodycamelValue *)msg_buf, MAX_POLL_SZ);
     for (size_t i = 0; i < size; i++) {
-        if (msg[i]->func) msg[i]->func(msg[i]->arg);
-        spdk_mempool_put(g_event_mempool, msg[i]);
+        if (msg_buf[i]->func) msg_buf[i]->func(msg_buf[i]->arg);
+        spdk_mempool_put(g_event_mempool, msg_buf[i]);
     }
     return 0;
 }
