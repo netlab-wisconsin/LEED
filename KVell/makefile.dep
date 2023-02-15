@@ -1,0 +1,81 @@
+benchcomponents.o: benchcomponents.c headers.h options.h utils.h stats.h \
+ items.h pagecache.h indexes/btree.h indexes/memory-item.h \
+ in-memory-index-generic.h in-memory-index-btree.h ioengine.h slab.h \
+ slabworker.h freelist.h workload-common.h random.h
+freelist.o: freelist.c headers.h options.h utils.h stats.h items.h \
+ pagecache.h indexes/btree.h indexes/memory-item.h \
+ in-memory-index-generic.h in-memory-index-btree.h ioengine.h slab.h \
+ slabworker.h freelist.h workload-common.h random.h
+in-memory-index-art.o: in-memory-index-art.c headers.h options.h utils.h \
+ stats.h items.h pagecache.h indexes/btree.h indexes/memory-item.h \
+ in-memory-index-generic.h in-memory-index-btree.h ioengine.h slab.h \
+ slabworker.h freelist.h workload-common.h random.h indexes/art.h
+in-memory-index-btree.o: in-memory-index-btree.c headers.h options.h \
+ utils.h stats.h items.h pagecache.h indexes/btree.h \
+ indexes/memory-item.h in-memory-index-generic.h in-memory-index-btree.h \
+ ioengine.h slab.h slabworker.h freelist.h workload-common.h random.h
+in-memory-index-rax.o: in-memory-index-rax.c headers.h options.h utils.h \
+ stats.h items.h pagecache.h indexes/btree.h indexes/memory-item.h \
+ in-memory-index-generic.h in-memory-index-btree.h ioengine.h slab.h \
+ slabworker.h freelist.h workload-common.h random.h indexes/rax.h
+in-memory-index-rbtree.o: in-memory-index-rbtree.c headers.h options.h \
+ utils.h stats.h items.h pagecache.h indexes/btree.h \
+ indexes/memory-item.h in-memory-index-generic.h in-memory-index-btree.h \
+ ioengine.h slab.h slabworker.h freelist.h workload-common.h random.h \
+ indexes/rbtree.h
+ioengine.o: ioengine.c headers.h options.h utils.h stats.h items.h \
+ pagecache.h indexes/btree.h indexes/memory-item.h \
+ in-memory-index-generic.h in-memory-index-btree.h ioengine.h slab.h \
+ slabworker.h freelist.h workload-common.h random.h
+main.o: main.c headers.h options.h utils.h stats.h items.h pagecache.h \
+ indexes/btree.h indexes/memory-item.h in-memory-index-generic.h \
+ in-memory-index-btree.h ioengine.h slab.h slabworker.h freelist.h \
+ workload-common.h random.h
+microbench.o: microbench.c headers.h options.h utils.h stats.h items.h \
+ pagecache.h indexes/btree.h indexes/memory-item.h \
+ in-memory-index-generic.h in-memory-index-btree.h ioengine.h slab.h \
+ slabworker.h freelist.h workload-common.h random.h indexes/rbtree.h \
+ indexes/rax.h indexes/art.h
+pagecache.o: pagecache.c headers.h options.h utils.h stats.h items.h \
+ pagecache.h indexes/btree.h indexes/memory-item.h \
+ in-memory-index-generic.h in-memory-index-btree.h ioengine.h slab.h \
+ slabworker.h freelist.h workload-common.h random.h
+random.o: random.c headers.h options.h utils.h stats.h items.h \
+ pagecache.h indexes/btree.h indexes/memory-item.h \
+ in-memory-index-generic.h in-memory-index-btree.h ioengine.h slab.h \
+ slabworker.h freelist.h workload-common.h random.h
+slab.o: slab.c headers.h options.h utils.h stats.h items.h pagecache.h \
+ indexes/btree.h indexes/memory-item.h in-memory-index-generic.h \
+ in-memory-index-btree.h ioengine.h slab.h slabworker.h freelist.h \
+ workload-common.h random.h
+slabworker.o: slabworker.c headers.h options.h utils.h stats.h items.h \
+ pagecache.h indexes/btree.h indexes/memory-item.h \
+ in-memory-index-generic.h in-memory-index-btree.h ioengine.h slab.h \
+ slabworker.h freelist.h workload-common.h random.h
+stats.o: stats.c headers.h options.h utils.h stats.h items.h pagecache.h \
+ indexes/btree.h indexes/memory-item.h in-memory-index-generic.h \
+ in-memory-index-btree.h ioengine.h slab.h slabworker.h freelist.h \
+ workload-common.h random.h
+utils.o: utils.c headers.h options.h utils.h stats.h items.h pagecache.h \
+ indexes/btree.h indexes/memory-item.h in-memory-index-generic.h \
+ in-memory-index-btree.h ioengine.h slab.h slabworker.h freelist.h \
+ workload-common.h random.h
+workload-common.o: workload-common.c headers.h options.h utils.h stats.h \
+ items.h pagecache.h indexes/btree.h indexes/memory-item.h \
+ in-memory-index-generic.h in-memory-index-btree.h ioengine.h slab.h \
+ slabworker.h freelist.h workload-common.h random.h
+workload-production.o: workload-production.c headers.h options.h utils.h \
+ stats.h items.h pagecache.h indexes/btree.h indexes/memory-item.h \
+ in-memory-index-generic.h in-memory-index-btree.h ioengine.h slab.h \
+ slabworker.h freelist.h workload-common.h random.h
+workload-ycsb.o: workload-ycsb.c headers.h options.h utils.h stats.h \
+ items.h pagecache.h indexes/btree.h indexes/memory-item.h \
+ in-memory-index-generic.h in-memory-index-btree.h ioengine.h slab.h \
+ slabworker.h freelist.h workload-common.h random.h
+indexes/art.o: indexes/art.c indexes/art.h indexes/memory-item.h
+indexes/rax.o: indexes/rax.c indexes/rax.h indexes/memory-item.h \
+ indexes/rax_malloc.h
+indexes/rbtree.o: indexes/rbtree.c indexes/rbtree.h indexes/memory-item.h
+indexes/btree.o: indexes/btree.cc indexes/cpp-btree/btree_map.h \
+  indexes/cpp-btree/btree.h indexes/cpp-btree/btree_container.h \
+  indexes/btree.h indexes/memory-item.h
